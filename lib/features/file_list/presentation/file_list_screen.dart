@@ -183,7 +183,8 @@ class _FileItemState extends ConsumerState<_FileItem> {
       ),
     );
     final newName = controller.text.trim();
-    controller.dispose();
+    // 다이얼로그 닫힘 애니메이션 완료 후 dispose (즉시 dispose 시 InheritedElement assertion 오류 방지)
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
     if (confirmed == true && mounted) {
       if (newName.isNotEmpty && newName != file.displayName) {
         await ref.read(fileListProvider.notifier).rename(file.filePath, newName);
@@ -218,7 +219,8 @@ class _FileItemState extends ConsumerState<_FileItem> {
       ),
     );
     final newName = controller.text.trim();
-    controller.dispose();
+    // 다이얼로그 닫힘 애니메이션 완료 후 dispose
+    WidgetsBinding.instance.addPostFrameCallback((_) => controller.dispose());
     if (confirmed == true && mounted) {
       if (newName.isNotEmpty) {
         await ref.read(fileListProvider.notifier).copy(file.filePath, newName);
