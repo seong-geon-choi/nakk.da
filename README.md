@@ -4,6 +4,14 @@
 
 ---
 
+## 스크린샷
+
+| 홈 화면 | 파일 목록 | 지도 | 설정 |
+|:---:|:---:|:---:|:---:|
+| ![홈](docs/screenshots/01_home.png) | ![파일목록](docs/screenshots/02_file_list.png) | ![지도](docs/screenshots/03_map.png) | ![설정](docs/screenshots/05_settings.png) |
+
+---
+
 ## 주요 기능
 
 | 기능 | 설명 |
