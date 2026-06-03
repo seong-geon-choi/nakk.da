@@ -12,11 +12,37 @@ import '../../../core/constants/api_keys.dart';
 import '../../../core/widgets/permission_status_chip.dart';
 import '../../../core/services/accessibility_service.dart';
 
-class SettingsScreen extends ConsumerWidget {
+class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<SettingsScreen> createState() => _SettingsScreenState();
+}
+
+class _SettingsScreenState extends ConsumerState<SettingsScreen>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 시스템 설정에서 돌아올 때 권한 상태 재조회
+    if (state == AppLifecycleState.resumed) {
+      ref.invalidate(permissionStatusProvider);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final settingsAsync = ref.watch(settingsProvider);
     final permAsync = ref.watch(permissionStatusProvider);
 
@@ -153,11 +179,14 @@ class SettingsScreen extends ConsumerWidget {
         title: Text(label),
         subtitle: Text(desc, style: const TextStyle(fontSize: 12)),
         trailing: PermissionStatusChip(isGranted: isGranted),
-        onTap: isGranted
-            ? null
-            : () => perm == Permission.manageExternalStorage
-                ? perm.request()
-                : openAppSettings(),
+        onTap: () async {
+          if (perm == Permission.manageExternalStorage && !isGranted) {
+            await perm.request();
+            ref.invalidate(permissionStatusProvider);
+          } else {
+            await openAppSettings();
+          }
+        },
       );
     }).toList();
   }
