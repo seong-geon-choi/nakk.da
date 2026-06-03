@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Material "straighten" icon — horizontal ruler -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M21,6L3,6C1.9,6 1,6.9 1,8L1,16C1,17.1 1.9,18 3,18L21,18C22.1,18 23,17.1 23,16L23,8C23,6.9 22.1,6 21,6ZM21,16L3,16L3,8L5,8L5,12L7,12L7,8L9,8L9,12L11,12L11,8L13,8L13,12L15,12L15,8L17,8L17,12L19,12L19,8L21,8Z"/>
+</vector>
