@@ -14,6 +14,7 @@ import '../../../features/photo/presentation/camera_ruler_screen.dart';
 import '../../../core/utils/media_scanner.dart';
 import '../../../core/utils/watermark.dart';
 import '../../../core/services/ar_service.dart';
+import '../../../core/utils/exif_utils.dart';
 
 class MemoInputSheet extends ConsumerStatefulWidget {
   final bool startWithVoice;
@@ -184,6 +185,8 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
                     const Divider(height: 16),
                     _buildPhotoSection(),
                     const Divider(height: 16),
+                    _buildFishLengthRow(),
+                    const Divider(height: 16),
                     TextField(
                       controller: _textCtrl,
                       autofocus: !widget.startWithVoice && widget.initialPhotoPath == null,
@@ -197,8 +200,6 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
                       ),
                       style: const TextStyle(fontSize: 15, height: 1.4),
                     ),
-                    const Divider(height: 16),
-                    _buildFishLengthRow(),
                     if (voiceState.hasError)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
@@ -454,6 +455,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     final relPath = _mediaRelativePath(settings?.photoSavePath ?? 'DCIM/nakkda');
     String? path;
     double? length;
+    ({double lat, double lng})? exifGps;
 
     if (source == PhotoSource.arCamera) {
       final wmSettings = settings?.watermark;
@@ -473,6 +475,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     } else {
       final pickedPath = await pickGalleryImagePath();
       if (pickedPath == null || !mounted) return;
+      exifGps = await readExifGps(pickedPath);
       path = await copyGalleryPhotoToAppStorage(pickedPath);
     }
 
@@ -481,6 +484,10 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
       if (path != null) _photoPath = path;
       if (length != null && _fishLengthCtrl.text.isEmpty) {
         _fishLengthCtrl.text = length.toStringAsFixed(1);
+      }
+      if (exifGps != null) {
+        _latCtrl.text = exifGps!.lat.toStringAsFixed(4);
+        _lngCtrl.text = exifGps!.lng.toStringAsFixed(4);
       }
     });
   }

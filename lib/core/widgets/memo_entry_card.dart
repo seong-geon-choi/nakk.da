@@ -17,7 +17,7 @@ class MemoEntryCard extends StatelessWidget {
         children: [
           _Header(entry: entry),
           const SizedBox(height: 6),
-          if (entry.isPhoto) _PhotoBody(path: entry.photoPath!) else _TextBody(entry: entry, maxLines: maxLines),
+          if (entry.photoPath != null) _PhotoBody(path: entry.photoPath!),
           if (entry.fishLength != null) ...[
             const SizedBox(height: 4),
             Text(
@@ -28,6 +28,10 @@ class MemoEntryCard extends StatelessWidget {
                 fontWeight: FontWeight.w500,
               ),
             ),
+          ],
+          if (entry.text != null && entry.text!.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            _TextBody(entry: entry, maxLines: maxLines),
           ],
         ],
       ),

@@ -8,13 +8,12 @@ class MdSerializer {
     final header = entry.hasGps
         ? '### ${entry.timeLabel} | 🛰 ${_fmt(entry.latitude!)}, ${_fmt(entry.longitude!)}'
         : '### ${entry.timeLabel}';
-    final body = entry.isPhoto
-        ? '![](${entry.photoPath})'
-        : (entry.text ?? '');
-    final lengthLine = entry.fishLength != null
-        ? '- 📏 ${entry.fishLength!.toStringAsFixed(1)}cm\n'
-        : '';
-    return '\n---\n\n$header\n$body\n$lengthLine';
+    final parts = <String>[];
+    if (entry.photoPath != null) parts.add('![](${entry.photoPath})');
+    if (entry.fishLength != null) parts.add('- 📏 ${entry.fishLength!.toStringAsFixed(1)}cm');
+    if (entry.text != null && entry.text!.isNotEmpty) parts.add(entry.text!);
+    final body = parts.join('\n');
+    return '\n---\n\n$header\n$body\n';
   }
 
   static String serializeLocationBlock(LocationStatus loc) {
@@ -200,12 +199,20 @@ class MdSerializer {
 
         final body = bodyLines.join('\n');
         final photoMatch = RegExp(r'!\[\]\((.+?)\)').firstMatch(body);
+        final photoPath = photoMatch?.group(1);
+        String? text;
+        if (photoPath != null) {
+          final remaining = body.replaceFirst('![]($photoPath)', '').trim();
+          text = remaining.isEmpty ? null : remaining;
+        } else {
+          text = body.isEmpty ? null : body;
+        }
         result.add(MemoEntry(
           timestamp: ts,
           latitude: lat,
           longitude: lng,
-          text: photoMatch == null ? (body.isEmpty ? null : body) : null,
-          photoPath: photoMatch?.group(1),
+          text: text,
+          photoPath: photoPath,
           fishLength: fishLength,
         ));
         continue;

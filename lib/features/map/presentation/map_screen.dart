@@ -12,7 +12,8 @@ import '../../../core/utils/date_formatter.dart';
 import '../../../core/utils/file_name_parser.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
-  const MapScreen({super.key});
+  final String? filePath;
+  const MapScreen({super.key, this.filePath});
 
   @override
   ConsumerState<MapScreen> createState() => _MapScreenState();
@@ -33,8 +34,15 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   void _loadFromToday() {
-    final file = ref.read(todayFileProvider).valueOrNull;
-    _applyBlocks(file?.blocks ?? [], DateTime.now());
+    final fp = widget.filePath;
+    if (fp != null) {
+      final file = ref.read(dayFileProvider(fp)).valueOrNull;
+      final date = FileNameParser.parseDate(fp.split('/').last.split('\\').last) ?? DateTime.now();
+      _applyBlocks(file?.blocks ?? [], date);
+    } else {
+      final file = ref.read(todayFileProvider).valueOrNull;
+      _applyBlocks(file?.blocks ?? [], DateTime.now());
+    }
   }
 
   void _applyBlocks(List<dynamic> blocks, DateTime date) {

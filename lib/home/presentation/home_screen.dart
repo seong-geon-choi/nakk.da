@@ -669,7 +669,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
       bottomNavigationBar: _ActionBar(
         onVoiceTap: () => _openMemoSheet(voiceMode: true),
         onPhotoTap: _onPhotoTap,
-        onMapTap: () => context.push(AppRoutes.map),
+        onMapTap: () => context.push(AppRoutes.map, extra: widget.filePath),
       ),
     );
   }

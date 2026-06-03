@@ -43,7 +43,7 @@ GoRouter buildAppRouter({bool firstLaunch = false}) => GoRouter(
     ),
     GoRoute(
       path: AppRoutes.map,
-      builder: (context, state) => const MapScreen(),
+      builder: (context, state) => MapScreen(filePath: state.extra as String?),
     ),
   ],
 );
