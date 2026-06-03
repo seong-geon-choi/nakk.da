@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import '../data/photo_service_impl.dart';
@@ -31,11 +30,11 @@ class PhotoNotifier extends AsyncNotifier<void> {
         return false;
       }
       final now = DateTime.now();
-      // 갤러리 사진: 이미 갤러리에 존재하므로 MediaStore에 재등록하지 않음
-      // 메모 저장 경로에 직접 복사해 중복 방지
+      // 갤러리 사진: 경로 그대로 참조 (복사 불필요, 중복 방지)
+      // 카메라 사진: MediaStore에 등록해 갤러리에 표시
       final String? savedPath;
       if (source == PhotoSource.gallery) {
-        savedPath = await _copyToPhotoDir(tempPath, settings.savePath);
+        savedPath = tempPath;
       } else {
         savedPath = await saveToGallery(
           tempPath,
@@ -62,18 +61,6 @@ class PhotoNotifier extends AsyncNotifier<void> {
     }
   }
 
-  Future<String?> _copyToPhotoDir(String srcPath, String savePath) async {
-    try {
-      final ts = DateTime.now().millisecondsSinceEpoch;
-      final ext = srcPath.contains('.') ? srcPath.split('.').last.toLowerCase() : 'jpg';
-      final dest = File('$savePath/photos/photo_$ts.$ext');
-      await dest.parent.create(recursive: true);
-      await File(srcPath).copy(dest.path);
-      return dest.path;
-    } catch (_) {
-      return null;
-    }
-  }
 
   // CameraRulerScreen에서 직접 찍은 사진을 저장 (fishLength 포함)
   Future<bool> saveFromPath(String path, {double? fishLength}) async {

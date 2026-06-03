@@ -71,5 +71,10 @@ class MemoRepositoryImpl implements MemoRepository {
       await file.parent.create(recursive: true);
       await file.writeAsString(MdSerializer.fileHeader(date));
     }
+    // 미디어 스캐너가 이 폴더를 갤러리에 포함시키지 않도록 .nomedia 보장
+    final noMedia = File('${file.parent.path}/.nomedia');
+    if (!await noMedia.exists()) {
+      try { await noMedia.create(); } catch (_) {}
+    }
   }
 }

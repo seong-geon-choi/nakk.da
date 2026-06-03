@@ -10,7 +10,7 @@ class PhotoServiceImpl implements PhotoService {
       source: source == PhotoSource.camera
           ? ImageSource.camera
           : ImageSource.gallery,
-      imageQuality: 85,
+      imageQuality: source == PhotoSource.camera ? 85 : null,
     );
     return picked?.path;
   }

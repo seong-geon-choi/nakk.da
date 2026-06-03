@@ -343,34 +343,15 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     final tempPath = await ref.read(photoServiceProvider).pickImage(source: source);
     if (tempPath == null || !mounted) return;
 
-    // 수정 시에는 savePath 디렉토리에만 복사 (갤러리 중복 등록 방지)
-    final settings = ref.read(settingsProvider).valueOrNull;
-    final savedPath = await _copyToSaveDir(tempPath, settings?.savePath);
-
+    // 갤러리 경로 그대로 참조 (복사 불필요)
     if (mounted) {
       setState(() {
-        _newPhotoPath = savedPath ?? tempPath;
+        _newPhotoPath = tempPath;
         _photoDeleted = false;
       });
     }
   }
 
-  /// savePath 디렉토리의 photos/ 폴더에 파일을 복사해 절대 경로 반환.
-  /// 실패 시 null 반환.
-  Future<String?> _copyToSaveDir(String srcPath, String? savePath) async {
-    if (savePath == null) return null;
-    try {
-      final src = File(srcPath);
-      final ext = srcPath.contains('.') ? srcPath.split('.').last : 'jpg';
-      final ts = DateTime.now().millisecondsSinceEpoch;
-      final dest = File('$savePath/photos/photo_$ts.$ext');
-      await dest.parent.create(recursive: true);
-      await src.copy(dest.path);
-      return dest.path;
-    } catch (_) {
-      return null;
-    }
-  }
 
   Widget _buildFishLengthRow() {
     return Row(

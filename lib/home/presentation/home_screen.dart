@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -791,11 +790,11 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
       if (!context.mounted) return;
       savedPath = await saveToGallery(result.path, relativePath: relativePath);
     } else {
-      // 갤러리 선택: 이미 갤러리에 존재하므로 MediaStore 재등록 없이 직접 복사
+      // 갤러리 선택: 경로 그대로 참조
       final tempPath =
           await ref.read(photoServiceProvider).pickImage(source: source);
       if (tempPath == null || !context.mounted) return;
-      savedPath = await _copyToPhotoDir(tempPath, settings?.savePath);
+      savedPath = tempPath;
     }
 
     if (savedPath == null || !context.mounted) return;
@@ -868,17 +867,4 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
     return 'DCIM/nakkda';
   }
 
-  Future<String?> _copyToPhotoDir(String srcPath, String? savePath) async {
-    if (savePath == null) return null;
-    try {
-      final ts = DateTime.now().millisecondsSinceEpoch;
-      final ext = srcPath.contains('.') ? srcPath.split('.').last.toLowerCase() : 'jpg';
-      final dest = File('$savePath/photos/photo_$ts.$ext');
-      await dest.parent.create(recursive: true);
-      await File(srcPath).copy(dest.path);
-      return dest.path;
-    } catch (_) {
-      return null;
-    }
-  }
 }
