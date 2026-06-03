@@ -39,19 +39,6 @@ class PermissionScreen extends ConsumerWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       ..._permissionItems(context, statusAsync),
-                      const Divider(height: 24),
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Text('선택 권한',
-                            style: TextStyle(
-                                fontSize: 12,
-                                fontWeight: FontWeight.w600,
-                                color: Theme.of(context)
-                                    .colorScheme
-                                    .onSurface
-                                    .withValues(alpha: 0.5))),
-                      ),
-                      ..._optionalItems(context, statusAsync),
                     ],
                   ),
                 ),
@@ -63,6 +50,12 @@ class PermissionScreen extends ConsumerWidget {
                 ),
                 onPressed: () async {
                   await ref.read(permissionStatusProvider.notifier).requestAll();
+                  if (!context.mounted) return;
+                  // MANAGE_EXTERNAL_STORAGE는 시스템 설정 페이지가 필요해서 별도 요청
+                  final storageStatus = await Permission.manageExternalStorage.status;
+                  if (!storageStatus.isGranted && context.mounted) {
+                    await Permission.manageExternalStorage.request();
+                  }
                   if (!context.mounted) return;
                   await _markDoneAndGo(context);
                 },
@@ -95,6 +88,8 @@ class PermissionScreen extends ConsumerWidget {
   List<Widget> _permissionItems(
       BuildContext context, AsyncValue<Map<Permission, PermissionStatus>> statusAsync) {
     final items = [
+      (Permission.manageExternalStorage, Icons.folder_special_outlined,
+          '전체 파일 접근', '메모 파일 저장에 필요합니다'),
       (Permission.microphone, Icons.mic, '마이크', '음성 메모 녹음에 필요합니다'),
       (Permission.locationWhenInUse, Icons.location_on, '위치', 'GPS 좌표를 메모에 기록합니다'),
       (Permission.camera, Icons.camera_alt, '카메라', '사진 촬영 및 첨부에 필요합니다'),
@@ -102,16 +97,6 @@ class PermissionScreen extends ConsumerWidget {
       (Permission.notification, Icons.notifications_outlined, '알림', '음성 메모 상태를 알림으로 표시합니다'),
     ];
 
-    return items.map((item) => _buildItem(context, statusAsync, item)).toList();
-  }
-
-  List<Widget> _optionalItems(
-      BuildContext context, AsyncValue<Map<Permission, PermissionStatus>> statusAsync) {
-    final items = [
-      (Permission.manageExternalStorage, Icons.folder_special_outlined,
-          '전체 파일 접근',
-          '(선택) 허가 시 사진을 갤러리에서 직접 관리할 수 있습니다\n메모는 허가 여부와 관계없이 앱 전용 저장소에 저장됩니다'),
-    ];
     return items.map((item) => _buildItem(context, statusAsync, item)).toList();
   }
 

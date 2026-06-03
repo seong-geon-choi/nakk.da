@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -49,6 +50,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       _checkPendingVoiceResult();
+      // 권한 취득 후 복귀 시 메모 목록 재시도
+      if (ref.read(todayFileProvider).hasError) {
+        ref.invalidate(todayFileProvider);
+      }
     }
   }
 
@@ -134,11 +139,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         children: [
           todayAsync.when(
             loading: () => const Center(child: CircularProgressIndicator()),
-            error: (e, _) => EmptyStateView(
-              icon: Icons.error_outline,
-              message: '불러오기 실패',
-              subMessage: e.toString(),
-            ),
+            error: (e, _) {
+              final isPermDenied = e is FileSystemException && e.osError?.errorCode == 13;
+              return EmptyStateView(
+                icon: isPermDenied ? Icons.lock_outline : Icons.error_outline,
+                message: isPermDenied ? '파일 접근 권한이 필요합니다' : '불러오기 실패',
+                subMessage: isPermDenied
+                    ? '설정 > 권한 > 전체 파일 접근을 허용해 주세요'
+                    : e.toString(),
+                actionLabel: isPermDenied ? '권한 설정으로 이동' : null,
+                onAction: isPermDenied ? () => context.push(AppRoutes.settings) : null,
+              );
+            },
             data: (dayFile) => _Body(dayFile: dayFile),
           ),
           if (showLocationButton)

@@ -8,7 +8,17 @@ class PermissionServiceImpl implements PermissionService {
     Permission.camera,
     Permission.photos,
     Permission.notification,
-    // manageExternalStorage는 선택적(시스템 설정 페이지 필요) — 별도 요청
+    // manageExternalStorage는 시스템 설정 페이지가 필요해서 requestAll에서 제외,
+    // checkAll에는 포함해 상태 표시
+    Permission.manageExternalStorage,
+  ];
+
+  static final List<Permission> _requestable = [
+    Permission.microphone,
+    Permission.locationWhenInUse,
+    Permission.camera,
+    Permission.photos,
+    Permission.notification,
   ];
 
   @override
@@ -22,7 +32,7 @@ class PermissionServiceImpl implements PermissionService {
 
   @override
   Future<Map<Permission, PermissionStatus>> requestAll() async {
-    return await _required.request();
+    return await _requestable.request();
   }
 
   @override

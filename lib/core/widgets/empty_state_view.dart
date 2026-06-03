@@ -4,12 +4,16 @@ class EmptyStateView extends StatelessWidget {
   final String message;
   final String? subMessage;
   final IconData? icon;
+  final String? actionLabel;
+  final VoidCallback? onAction;
 
   const EmptyStateView({
     super.key,
     required this.message,
     this.subMessage,
     this.icon,
+    this.actionLabel,
+    this.onAction,
   });
 
   @override
@@ -36,6 +40,13 @@ class EmptyStateView extends StatelessWidget {
                 subMessage!,
                 style: Theme.of(context).textTheme.bodySmall,
                 textAlign: TextAlign.center,
+              ),
+            ],
+            if (actionLabel != null && onAction != null) ...[
+              const SizedBox(height: 16),
+              FilledButton(
+                onPressed: onAction,
+                child: Text(actionLabel!),
               ),
             ],
           ],
