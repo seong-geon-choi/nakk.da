@@ -20,9 +20,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final savePath = (rawPath == null ||
             rawPath.contains('vo_rec') ||
             rawPath.contains('/DCIM/nakkda') ||
-            // 이전 앱 전용 루트 경로 → Documents/nakkda 하위로 마이그레이션
-            (rawPath.contains('/Android/data/com.nakkda.nakkda/files') &&
-                !rawPath.contains('/Documents/nakkda')))
+            rawPath.contains('/Android/data/com.nakkda.nakkda/files'))
         ? await _defaultSavePath()
         : rawPath;
     final storedPhotoPath = prefs.getString(_photoSavePathKey);
@@ -66,9 +64,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
   Future<String> _defaultSavePath() async {
     final appDir = await getExternalStorageDirectory();
     if (appDir != null) {
-      // 앱 전용 외부 저장소 하위 Documents/nakkda (권한 불필요)
-      // 예: /storage/emulated/0/Android/data/com.nakkda.nakkda/files/Documents/nakkda
-      return '${appDir.path}/Documents/nakkda';
+      final base = appDir.path.split('/Android/').first;
+      return '$base/Documents/nakkda';
     }
     return '${(await getApplicationDocumentsDirectory()).path}/nakkda';
   }
