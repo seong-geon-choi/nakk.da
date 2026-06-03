@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../location/domain/models/location_status.dart';
@@ -24,6 +25,9 @@ class LocationEditSheet extends ConsumerStatefulWidget {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxWidth: math.min(MediaQuery.of(context).size.width, 600),
+      ),
       builder: (_) => LocationEditSheet(
         existing: existing,
         blockIndex: blockIndex,
@@ -78,7 +82,7 @@ class _LocationEditSheetState extends ConsumerState<LocationEditSheet> {
     return Padding(
       padding: EdgeInsets.only(bottom: mq.viewInsets.bottom + mq.padding.bottom),
       child: Container(
-        constraints: BoxConstraints(maxHeight: mq.size.height * 0.85),
+        constraints: BoxConstraints(maxHeight: math.min(mq.size.height * 0.85, 650)),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         child: SingleChildScrollView(
           child: Column(

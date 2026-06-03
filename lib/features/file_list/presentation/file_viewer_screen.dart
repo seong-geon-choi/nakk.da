@@ -154,6 +154,8 @@ class _InlineImage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final file = File(path);
+    final h = (MediaQuery.of(context).size.shortestSide * 0.45)
+        .clamp(180.0, maxHeight * 1.5);
     return GestureDetector(
       onTap: () => _openFullScreen(context),
       child: ClipRRect(
@@ -161,12 +163,12 @@ class _InlineImage extends StatelessWidget {
         child: file.existsSync()
             ? Image.file(
                 file,
-                height: maxHeight,
+                height: h,
                 width: double.infinity,
                 fit: BoxFit.cover,
               )
             : Container(
-                height: maxHeight,
+                height: h,
                 color: Theme.of(context).colorScheme.surfaceContainerHighest,
                 child: const Center(
                   child: Icon(Icons.broken_image, size: 48),

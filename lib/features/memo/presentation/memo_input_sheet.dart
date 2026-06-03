@@ -1,4 +1,5 @@
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -23,6 +24,8 @@ class MemoInputSheet extends ConsumerStatefulWidget {
   final String? initialPhotoPath;
   final double? initialFishLength;
   final String? initialText;
+  final double? initialLatitude;
+  final double? initialLongitude;
   final Future<void> Function(int blockIndex, MemoEntry updated)? onEditSave;
   final Future<void> Function(MemoEntry entry)? onAddSave;
 
@@ -34,6 +37,8 @@ class MemoInputSheet extends ConsumerStatefulWidget {
     this.initialPhotoPath,
     this.initialFishLength,
     this.initialText,
+    this.initialLatitude,
+    this.initialLongitude,
     this.onEditSave,
     this.onAddSave,
   });
@@ -46,12 +51,17 @@ class MemoInputSheet extends ConsumerStatefulWidget {
     String? initialPhotoPath,
     double? initialFishLength,
     String? initialText,
+    double? initialLatitude,
+    double? initialLongitude,
     Future<void> Function(int, MemoEntry)? onEditSave,
     Future<void> Function(MemoEntry)? onAddSave,
   }) {
     return showModalBottomSheet(
       context: context,
       isScrollControlled: true,
+      constraints: BoxConstraints(
+        maxWidth: math.min(MediaQuery.of(context).size.width, 600),
+      ),
       builder: (_) => MemoInputSheet(
         startWithVoice: voiceMode,
         existingEntry: existingEntry,
@@ -59,10 +69,91 @@ class MemoInputSheet extends ConsumerStatefulWidget {
         initialPhotoPath: initialPhotoPath,
         initialFishLength: initialFishLength,
         initialText: initialText,
+        initialLatitude: initialLatitude,
+        initialLongitude: initialLongitude,
         onEditSave: onEditSave,
         onAddSave: onAddSave,
       ),
     );
+  }
+
+  /// 소스 선택 → 사진 촬영/선택까지 처리. 메모폼 열기 전에 호출.
+  static Future<({String path, double? length, ({double lat, double lng})? gps})?> pickPhoto(
+    BuildContext context,
+    WidgetRef ref,
+  ) async {
+    final source = await showModalBottomSheet<PhotoSource>(
+      context: context,
+      constraints: BoxConstraints(
+        maxWidth: math.min(MediaQuery.of(context).size.width, 600),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.view_in_ar_outlined),
+              title: const Text('AR 길이 측정'),
+              onTap: () => Navigator.of(sheetCtx).pop(PhotoSource.arCamera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt),
+              title: const Text('일반 카메라'),
+              onTap: () => Navigator.of(sheetCtx).pop(PhotoSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('갤러리에서 선택'),
+              onTap: () => Navigator.of(sheetCtx).pop(PhotoSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !context.mounted) return null;
+
+    final settings = ref.read(settingsProvider).valueOrNull;
+    final relPath = _mediaRelPath(settings?.photoSavePath ?? 'DCIM/nakkda');
+    String? path;
+    double? length;
+    ({double lat, double lng})? gps;
+
+    if (source == PhotoSource.arCamera) {
+      final wmSettings = settings?.watermark;
+      final arResult = await launchArMeasure(
+        watermarkEnabled: wmSettings?.enabled ?? false,
+        watermarkSettings: wmSettings,
+      );
+      if (arResult == null || !context.mounted) return null;
+      final rawPath = (arResult.applyWatermark && wmSettings != null)
+          ? await applyWatermark(arResult.path, wmSettings.copyWith(enabled: true))
+          : arResult.path;
+      path = await saveToGallery(rawPath, relativePath: relPath);
+      length = arResult.distanceCm;
+    } else if (source == PhotoSource.camera) {
+      final camPath = await Navigator.of(context).push<String>(
+        MaterialPageRoute(builder: (_) => const CameraRulerScreen()),
+      );
+      if (camPath == null || !context.mounted) return null;
+      path = await saveToGallery(camPath, relativePath: relPath);
+    } else {
+      final pickedPath = await pickGalleryImagePath();
+      if (pickedPath == null || !context.mounted) return null;
+      gps = await readExifGps(pickedPath);
+      path = await copyGalleryPhotoToAppStorage(pickedPath);
+    }
+
+    if (path == null) return null;
+    return (path: path, length: length, gps: gps);
+  }
+
+  static String _mediaRelPath(String photoSavePath) {
+    final lower = photoSavePath.toLowerCase();
+    for (final marker in ['dcim/', 'pictures/', 'downloads/']) {
+      final idx = lower.indexOf(marker);
+      if (idx >= 0) return photoSavePath.substring(idx);
+    }
+    return 'DCIM/nakkda';
   }
 
   @override
@@ -98,6 +189,10 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
       if (widget.initialFishLength != null) {
         _fishLengthCtrl.text = widget.initialFishLength!.toStringAsFixed(1);
       }
+      if (widget.initialLatitude != null) {
+        _latCtrl.text = widget.initialLatitude!.toStringAsFixed(4);
+        _lngCtrl.text = widget.initialLongitude!.toStringAsFixed(4);
+      }
       WidgetsBinding.instance.addPostFrameCallback((_) => _autoFillGps());
     }
     if (widget.startWithVoice) {
@@ -115,7 +210,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
   }
 
   Future<void> _autoFillGps() async {
-    if (!mounted) return;
+    if (!mounted || _latCtrl.text.isNotEmpty) return;
     double? lat = ref.read(locationProvider).valueOrNull?.latitude;
     double? lng = ref.read(locationProvider).valueOrNull?.longitude;
     if (lat == null) {
@@ -158,7 +253,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     return Padding(
       padding: EdgeInsets.only(bottom: mq.viewInsets.bottom + mq.padding.bottom),
       child: Container(
-        constraints: BoxConstraints(maxHeight: mq.size.height * 0.92),
+        constraints: BoxConstraints(maxHeight: math.min(mq.size.height * 0.92, 700)),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -304,7 +399,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        const Icon(Icons.gps_fixed, size: 16),
+        const Icon(Icons.location_on_outlined, size: 16),
         const SizedBox(width: 6),
         Expanded(
           child: TextField(
@@ -338,7 +433,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
           const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
         else
           IconButton(
-            icon: const Icon(Icons.my_location, size: 18),
+            icon: const Icon(Icons.near_me_outlined, size: 18),
             tooltip: '현재 위치로',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
@@ -381,113 +476,69 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
   Widget _buildPhotoSection() {
     final colorScheme = Theme.of(context).colorScheme;
     final hasPhoto = _photoPath != null && File(_photoPath!).existsSync();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    return Row(
+      crossAxisAlignment: hasPhoto ? CrossAxisAlignment.start : CrossAxisAlignment.center,
       children: [
-        if (hasPhoto) ...[
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: Image.file(File(_photoPath!),
-                height: 120, width: double.infinity, fit: BoxFit.cover),
+        Padding(
+          padding: hasPhoto ? const EdgeInsets.only(top: 2) : EdgeInsets.zero,
+          child: const Icon(Icons.photo_camera_outlined, size: 18),
+        ),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (hasPhoto) ...[
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Image.file(File(_photoPath!),
+                      height: (MediaQuery.of(context).size.shortestSide * 0.3).clamp(100.0, 220.0),
+                      width: double.infinity, fit: BoxFit.cover),
+                ),
+                const SizedBox(height: 6),
+                Row(children: [
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: _saving ? null : _pickPhoto,
+                    child: const Text('변경'),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: colorScheme.error,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: _saving ? null : () => setState(() => _photoPath = null),
+                    child: const Text('삭제'),
+                  ),
+                ]),
+              ] else
+                OutlinedButton(
+                  onPressed: _saving ? null : _pickPhoto,
+                  child: const Text('사진 추가'),
+                ),
+            ],
           ),
-          const SizedBox(height: 6),
-          Row(children: [
-            OutlinedButton.icon(
-              icon: const Icon(Icons.photo_camera, size: 16),
-              label: const Text('변경'),
-              style: OutlinedButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              onPressed: _saving ? null : _pickPhoto,
-            ),
-            const SizedBox(width: 8),
-            OutlinedButton.icon(
-              icon: const Icon(Icons.delete_outline, size: 16),
-              label: const Text('삭제'),
-              style: OutlinedButton.styleFrom(
-                foregroundColor: colorScheme.error,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-              ),
-              onPressed: _saving ? null : () => setState(() => _photoPath = null),
-            ),
-          ]),
-        ] else
-          OutlinedButton.icon(
-            icon: const Icon(Icons.add_a_photo_outlined, size: 18),
-            label: const Text('📷 사진 추가'),
-            onPressed: _saving ? null : _pickPhoto,
-          ),
+        ),
       ],
     );
   }
 
   Future<void> _pickPhoto() async {
-    final source = await showModalBottomSheet<PhotoSource>(
-      context: context,
-      builder: (sheetCtx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.view_in_ar_outlined),
-              title: const Text('AR 길이 측정'),
-              onTap: () => Navigator.of(sheetCtx).pop(PhotoSource.arCamera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt),
-              title: const Text('일반 사진'),
-              onTap: () => Navigator.of(sheetCtx).pop(PhotoSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library),
-              title: const Text('갤러리에서 선택'),
-              onTap: () => Navigator.of(sheetCtx).pop(PhotoSource.gallery),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (source == null || !mounted) return;
-
-    final settings = ref.read(settingsProvider).valueOrNull;
-    final relPath = _mediaRelativePath(settings?.photoSavePath ?? 'DCIM/nakkda');
-    String? path;
-    double? length;
-    ({double lat, double lng})? exifGps;
-
-    if (source == PhotoSource.arCamera) {
-      final wmSettings = settings?.watermark;
-      final arResult = await launchArMeasure(watermarkEnabled: wmSettings?.enabled ?? false);
-      if (arResult == null || !mounted) return;
-      final rawPath = (arResult.applyWatermark && wmSettings != null)
-          ? await applyWatermark(arResult.path, wmSettings.copyWith(enabled: true))
-          : arResult.path;
-      path = await saveToGallery(rawPath, relativePath: relPath);
-      length = arResult.distanceCm;
-    } else if (source == PhotoSource.camera) {
-      final camPath = await Navigator.of(context).push<String>(
-        MaterialPageRoute(builder: (_) => const CameraRulerScreen()),
-      );
-      if (camPath == null || !mounted) return;
-      path = await saveToGallery(camPath, relativePath: relPath);
-    } else {
-      final pickedPath = await pickGalleryImagePath();
-      if (pickedPath == null || !mounted) return;
-      exifGps = await readExifGps(pickedPath);
-      path = await copyGalleryPhotoToAppStorage(pickedPath);
-    }
-
-    if (!mounted) return;
+    final result = await MemoInputSheet.pickPhoto(context, ref);
+    if (result == null || !mounted) return;
     setState(() {
-      if (path != null) _photoPath = path;
-      if (length != null && _fishLengthCtrl.text.isEmpty) {
-        _fishLengthCtrl.text = length.toStringAsFixed(1);
+      _photoPath = result.path;
+      if (result.length != null && _fishLengthCtrl.text.isEmpty) {
+        _fishLengthCtrl.text = result.length!.toStringAsFixed(1);
       }
-      if (exifGps != null) {
-        _latCtrl.text = exifGps!.lat.toStringAsFixed(4);
-        _lngCtrl.text = exifGps!.lng.toStringAsFixed(4);
+      if (result.gps != null) {
+        _latCtrl.text = result.gps!.lat.toStringAsFixed(4);
+        _lngCtrl.text = result.gps!.lng.toStringAsFixed(4);
       }
     });
   }
@@ -599,14 +650,6 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     }
   }
 
-  String _mediaRelativePath(String photoSavePath) {
-    final lower = photoSavePath.toLowerCase();
-    for (final marker in ['dcim/', 'pictures/', 'downloads/']) {
-      final idx = lower.indexOf(marker);
-      if (idx >= 0) return photoSavePath.substring(idx);
-    }
-    return 'DCIM/nakkda';
-  }
 }
 
 class _VoiceButton extends StatelessWidget {

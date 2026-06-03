@@ -64,6 +64,21 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
     private var includeLength = true
     private var applyWatermark = false
 
+    // 워터마크 오버레이
+    private var wmPosition = "bottomRight"
+    private var wmDateFmt = ""
+    private var wmTimeFmt = ""
+    private var wmCustomText = ""
+    private var wmFontSize = 32
+    private var wmBold = false
+    private var wmBoxOpacity = 0.67f
+    private var wmAlignment = "right"
+    private lateinit var wmOverlay: TextView
+    private val wmHandler = Handler(Looper.getMainLooper())
+    private val wmRunnable = object : Runnable {
+        override fun run() { updateWmOverlay(); wmHandler.postDelayed(this, 1000) }
+    }
+
     @Volatile private var currentFrame: Frame? = null
 
     private var worldPoint1: FloatArray? = null
@@ -76,7 +91,26 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         actionBar?.hide()
+        // 모든 API에서 콘텐츠가 시스템 바 뒤까지 확장되도록 설정 → 인셋 콜백이 정확한 값을 받음
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            window.setDecorFitsSystemWindows(false)
+        } else {
+            @Suppress("DEPRECATION")
+            window.decorView.systemUiVisibility = (
+                android.view.View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
+                android.view.View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
+                android.view.View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
+            )
+        }
         applyWatermark = intent.getBooleanExtra(EXTRA_WATERMARK_ENABLED, false)
+        wmPosition    = intent.getStringExtra("wmPosition")  ?: "bottomRight"
+        wmDateFmt     = intent.getStringExtra("wmDateFmt")   ?: ""
+        wmTimeFmt     = intent.getStringExtra("wmTimeFmt")   ?: ""
+        wmCustomText  = intent.getStringExtra("wmCustomText") ?: ""
+        wmFontSize    = intent.getIntExtra("wmFontSize", 32)
+        wmBold        = intent.getBooleanExtra("wmBold", false)
+        wmBoxOpacity  = intent.getFloatExtra("wmBoxOpacity", 0.67f)
+        wmAlignment   = intent.getStringExtra("wmAlignment") ?: "right"
         displayRotationHelper = DisplayRotationHelper(this)
         setupLayout()
     }
@@ -87,17 +121,20 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         displayRotationHelper.onResume()
         session?.resume()
         glSurfaceView.onResume()
+        if (applyWatermark) wmHandler.post(wmRunnable)
     }
 
     override fun onPause() {
-        super.onPause()
+        wmHandler.removeCallbacks(wmRunnable)
         glSurfaceView.onPause()
         session?.pause()
         displayRotationHelper.onPause()
+        super.onPause()
     }
 
     override fun onDestroy() {
         msgHandler.removeCallbacksAndMessages(null)
+        wmHandler.removeCallbacksAndMessages(null)
         super.onDestroy()
         session?.close()
         session = null
@@ -247,6 +284,31 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             .start()
     }
 
+    private fun updateWmOverlay() {
+        if (!::wmOverlay.isInitialized) return
+        val cal = java.util.Calendar.getInstance()
+        val lines = mutableListOf<String>()
+        if (wmDateFmt.isNotEmpty()) {
+            val y  = cal.get(java.util.Calendar.YEAR)
+            val yy = (y % 100).toString().padStart(2, '0')
+            val mm = (cal.get(java.util.Calendar.MONTH) + 1).toString().padStart(2, '0')
+            val dd = cal.get(java.util.Calendar.DAY_OF_MONTH).toString().padStart(2, '0')
+            lines.add(when (wmDateFmt) {
+                "yy/MM/dd" -> "$yy/$mm/$dd"
+                "MM/dd"    -> "$mm/$dd"
+                else       -> "$y-$mm-$dd"
+            })
+        }
+        if (wmTimeFmt.isNotEmpty()) {
+            val hh  = cal.get(java.util.Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
+            val min = cal.get(java.util.Calendar.MINUTE).toString().padStart(2, '0')
+            val sec = cal.get(java.util.Calendar.SECOND).toString().padStart(2, '0')
+            lines.add(if (wmTimeFmt == "HH:mm:ss") "$hh:$min:$sec" else "$hh:$min")
+        }
+        if (wmCustomText.isNotEmpty()) lines.add(wmCustomText)
+        wmOverlay.text = lines.joinToString("\n")
+    }
+
     // ── Capture ──────────────────────────────────────────────────────
 
     private fun captureAndReturn() {
@@ -280,33 +342,44 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         val p2 = dotsView.point2 ?: return out
         val cm = measuredCm ?: return out
 
+        // 비트맵 크기 기준으로 모든 수치 스케일 — 해상도/화면 크기 무관
+        val sw = src.width.toFloat()
+        val stroke  = sw * 0.005f
+        val dotR    = sw * 0.025f
+        val textSz  = sw * 0.065f
+        val labelOY = sw * 0.055f
+        val ph      = sw * 0.026f
+        val pv      = sw * 0.016f
+        val corner  = sw * 0.020f
+        val dashOn  = sw * 0.022f
+        val dashOff = sw * 0.011f
+
         canvas.drawLine(p1.first, p1.second, p2.first, p2.second,
             Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                color = Color.WHITE; strokeWidth = 6f; style = Paint.Style.STROKE
-                pathEffect = DashPathEffect(floatArrayOf(24f, 12f), 0f)
+                color = Color.WHITE; strokeWidth = stroke; style = Paint.Style.STROKE
+                pathEffect = DashPathEffect(floatArrayOf(dashOn, dashOff), 0f)
             })
 
         for (pt in listOf(p1, p2)) {
-            canvas.drawCircle(pt.first, pt.second, 28f,
+            canvas.drawCircle(pt.first, pt.second, dotR,
                 Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#FF4081") })
-            canvas.drawCircle(pt.first, pt.second, 28f,
+            canvas.drawCircle(pt.first, pt.second, dotR,
                 Paint(Paint.ANTI_ALIAS_FLAG).apply {
-                    color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 6f
+                    color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = stroke
                 })
         }
 
         val mx = (p1.first + p2.first) / 2f
-        val my = (p1.second + p2.second) / 2f - 60f
+        val my = (p1.second + p2.second) / 2f - labelOY
         val label = "%.1f cm".format(cm)
         val tp = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE; textSize = 72f; textAlign = Paint.Align.CENTER
+            color = Color.WHITE; textSize = textSz; textAlign = Paint.Align.CENTER
             typeface = Typeface.DEFAULT_BOLD
         }
         val tb = Rect(); tp.getTextBounds(label, 0, label.length, tb)
-        val ph = 28f; val pv = 18f
         canvas.drawRoundRect(
             RectF(mx - tb.width()/2f - ph, my - tb.height() - pv, mx + tb.width()/2f + ph, my + pv),
-            22f, 22f, Paint().apply { color = 0xCC000000.toInt() })
+            corner, corner, Paint().apply { color = 0xCC000000.toInt() })
         canvas.drawText(label, mx, my, tp)
         return out
     }
@@ -402,10 +475,49 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             gravity = Gravity.CENTER
         }
 
+        // 워터마크 오버레이 뷰
+        val isTop  = wmPosition == "topLeft"  || wmPosition == "topRight"
+        val isLeft = wmPosition == "topLeft"  || wmPosition == "bottomLeft"
+        // Flutter와 동일한 공식으로 화면 크기 기준 폰트 크기 계산
+        val dm = resources.displayMetrics
+        val screenWDp = dm.widthPixels / dm.density
+        val screenHDp = dm.heightPixels / dm.density
+        val photoAspect = screenHDp / screenWDp  // 세로 화면: height > width
+        val fontDp = minOf(
+            wmFontSize * screenWDp / 480f,
+            wmFontSize * screenHDp / (480f * photoAspect)
+        ).coerceIn(8f, screenWDp * 0.09f)
+        wmOverlay = TextView(this).apply {
+            setTextSize(android.util.TypedValue.COMPLEX_UNIT_DIP, fontDp)
+            setTextColor(Color.WHITE)
+            typeface = if (wmBold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
+            gravity = when (wmAlignment) {
+                "left"   -> Gravity.START
+                "center" -> Gravity.CENTER_HORIZONTAL
+                else     -> Gravity.END
+            }
+            setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5))
+            background = GradientDrawable().apply {
+                val a = (wmBoxOpacity * 255).toInt().coerceIn(0, 255)
+                setColor(Color.argb(a, 0, 0, 0))
+                cornerRadius = dpToPx(4).toFloat()
+            }
+            visibility = if (applyWatermark) View.VISIBLE else View.GONE
+        }
+        val wmGravity = (if (isTop) Gravity.TOP else Gravity.BOTTOM) or
+                        (if (isLeft) Gravity.START else Gravity.END)
+        val wmParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply { gravity = wmGravity; setMargins(dpToPx(16), dpToPx(16), dpToPx(16), dpToPx(16)) }
+        updateWmOverlay()
+
         // Icon toggle buttons — right-center of screen (outside bottom area)
         watermarkBtn = makeIconToggleBtn(R.drawable.ic_wm_toggle) {
             applyWatermark = !applyWatermark
             updateWatermarkBtn()
+            wmOverlay.visibility = if (applyWatermark) View.VISIBLE else View.GONE
+            if (applyWatermark) { updateWmOverlay(); wmHandler.post(wmRunnable) }
+            else wmHandler.removeCallbacks(wmRunnable)
             showMsg(if (applyWatermark) "워터마크 표시 ON" else "워터마크 표시 OFF")
         }
         includeLengthBtn = makeIconToggleBtn(R.drawable.ic_ruler_toggle) {
@@ -460,6 +572,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             addView(dotsView, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(wmOverlay, wmParams)
             addView(closeBtn, closeParams)
             addView(statusText, statusParams)
             addView(distanceCard, distParams)
@@ -500,6 +613,14 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
                 bottomMargin = b  // 네비게이션 바 위로 수직 중앙 보정
             }
             sideButtons.requestLayout()
+            (wmOverlay.layoutParams as FrameLayout.LayoutParams).apply {
+                val m = dpToPx(16)
+                leftMargin   = if (isLeft) l + m else m
+                rightMargin  = if (!isLeft) r + m else m
+                topMargin    = if (isTop) t + m else m
+                bottomMargin = if (!isTop) b + m else m
+            }
+            wmOverlay.requestLayout()
             (msgText.layoutParams as FrameLayout.LayoutParams).apply {
                 bottomMargin = b + dpToPx(120)
             }

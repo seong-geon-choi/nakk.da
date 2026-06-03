@@ -382,10 +382,11 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
     final marginY = wm.fontSize * screenH / (960.0 * photoAspect);
 
     // 폰트: 사진 픽셀의 scaledFont를 화면 좌표로 변환한 크기
+    final _fontMax = mq.size.shortestSide * 0.09;
     final overlayFont = math.min(
       wm.fontSize * screenW / 480.0,
       wm.fontSize * screenH / (480.0 * photoAspect),
-    ).clamp(8.0, 32.0);
+    ).clamp(8.0, _fontMax);
 
     final isTop = wm.position == WatermarkPosition.topLeft ||
         wm.position == WatermarkPosition.topRight;
@@ -407,11 +408,12 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
       WatermarkAlign.right => TextAlign.right,
     };
 
+    final vp = mq.viewPadding;
     return Positioned(
-      top: isTop ? marginY : null,
-      bottom: !isTop ? marginY : null,
-      left: isLeft ? marginX : null,
-      right: !isLeft ? marginX : null,
+      top: isTop ? marginY + vp.top : null,
+      bottom: !isTop ? marginY + vp.bottom : null,
+      left: isLeft ? marginX + vp.left : null,
+      right: !isLeft ? marginX + vp.right : null,
       child: Container(
         padding: EdgeInsets.symmetric(
           horizontal: overlayFont * 0.5,

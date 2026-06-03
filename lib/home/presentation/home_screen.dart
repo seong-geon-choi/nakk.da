@@ -158,8 +158,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Future<void> _onPhotoTap() async {
-    // 사진 메뉴 없이 바로 통합 폼 열기 (폼 내에서 사진 소스 선택)
-    MemoInputSheet.show(context);
+    final result = await MemoInputSheet.pickPhoto(context, ref);
+    if (result == null || !mounted) return;
+    MemoInputSheet.show(context,
+      initialPhotoPath: result.path,
+      initialFishLength: result.length,
+      initialLatitude: result.gps?.lat,
+      initialLongitude: result.gps?.lng,
+    );
   }
 
   Future<void> _onLocationTap() async {
@@ -684,9 +690,14 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
   }
 
   Future<void> _onPhotoTap() async {
-    // 통합 폼으로 — 폼 내에서 사진 소스 선택 및 모든 항목 입력
+    final result = await MemoInputSheet.pickPhoto(context, ref);
+    if (result == null || !mounted) return;
     MemoInputSheet.show(
       context,
+      initialPhotoPath: result.path,
+      initialFishLength: result.length,
+      initialLatitude: result.gps?.lat,
+      initialLongitude: result.gps?.lng,
       onAddSave: (entry) =>
           ref.read(dayFileProvider(widget.filePath).notifier).addEntry(entry),
     );
