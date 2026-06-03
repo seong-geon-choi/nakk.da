@@ -9,7 +9,6 @@ import '../../core/widgets/empty_state_view.dart';
 import '../../core/widgets/memo_entry_card.dart';
 import '../../core/widgets/location_status_card.dart';
 import '../../core/utils/date_formatter.dart';
-import '../../core/utils/media_scanner.dart';
 import '../../features/memo/domain/models/memo_entry.dart';
 import '../../features/memo/domain/models/day_file.dart';
 import '../../features/location/domain/models/location_status.dart';
@@ -18,11 +17,6 @@ import '../../features/memo/presentation/memo_input_sheet.dart';
 import '../../features/memo/presentation/location_edit_sheet.dart';
 import '../../features/settings/presentation/settings_provider.dart';
 import '../../features/location/presentation/location_provider.dart';
-import '../../features/photo/presentation/photo_provider.dart';
-import '../../features/photo/domain/photo_service.dart';
-import '../../features/photo/presentation/camera_ruler_screen.dart';
-import '../../core/services/ar_service.dart';
-import '../../core/utils/watermark.dart';
 import 'package:geolocator/geolocator.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -164,54 +158,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Future<void> _onPhotoTap() async {
-    final source = await showModalBottomSheet<PhotoSource>(
-      context: context,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.view_in_ar_outlined),
-              title: const Text('AR 길이 측정'),
-              onTap: () => Navigator.of(context).pop(PhotoSource.arCamera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt),
-              title: const Text('일반 사진'),
-              onTap: () => Navigator.of(context).pop(PhotoSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library),
-              title: const Text('갤러리에서 선택'),
-              onTap: () => Navigator.of(context).pop(PhotoSource.gallery),
-            ),
-          ],
-        ),
-      ),
-    );
-    if (source == null || !context.mounted) return;
-
-    if (source == PhotoSource.arCamera) {
-      final settings = ref.read(settingsProvider).valueOrNull;
-      final wmSettings = settings?.watermark;
-      final arResult = await launchArMeasure(
-        watermarkEnabled: wmSettings?.enabled ?? false,
-      );
-      if (arResult == null || !context.mounted) return;
-      final photoPath = (arResult.applyWatermark && wmSettings != null)
-          ? await applyWatermark(arResult.path, wmSettings.copyWith(enabled: true))
-          : arResult.path;
-      if (!context.mounted) return;
-      await ref.read(photoProvider.notifier).saveFromPath(photoPath, fishLength: arResult.distanceCm);
-    } else if (source == PhotoSource.camera) {
-      final result = await Navigator.of(context).push<({String path, double? length})>(
-        MaterialPageRoute(builder: (_) => const CameraRulerScreen()),
-      );
-      if (result == null || !context.mounted) return;
-      await ref.read(photoProvider.notifier).saveFromPath(result.path, fishLength: result.length);
-    } else {
-      await ref.read(photoProvider.notifier).pickAndSave(source);
-    }
+    // 사진 메뉴 없이 바로 통합 폼 열기 (폼 내에서 사진 소스 선택)
+    MemoInputSheet.show(context);
   }
 
   Future<void> _onLocationTap() async {
@@ -736,78 +684,12 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
   }
 
   Future<void> _onPhotoTap() async {
-    final source = await showModalBottomSheet<PhotoSource>(
-      context: context,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.view_in_ar_outlined),
-              title: const Text('AR 길이 측정'),
-              onTap: () => Navigator.of(context).pop(PhotoSource.arCamera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.camera_alt),
-              title: const Text('일반 사진'),
-              onTap: () => Navigator.of(context).pop(PhotoSource.camera),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library),
-              title: const Text('갤러리에서 선택'),
-              onTap: () => Navigator.of(context).pop(PhotoSource.gallery),
-            ),
-          ],
-        ),
-      ),
+    // 통합 폼으로 — 폼 내에서 사진 소스 선택 및 모든 항목 입력
+    MemoInputSheet.show(
+      context,
+      onAddSave: (entry) =>
+          ref.read(dayFileProvider(widget.filePath).notifier).addEntry(entry),
     );
-    if (source == null || !context.mounted) return;
-
-    final settings = ref.read(settingsProvider).valueOrNull;
-    final relativePath =
-        _mediaRelativePath(settings?.photoSavePath ?? 'DCIM/nakkda');
-    String? savedPath;
-    double? fishLength;
-
-    if (source == PhotoSource.arCamera) {
-      final wmSettings = settings?.watermark;
-      final arResult = await launchArMeasure(
-        watermarkEnabled: wmSettings?.enabled ?? false,
-      );
-      if (arResult == null || !context.mounted) return;
-      final rawPath = (arResult.applyWatermark && wmSettings != null)
-          ? await applyWatermark(arResult.path, wmSettings.copyWith(enabled: true))
-          : arResult.path;
-      fishLength = arResult.distanceCm;
-      if (!context.mounted) return;
-      savedPath = await saveToGallery(rawPath, relativePath: relativePath);
-    } else if (source == PhotoSource.camera) {
-      final result = await Navigator.of(context).push<({String path, double? length})>(
-        MaterialPageRoute(builder: (_) => const CameraRulerScreen()),
-      );
-      if (result == null || !context.mounted) return;
-      fishLength = result.length;
-      if (!context.mounted) return;
-      savedPath = await saveToGallery(result.path, relativePath: relativePath);
-    } else {
-      // 갤러리 선택: 캐시 → 앱 전용 외부 저장소로 복사
-      final tempPath =
-          await ref.read(photoServiceProvider).pickImage(source: source);
-      if (tempPath == null || !context.mounted) return;
-      savedPath = await copyGalleryPhotoToAppStorage(tempPath);
-    }
-
-    if (savedPath == null || !context.mounted) return;
-    final gps = await _bestGps();
-    await ref.read(dayFileProvider(widget.filePath).notifier).addEntry(
-          MemoEntry(
-            timestamp: DateTime.now(),
-            latitude: gps?.$1,
-            longitude: gps?.$2,
-            photoPath: savedPath,
-            fishLength: fishLength,
-          ),
-        );
   }
 
   Future<void> _onLocationTap() async {
@@ -845,26 +727,6 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
           .read(dayFileProvider(widget.filePath).notifier)
           .addLocationBlock(loc);
     }
-  }
-
-  Future<(double, double)?> _bestGps() async {
-    final loc = ref.read(locationProvider).valueOrNull ??
-        ref.read(locationProvider.notifier).cached;
-    if (loc?.latitude != null) return (loc!.latitude!, loc.longitude!);
-    try {
-      final pos = await Geolocator.getLastKnownPosition();
-      if (pos != null) return (pos.latitude, pos.longitude);
-    } catch (_) {}
-    return null;
-  }
-
-  String _mediaRelativePath(String photoSavePath) {
-    final lower = photoSavePath.toLowerCase();
-    for (final marker in ['dcim/', 'pictures/', 'downloads/']) {
-      final idx = lower.indexOf(marker);
-      if (idx >= 0) return photoSavePath.substring(idx);
-    }
-    return 'DCIM/nakkda';
   }
 
 }

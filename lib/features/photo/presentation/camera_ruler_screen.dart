@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
@@ -118,15 +117,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
           : file.path;
 
       if (!mounted) return;
-      final result = await showModalBottomSheet<({String path, double? length})>(
-        context: context,
-        isScrollControlled: true,
-        isDismissible: false,
-        builder: (_) => _LengthInputSheet(photoPath: photoPath),
-      );
-      if (result != null && mounted) {
-        Navigator.of(context).pop(result);
-      }
+      Navigator.of(context).pop<String>(photoPath);
     } finally {
       if (mounted) setState(() => _capturing = false);
     }
@@ -327,107 +318,6 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               ),
             ),
         ],
-      ),
-    );
-  }
-}
-
-// ── 길이 입력 시트 ────────────────────────────────────────
-
-class _LengthInputSheet extends StatefulWidget {
-  final String photoPath;
-  const _LengthInputSheet({required this.photoPath});
-
-  @override
-  State<_LengthInputSheet> createState() => _LengthInputSheetState();
-}
-
-class _LengthInputSheetState extends State<_LengthInputSheet> {
-  final _ctrl = TextEditingController();
-
-  @override
-  void dispose() {
-    _ctrl.dispose();
-    super.dispose();
-  }
-
-  void _save() {
-    Navigator.of(context).pop((
-      path: widget.photoPath,
-      length: double.tryParse(_ctrl.text.trim()),
-    ));
-  }
-
-  void _skipLength() {
-    Navigator.of(context).pop((
-      path: widget.photoPath,
-      length: null,
-    ));
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final mq = MediaQuery.of(context);
-    return Padding(
-      padding:
-          EdgeInsets.only(bottom: mq.viewInsets.bottom + mq.padding.bottom),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Container(
-              width: 36,
-              height: 4,
-              margin: const EdgeInsets.only(bottom: 12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade400,
-                borderRadius: BorderRadius.circular(2),
-              ),
-            ),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.file(
-                File(widget.photoPath),
-                height: 160,
-                width: double.infinity,
-                fit: BoxFit.cover,
-              ),
-            ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: _ctrl,
-              autofocus: true,
-              keyboardType:
-                  const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: '물고기 길이',
-                hintText: '예: 35.5',
-                border: OutlineInputBorder(),
-                suffixText: 'cm',
-                isDense: true,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              ),
-              onSubmitted: (_) => _save(),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: _skipLength,
-                  child: const Text('길이 없이 저장'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: _save,
-                  child: const Text('저장'),
-                ),
-              ],
-            ),
-          ],
-        ),
       ),
     );
   }

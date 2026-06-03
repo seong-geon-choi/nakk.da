@@ -10,13 +10,17 @@ import '../../../features/location/presentation/location_provider.dart';
 import '../../../features/permission/presentation/permission_provider.dart';
 import '../../../features/settings/presentation/settings_provider.dart';
 import '../../../features/photo/domain/photo_service.dart';
-import '../../../features/photo/presentation/photo_provider.dart';
+import '../../../features/photo/presentation/camera_ruler_screen.dart';
 import '../../../core/utils/media_scanner.dart';
+import '../../../core/utils/watermark.dart';
+import '../../../core/services/ar_service.dart';
 
 class MemoInputSheet extends ConsumerStatefulWidget {
   final bool startWithVoice;
   final MemoEntry? existingEntry;
   final int? blockIndex;
+  final String? initialPhotoPath;
+  final double? initialFishLength;
   final String? initialText;
   final Future<void> Function(int blockIndex, MemoEntry updated)? onEditSave;
   final Future<void> Function(MemoEntry entry)? onAddSave;
@@ -26,6 +30,8 @@ class MemoInputSheet extends ConsumerStatefulWidget {
     this.startWithVoice = false,
     this.existingEntry,
     this.blockIndex,
+    this.initialPhotoPath,
+    this.initialFishLength,
     this.initialText,
     this.onEditSave,
     this.onAddSave,
@@ -36,6 +42,8 @@ class MemoInputSheet extends ConsumerStatefulWidget {
     bool voiceMode = false,
     MemoEntry? existingEntry,
     int? blockIndex,
+    String? initialPhotoPath,
+    double? initialFishLength,
     String? initialText,
     Future<void> Function(int, MemoEntry)? onEditSave,
     Future<void> Function(MemoEntry)? onAddSave,
@@ -47,6 +55,8 @@ class MemoInputSheet extends ConsumerStatefulWidget {
         startWithVoice: voiceMode,
         existingEntry: existingEntry,
         blockIndex: blockIndex,
+        initialPhotoPath: initialPhotoPath,
+        initialFishLength: initialFishLength,
         initialText: initialText,
         onEditSave: onEditSave,
         onAddSave: onAddSave,
@@ -59,30 +69,36 @@ class MemoInputSheet extends ConsumerStatefulWidget {
 }
 
 class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
-  final _controller = TextEditingController();
-  final _latController = TextEditingController();
-  final _lngController = TextEditingController();
-  final _fishLengthController = TextEditingController();
+  final _textCtrl = TextEditingController();
+  final _latCtrl = TextEditingController();
+  final _lngCtrl = TextEditingController();
+  final _fishLengthCtrl = TextEditingController();
+  DateTime _timestamp = DateTime.now();
+  String? _photoPath;
   bool _saving = false;
   bool _gpsUpdating = false;
-  // 사진 편집 상태 (isPhoto 수정 모드에서만 사용)
-  String? _newPhotoPath;
-  bool _photoDeleted = false;
+
+  bool get _isEditMode => widget.blockIndex != null && widget.existingEntry != null;
 
   @override
   void initState() {
     super.initState();
-    if (widget.initialText != null) {
-      _controller.text = widget.initialText!;
-    } else if (widget.existingEntry?.text != null) {
-      _controller.text = widget.existingEntry!.text!;
+    final entry = widget.existingEntry;
+    if (entry != null) {
+      _timestamp = entry.timestamp;
+      _photoPath = entry.photoPath;
+      _textCtrl.text = entry.text ?? '';
+      if (entry.latitude != null) _latCtrl.text = entry.latitude!.toStringAsFixed(4);
+      if (entry.longitude != null) _lngCtrl.text = entry.longitude!.toStringAsFixed(4);
+      if (entry.fishLength != null) _fishLengthCtrl.text = entry.fishLength!.toStringAsFixed(1);
+    } else {
+      if (widget.initialText != null) _textCtrl.text = widget.initialText!;
+      _photoPath = widget.initialPhotoPath;
+      if (widget.initialFishLength != null) {
+        _fishLengthCtrl.text = widget.initialFishLength!.toStringAsFixed(1);
+      }
+      WidgetsBinding.instance.addPostFrameCallback((_) => _autoFillGps());
     }
-    final lat = widget.existingEntry?.latitude;
-    final lng = widget.existingEntry?.longitude;
-    if (lat != null) _latController.text = lat.toStringAsFixed(4);
-    if (lng != null) _lngController.text = lng.toStringAsFixed(4);
-    final fl = widget.existingEntry?.fishLength;
-    if (fl != null) _fishLengthController.text = fl.toStringAsFixed(1);
     if (widget.startWithVoice) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _startVoice());
     }
@@ -90,29 +106,48 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
 
   @override
   void dispose() {
-    _controller.dispose();
-    _latController.dispose();
-    _lngController.dispose();
-    _fishLengthController.dispose();
+    _textCtrl.dispose();
+    _latCtrl.dispose();
+    _lngCtrl.dispose();
+    _fishLengthCtrl.dispose();
     super.dispose();
   }
 
+  Future<void> _autoFillGps() async {
+    if (!mounted) return;
+    double? lat = ref.read(locationProvider).valueOrNull?.latitude;
+    double? lng = ref.read(locationProvider).valueOrNull?.longitude;
+    if (lat == null) {
+      final cached = ref.read(locationProvider.notifier).cached;
+      lat = cached?.latitude;
+      lng = cached?.longitude;
+    }
+    if (lat == null) {
+      try {
+        final pos = await Geolocator.getLastKnownPosition();
+        if (pos != null) { lat = pos.latitude; lng = pos.longitude; }
+      } catch (_) {}
+    }
+    if (lat != null && mounted) {
+      setState(() {
+        _latCtrl.text = lat!.toStringAsFixed(4);
+        _lngCtrl.text = lng!.toStringAsFixed(4);
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final voiceState = ref.watch(voiceInputProvider);
 
-    // 음성 인식 완료 시 텍스트 필드에 삽입 (+ 자동 저장 옵션)
     ref.listen(voiceInputProvider, (prev, next) {
       if (next.lastResult != null && next.lastResult != prev?.lastResult) {
-        final cur = _controller.text;
-        _controller.text = cur.isEmpty ? next.lastResult! : '$cur ${next.lastResult!}';
-        _controller.selection = TextSelection.collapsed(offset: _controller.text.length);
+        final cur = _textCtrl.text;
+        _textCtrl.text = cur.isEmpty ? next.lastResult! : '$cur ${next.lastResult!}';
+        _textCtrl.selection = TextSelection.collapsed(offset: _textCtrl.text.length);
         ref.read(voiceInputProvider.notifier).clearResult();
-
-        // 신규 메모이고 자동 저장 설정이 켜진 경우 바로 저장
         final autoSave = ref.read(settingsProvider).valueOrNull?.autoSaveVoice ?? false;
-        if (autoSave && widget.blockIndex == null) {
+        if (autoSave && !_isEditMode) {
           WidgetsBinding.instance.addPostFrameCallback((_) => _save());
         }
       }
@@ -120,22 +155,16 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
 
     final mq = MediaQuery.of(context);
     return Padding(
-      padding: EdgeInsets.only(
-        bottom: mq.viewInsets.bottom + mq.padding.bottom,
-      ),
+      padding: EdgeInsets.only(bottom: mq.viewInsets.bottom + mq.padding.bottom),
       child: Container(
-        constraints: BoxConstraints(
-          maxHeight: mq.size.height * 0.85,
-        ),
+        constraints: BoxConstraints(maxHeight: mq.size.height * 0.92),
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            // 드래그 핸들
             Center(
               child: Container(
-                width: 36,
-                height: 4,
+                width: 36, height: 4,
                 margin: const EdgeInsets.only(bottom: 8),
                 decoration: BoxDecoration(
                   color: Theme.of(context).colorScheme.outlineVariant,
@@ -143,63 +172,52 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
                 ),
               ),
             ),
-            // 스크롤 가능한 콘텐츠 영역
             Flexible(
               child: SingleChildScrollView(
                 child: Column(
-                  mainAxisSize: MainAxisSize.min,
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const SizedBox(height: 8),
-                    // 사진 편집 영역 (사진 메모 수정 모드에서만 표시)
-                    if (widget.existingEntry?.isPhoto == true) _buildPhotoSection(),
-                    // 텍스트 입력
+                    const SizedBox(height: 4),
+                    _buildTimeRow(),
+                    const Divider(height: 16),
+                    _buildGpsRow(),
+                    const Divider(height: 16),
+                    _buildPhotoSection(),
+                    const Divider(height: 16),
                     TextField(
-                      controller: _controller,
-                      autofocus: !widget.startWithVoice,
+                      controller: _textCtrl,
+                      autofocus: !widget.startWithVoice && widget.initialPhotoPath == null,
                       maxLines: null,
-                      minLines: 5,
+                      minLines: 3,
                       decoration: InputDecoration(
-                        hintText: '메모를 입력하거나 🎤 버튼을 누르세요',
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(8),
-                        ),
+                        hintText: '메모 내용을 입력하거나 🎤 버튼을 누르세요',
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
                         filled: true,
+                        labelText: '📝 메모',
                       ),
                       style: const TextStyle(fontSize: 15, height: 1.4),
                     ),
-                    const SizedBox(height: 8),
-                    // GPS 행 (수정 모드에서만 표시)
-                    if (widget.existingEntry != null) _buildGpsRow(),
-                    if (widget.existingEntry != null) const SizedBox(height: 4),
-                    if (widget.existingEntry != null) _buildFishLengthRow(),
-                    const SizedBox(height: 4),
-                    // 에러 메시지
+                    const Divider(height: 16),
+                    _buildFishLengthRow(),
                     if (voiceState.hasError)
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 8),
-                        child: Row(
-                          children: [
-                            const Icon(Icons.error_outline, color: Colors.red, size: 16),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              child: Text(
-                                voiceState.errorMessage ?? '음성을 인식하지 못했습니다',
-                                style: const TextStyle(color: Colors.red, fontSize: 13),
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: () =>
-                                  ref.read(voiceInputProvider.notifier).clearError(),
-                              child: const Text('다시 시도'),
-                            ),
-                          ],
-                        ),
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Row(children: [
+                          const Icon(Icons.error_outline, color: Colors.red, size: 16),
+                          const SizedBox(width: 6),
+                          Expanded(child: Text(
+                            voiceState.errorMessage ?? '음성을 인식하지 못했습니다',
+                            style: const TextStyle(color: Colors.red, fontSize: 13),
+                          )),
+                          TextButton(
+                            onPressed: () => ref.read(voiceInputProvider.notifier).clearError(),
+                            child: const Text('다시 시도'),
+                          ),
+                        ]),
                       ),
-                    // 실시간 음성 미리보기
                     if (voiceState.isListening && voiceState.interimResult != null)
                       Padding(
-                        padding: const EdgeInsets.only(bottom: 6),
+                        padding: const EdgeInsets.only(top: 6),
                         child: Text(
                           voiceState.interimResult!,
                           style: TextStyle(
@@ -209,182 +227,77 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
                           ),
                         ),
                       ),
+                    const SizedBox(height: 4),
                   ],
                 ),
               ),
             ),
             const SizedBox(height: 8),
-            // 버튼 행 (하단 고정)
-            Row(
-              children: [
-                // 음성 버튼
-                _VoiceButton(
-                  voiceState: voiceState,
-                  onStart: _startVoice,
-                  onStop: _stopVoice,
-                ),
-                const Spacer(),
-                TextButton(
-                  onPressed: _saving ? null : () => Navigator.of(context).pop(),
-                  child: const Text('취소'),
-                ),
-                const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: _saving ? null : _save,
-                  child: _saving
-                      ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        )
-                      : const Text('저장'),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPhotoSection() {
-    final photoPath = _photoDeleted ? null : (_newPhotoPath ?? widget.existingEntry!.photoPath);
-    final colorScheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          ClipRRect(
-            borderRadius: BorderRadius.circular(8),
-            child: photoPath != null && File(photoPath).existsSync()
-                ? Image.file(File(photoPath),
-                    height: 100, width: double.infinity, fit: BoxFit.cover)
-                : Container(
-                    height: 60,
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      color: colorScheme.surfaceContainerHighest,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Center(
-                      child: Text(
-                        _photoDeleted ? '사진이 삭제됩니다' : '사진을 불러올 수 없음',
-                        style: TextStyle(fontSize: 13, color: colorScheme.onSurface.withValues(alpha: 0.5)),
-                      ),
-                    ),
-                  ),
-          ),
-          const SizedBox(height: 6),
-          Row(
-            children: [
-              OutlinedButton.icon(
-                icon: const Icon(Icons.photo_library_outlined, size: 16),
-                label: const Text('사진 변경'),
-                style: OutlinedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                  minimumSize: Size.zero,
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                ),
-                onPressed: _saving ? null : _changePicture,
+            Row(children: [
+              _VoiceButton(voiceState: voiceState, onStart: _startVoice, onStop: _stopVoice),
+              const Spacer(),
+              TextButton(
+                onPressed: _saving ? null : () => Navigator.of(context).pop(),
+                child: const Text('취소'),
               ),
               const SizedBox(width: 8),
-              if (!_photoDeleted)
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.delete_outline, size: 16),
-                  label: const Text('사진 삭제'),
-                  style: OutlinedButton.styleFrom(
-                    foregroundColor: colorScheme.error,
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  onPressed: _saving ? null : () => setState(() => _photoDeleted = true),
-                )
-              else
-                OutlinedButton.icon(
-                  icon: const Icon(Icons.undo, size: 16),
-                  label: const Text('되돌리기'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  onPressed: () => setState(() {
-                    _photoDeleted = false;
-                    _newPhotoPath = null;
-                  }),
-                ),
-            ],
-          ),
-          const SizedBox(height: 4),
-        ],
-      ),
-    );
-  }
-
-  Future<void> _changePicture() async {
-    final source = await showModalBottomSheet<PhotoSource>(
-      context: context,
-      builder: (_) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.photo_library),
-              title: const Text('갤러리에서 선택'),
-              onTap: () => Navigator.of(context).pop(PhotoSource.gallery),
-            ),
+              FilledButton(
+                onPressed: _saving ? null : _save,
+                child: _saving
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Text('저장'),
+              ),
+            ]),
           ],
         ),
       ),
     );
-    if (source == null || !mounted) return;
-
-    final tempPath = await ref.read(photoServiceProvider).pickImage(source: source);
-    if (tempPath == null || !mounted) return;
-
-    // 캐시 → 앱 전용 외부 저장소로 복사
-    final stablePath = await copyGalleryPhotoToAppStorage(tempPath);
-    if (mounted) {
-      setState(() {
-        _newPhotoPath = stablePath;
-        _photoDeleted = false;
-      });
-    }
   }
 
+  // ── 시간 ────────────────────────────────────────────────
 
-  Widget _buildFishLengthRow() {
-    return Row(
-      children: [
-        const Text('📏', style: TextStyle(fontSize: 16)),
-        const SizedBox(width: 6),
-        SizedBox(
-          width: 110,
-          child: TextField(
-            controller: _fishLengthController,
-            keyboardType: const TextInputType.numberWithOptions(decimal: true),
-            decoration: const InputDecoration(
-              labelText: '길이 (cm)',
-              isDense: true,
-              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              border: OutlineInputBorder(),
-            ),
-            style: const TextStyle(fontSize: 13),
-          ),
-        ),
-        const SizedBox(width: 4),
-        IconButton(
-          icon: const Icon(Icons.close, size: 18),
-          tooltip: '길이 삭제',
-          padding: EdgeInsets.zero,
-          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-          onPressed: _fishLengthController.clear,
-        ),
-      ],
+  Widget _buildTimeRow() {
+    final h = _timestamp.hour.toString().padLeft(2, '0');
+    final m = _timestamp.minute.toString().padLeft(2, '0');
+    final y = _timestamp.year;
+    final mo = _timestamp.month.toString().padLeft(2, '0');
+    final d = _timestamp.day.toString().padLeft(2, '0');
+    return InkWell(
+      onTap: _editTimestamp,
+      borderRadius: BorderRadius.circular(8),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(vertical: 4),
+        child: Row(children: [
+          const Icon(Icons.access_time, size: 18),
+          const SizedBox(width: 8),
+          Text('⏰ $y-$mo-$d  $h:$m', style: const TextStyle(fontSize: 14)),
+          const Spacer(),
+          Icon(Icons.edit, size: 15,
+              color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.4)),
+        ]),
+      ),
     );
   }
+
+  Future<void> _editTimestamp() async {
+    final date = await showDatePicker(
+      context: context,
+      initialDate: _timestamp,
+      firstDate: DateTime(2020),
+      lastDate: DateTime.now().add(const Duration(days: 1)),
+    );
+    if (date == null || !mounted) return;
+    final time = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.fromDateTime(_timestamp),
+    );
+    if (time == null || !mounted) return;
+    setState(() {
+      _timestamp = DateTime(date.year, date.month, date.day, time.hour, time.minute);
+    });
+  }
+
+  // ── 위경도 ───────────────────────────────────────────────
 
   Widget _buildGpsRow() {
     return Row(
@@ -394,9 +307,8 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
         const SizedBox(width: 6),
         Expanded(
           child: TextField(
-            controller: _latController,
-            keyboardType: const TextInputType.numberWithOptions(
-                decimal: true, signed: true),
+            controller: _latCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
             decoration: const InputDecoration(
               labelText: '위도',
               isDense: true,
@@ -409,9 +321,8 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
         const SizedBox(width: 6),
         Expanded(
           child: TextField(
-            controller: _lngController,
-            keyboardType: const TextInputType.numberWithOptions(
-                decimal: true, signed: true),
+            controller: _lngCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true, signed: true),
             decoration: const InputDecoration(
               labelText: '경도',
               isDense: true,
@@ -423,15 +334,11 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
         ),
         const SizedBox(width: 4),
         if (_gpsUpdating)
-          const SizedBox(
-            width: 20,
-            height: 20,
-            child: CircularProgressIndicator(strokeWidth: 2),
-          )
+          const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2))
         else
           IconButton(
             icon: const Icon(Icons.my_location, size: 18),
-            tooltip: '현재 위치로 채우기',
+            tooltip: '현재 위치로',
             padding: EdgeInsets.zero,
             constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             onPressed: _updateGps,
@@ -441,10 +348,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
           tooltip: 'GPS 삭제',
           padding: EdgeInsets.zero,
           constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-          onPressed: () {
-            _latController.clear();
-            _lngController.clear();
-          },
+          onPressed: () { _latCtrl.clear(); _lngCtrl.clear(); },
         ),
       ],
     );
@@ -455,25 +359,164 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     try {
       double? lat, lng;
       final cached = ref.read(locationProvider.notifier).cached;
-      if (cached != null && cached.latitude != null) {
-        lat = cached.latitude;
-        lng = cached.longitude;
+      if (cached?.latitude != null) {
+        lat = cached!.latitude; lng = cached.longitude;
       } else {
         final pos = await Geolocator.getLastKnownPosition();
-        if (pos != null) {
-          lat = pos.latitude;
-          lng = pos.longitude;
-        }
+        if (pos != null) { lat = pos.latitude; lng = pos.longitude; }
       }
       if (lat != null && mounted) {
-        _latController.text = lat.toString();
-        _lngController.text = lng.toString();
+        _latCtrl.text = lat.toString();
+        _lngCtrl.text = lng.toString();
       }
     } catch (_) {
     } finally {
       if (mounted) setState(() => _gpsUpdating = false);
     }
   }
+
+  // ── 사진 ────────────────────────────────────────────────
+
+  Widget _buildPhotoSection() {
+    final colorScheme = Theme.of(context).colorScheme;
+    final hasPhoto = _photoPath != null && File(_photoPath!).existsSync();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (hasPhoto) ...[
+          ClipRRect(
+            borderRadius: BorderRadius.circular(8),
+            child: Image.file(File(_photoPath!),
+                height: 120, width: double.infinity, fit: BoxFit.cover),
+          ),
+          const SizedBox(height: 6),
+          Row(children: [
+            OutlinedButton.icon(
+              icon: const Icon(Icons.photo_camera, size: 16),
+              label: const Text('변경'),
+              style: OutlinedButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: _saving ? null : _pickPhoto,
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              icon: const Icon(Icons.delete_outline, size: 16),
+              label: const Text('삭제'),
+              style: OutlinedButton.styleFrom(
+                foregroundColor: colorScheme.error,
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              ),
+              onPressed: _saving ? null : () => setState(() => _photoPath = null),
+            ),
+          ]),
+        ] else
+          OutlinedButton.icon(
+            icon: const Icon(Icons.add_a_photo_outlined, size: 18),
+            label: const Text('📷 사진 추가'),
+            onPressed: _saving ? null : _pickPhoto,
+          ),
+      ],
+    );
+  }
+
+  Future<void> _pickPhoto() async {
+    final source = await showModalBottomSheet<PhotoSource>(
+      context: context,
+      builder: (sheetCtx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.view_in_ar_outlined),
+              title: const Text('AR 길이 측정'),
+              onTap: () => Navigator.of(sheetCtx).pop(PhotoSource.arCamera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.camera_alt),
+              title: const Text('일반 사진'),
+              onTap: () => Navigator.of(sheetCtx).pop(PhotoSource.camera),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library),
+              title: const Text('갤러리에서 선택'),
+              onTap: () => Navigator.of(sheetCtx).pop(PhotoSource.gallery),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (source == null || !mounted) return;
+
+    final settings = ref.read(settingsProvider).valueOrNull;
+    final relPath = _mediaRelativePath(settings?.photoSavePath ?? 'DCIM/nakkda');
+    String? path;
+    double? length;
+
+    if (source == PhotoSource.arCamera) {
+      final wmSettings = settings?.watermark;
+      final arResult = await launchArMeasure(watermarkEnabled: wmSettings?.enabled ?? false);
+      if (arResult == null || !mounted) return;
+      final rawPath = (arResult.applyWatermark && wmSettings != null)
+          ? await applyWatermark(arResult.path, wmSettings.copyWith(enabled: true))
+          : arResult.path;
+      path = await saveToGallery(rawPath, relativePath: relPath);
+      length = arResult.distanceCm;
+    } else if (source == PhotoSource.camera) {
+      final camPath = await Navigator.of(context).push<String>(
+        MaterialPageRoute(builder: (_) => const CameraRulerScreen()),
+      );
+      if (camPath == null || !mounted) return;
+      path = await saveToGallery(camPath, relativePath: relPath);
+    } else {
+      final pickedPath = await pickGalleryImagePath();
+      if (pickedPath == null || !mounted) return;
+      path = await copyGalleryPhotoToAppStorage(pickedPath);
+    }
+
+    if (!mounted) return;
+    setState(() {
+      if (path != null) _photoPath = path;
+      if (length != null && _fishLengthCtrl.text.isEmpty) {
+        _fishLengthCtrl.text = length.toStringAsFixed(1);
+      }
+    });
+  }
+
+  // ── 길이 ────────────────────────────────────────────────
+
+  Widget _buildFishLengthRow() {
+    return Row(children: [
+      const Text('📏', style: TextStyle(fontSize: 16)),
+      const SizedBox(width: 8),
+      SizedBox(
+        width: 110,
+        child: TextField(
+          controller: _fishLengthCtrl,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            labelText: '길이 (cm)',
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            border: OutlineInputBorder(),
+          ),
+          style: const TextStyle(fontSize: 13),
+        ),
+      ),
+      const SizedBox(width: 4),
+      IconButton(
+        icon: const Icon(Icons.close, size: 18),
+        tooltip: '길이 삭제',
+        padding: EdgeInsets.zero,
+        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+        onPressed: _fishLengthCtrl.clear,
+      ),
+    ]);
+  }
+
+  // ── 음성 ────────────────────────────────────────────────
 
   Future<void> _startVoice() async {
     final statuses = ref.read(permissionStatusProvider).valueOrNull;
@@ -491,81 +534,46 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     await ref.read(voiceInputProvider.notifier).stopListening();
   }
 
-  Future<void> _save() async {
-    final text = _controller.text.trim();
-    final isEditMode = widget.blockIndex != null && widget.existingEntry != null;
+  // ── 저장 ────────────────────────────────────────────────
 
-    // 신규 입력에서만 빈 텍스트를 취소로 처리
-    if (text.isEmpty && !isEditMode) {
+  Future<void> _save() async {
+    final text = _textCtrl.text.trim();
+    if (text.isEmpty && _photoPath == null) {
       Navigator.of(context).pop();
       return;
     }
     setState(() => _saving = true);
     try {
-      if (isEditMode) {
-        // GPS 입력값 검증
-        final latText = _latController.text.trim();
-        final lngText = _lngController.text.trim();
-        final lat = latText.isEmpty ? null : double.tryParse(latText);
-        final lng = lngText.isEmpty ? null : double.tryParse(lngText);
-        if ((latText.isNotEmpty && lat == null) ||
-            (lngText.isNotEmpty && lng == null)) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('GPS 좌표 형식이 올바르지 않습니다')),
-          );
-          setState(() => _saving = false);
-          return;
-        }
-        // 수정 모드: 타임스탬프 유지, 사진은 편집 상태 반영
-        final updatedPhoto = _photoDeleted
-            ? null
-            : (_newPhotoPath ?? widget.existingEntry!.photoPath);
-        // 사진도 없고 텍스트도 없으면 저장하지 않고 닫기
-        if (updatedPhoto == null && text.isEmpty) {
-          Navigator.of(context).pop();
-          return;
-        }
-        final fishLengthText = _fishLengthController.text.trim();
-        final fishLength = fishLengthText.isEmpty ? null : double.tryParse(fishLengthText);
-        final updated = MemoEntry(
-          timestamp: widget.existingEntry!.timestamp,
-          latitude: lat,
-          longitude: lng,
-          text: text.isEmpty ? null : text,
-          photoPath: updatedPhoto,
-          fishLength: fishLength,
+      final latText = _latCtrl.text.trim();
+      final lngText = _lngCtrl.text.trim();
+      final lat = latText.isEmpty ? null : double.tryParse(latText);
+      final lng = lngText.isEmpty ? null : double.tryParse(lngText);
+      if ((latText.isNotEmpty && lat == null) || (lngText.isNotEmpty && lng == null)) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('GPS 좌표 형식이 올바르지 않습니다')),
         );
+        setState(() => _saving = false);
+        return;
+      }
+      final fishLengthText = _fishLengthCtrl.text.trim();
+      final fishLength = fishLengthText.isEmpty ? null : double.tryParse(fishLengthText);
+
+      final entry = MemoEntry(
+        timestamp: _timestamp,
+        latitude: lat,
+        longitude: lng,
+        text: text.isEmpty ? null : text,
+        photoPath: _photoPath,
+        fishLength: fishLength,
+      );
+
+      if (_isEditMode) {
         if (widget.onEditSave != null) {
-          await widget.onEditSave!(widget.blockIndex!, updated);
+          await widget.onEditSave!(widget.blockIndex!, entry);
         } else {
-          await ref
-              .read(todayFileProvider.notifier)
-              .editBlock(widget.blockIndex!, updated);
+          await ref.read(todayFileProvider.notifier).editBlock(widget.blockIndex!, entry);
         }
       } else {
-        // 신규: cached → lastKnown 순으로 GPS 확보
-        double? lat = ref.read(locationProvider).valueOrNull?.latitude;
-        double? lng = ref.read(locationProvider).valueOrNull?.longitude;
-        if (lat == null) {
-          final cached = ref.read(locationProvider.notifier).cached;
-          lat = cached?.latitude;
-          lng = cached?.longitude;
-        }
-        if (lat == null) {
-          try {
-            final pos = await Geolocator.getLastKnownPosition();
-            if (pos != null) {
-              lat = pos.latitude;
-              lng = pos.longitude;
-            }
-          } catch (_) {}
-        }
-        final entry = MemoEntry(
-          timestamp: DateTime.now(),
-          latitude: lat,
-          longitude: lng,
-          text: text,
-        );
         if (widget.onAddSave != null) {
           await widget.onAddSave!(entry);
         } else {
@@ -583,6 +591,15 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
       if (mounted) setState(() => _saving = false);
     }
   }
+
+  String _mediaRelativePath(String photoSavePath) {
+    final lower = photoSavePath.toLowerCase();
+    for (final marker in ['dcim/', 'pictures/', 'downloads/']) {
+      final idx = lower.indexOf(marker);
+      if (idx >= 0) return photoSavePath.substring(idx);
+    }
+    return 'DCIM/nakkda';
+  }
 }
 
 class _VoiceButton extends StatelessWidget {
@@ -590,11 +607,7 @@ class _VoiceButton extends StatelessWidget {
   final VoidCallback onStart;
   final VoidCallback onStop;
 
-  const _VoiceButton({
-    required this.voiceState,
-    required this.onStart,
-    required this.onStop,
-  });
+  const _VoiceButton({required this.voiceState, required this.onStart, required this.onStop});
 
   @override
   Widget build(BuildContext context) {
@@ -603,16 +616,14 @@ class _VoiceButton extends StatelessWidget {
       onTap: isListening ? onStop : onStart,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        width: 56,
-        height: 56,
+        width: 56, height: 56,
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: isListening
               ? Colors.red.withValues(alpha: 0.2)
               : Theme.of(context).colorScheme.surfaceContainerHighest,
           border: Border.all(
-            color: isListening ? Colors.red : Colors.transparent,
-            width: 2,
+            color: isListening ? Colors.red : Colors.transparent, width: 2,
           ),
         ),
         child: Icon(
