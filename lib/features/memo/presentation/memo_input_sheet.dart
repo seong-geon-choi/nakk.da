@@ -11,6 +11,7 @@ import '../../../features/permission/presentation/permission_provider.dart';
 import '../../../features/settings/presentation/settings_provider.dart';
 import '../../../features/photo/domain/photo_service.dart';
 import '../../../features/photo/presentation/photo_provider.dart';
+import '../../../core/utils/media_scanner.dart';
 
 class MemoInputSheet extends ConsumerStatefulWidget {
   final bool startWithVoice;
@@ -343,10 +344,11 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     final tempPath = await ref.read(photoServiceProvider).pickImage(source: source);
     if (tempPath == null || !mounted) return;
 
-    // 갤러리 경로 그대로 참조 (복사 불필요)
+    // 캐시 → 앱 전용 외부 저장소로 복사
+    final stablePath = await copyGalleryPhotoToAppStorage(tempPath);
     if (mounted) {
       setState(() {
-        _newPhotoPath = tempPath;
+        _newPhotoPath = stablePath;
         _photoDeleted = false;
       });
     }

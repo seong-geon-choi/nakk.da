@@ -790,11 +790,11 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
       if (!context.mounted) return;
       savedPath = await saveToGallery(result.path, relativePath: relativePath);
     } else {
-      // 갤러리 선택: 경로 그대로 참조
+      // 갤러리 선택: 캐시 → 앱 전용 외부 저장소로 복사
       final tempPath =
           await ref.read(photoServiceProvider).pickImage(source: source);
       if (tempPath == null || !context.mounted) return;
-      savedPath = tempPath;
+      savedPath = await copyGalleryPhotoToAppStorage(tempPath);
     }
 
     if (savedPath == null || !context.mounted) return;

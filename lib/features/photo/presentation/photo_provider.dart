@@ -30,11 +30,11 @@ class PhotoNotifier extends AsyncNotifier<void> {
         return false;
       }
       final now = DateTime.now();
-      // 갤러리 사진: 경로 그대로 참조 (복사 불필요, 중복 방지)
+      // 갤러리 사진: 캐시 → 앱 전용 외부 저장소로 복사 (캐시 삭제 시 유실 방지)
       // 카메라 사진: MediaStore에 등록해 갤러리에 표시
       final String? savedPath;
       if (source == PhotoSource.gallery) {
-        savedPath = tempPath;
+        savedPath = await copyGalleryPhotoToAppStorage(tempPath);
       } else {
         savedPath = await saveToGallery(
           tempPath,
