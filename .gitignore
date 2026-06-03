@@ -1,4 +1,4 @@
-# Miscellaneous
+# ── Miscellaneous ──────────────────────────────────────────
 *.class
 *.log
 *.pyc
@@ -12,34 +12,48 @@
 .swiftpm/
 migrate_working_dir/
 
-# IntelliJ related
+# ── IntelliJ / Android Studio ──────────────────────────────
 *.iml
 *.ipr
 *.iws
 .idea/
 
-# The .vscode folder contains launch configuration and tasks you configure in
-# VS Code which you may wish to be included in version control, so this line
-# is commented out by default.
-#.vscode/
+# ── VS Code ────────────────────────────────────────────────
+.vscode/
 
-# Flutter/Dart/Pub related
+# ── Flutter / Dart / Pub ───────────────────────────────────
 **/doc/api/
 **/ios/Flutter/.last_build_id
 .dart_tool/
+.flutter-plugins
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
 /build/
 /coverage/
 
-# Symbolication related
-app.*.symbols
+# ── Generated Dart files (Riverpod 코드 생성 등) ─────────────
+*.g.dart
+*.freezed.dart
+*.mocks.dart
 
-# Obfuscation related
-app.*.map.json
+# ── Android 로컬 설정 (SDK 경로 등 로컬 환경 의존) ──────────────
+android/local.properties
+android/.gradle/
+android/gradle/wrapper/gradle-wrapper.jar
+android/captures/
+android/key.properties
+*.keystore
+*.jks
 
-# Android Studio will place build artifacts here
+# ── 빌드 결과물 ────────────────────────────────────────────
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# ── 심볼화 / 난독화 ────────────────────────────────────────
+app.*.symbols
+app.*.map.json
+
+# ── 테스트 코드 ────────────────────────────────────────────
+/test/
