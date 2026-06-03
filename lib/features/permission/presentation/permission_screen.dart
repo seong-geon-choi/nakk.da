@@ -110,7 +110,7 @@ class PermissionScreen extends ConsumerWidget {
     final items = [
       (Permission.manageExternalStorage, Icons.folder_special_outlined,
           '전체 파일 접근',
-          '허가 시 메모를 DCIM 폴더에 보관합니다 (앱 삭제 후에도 유지)\n미허가 시 앱 전용 저장소에 저장됩니다'),
+          '허가 시 메모를 Documents/nakkda에 보관합니다 (앱 삭제 후에도 유지)\n미허가 시 앱 전용 저장소에 저장됩니다'),
     ];
     return items.map((item) => _buildItem(context, statusAsync, item)).toList();
   }

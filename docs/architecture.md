@@ -138,7 +138,7 @@ MemoEntry { photoPath: 반환된_절대경로 }
 
 | 조건 | 메모 저장 경로 | 사진 저장 경로 |
 |------|--------------|--------------|
-| MANAGE_EXTERNAL_STORAGE 허가 | `DCIM/nakkda/` | `DCIM/nakkda/` |
+| MANAGE_EXTERNAL_STORAGE 허가 | `Documents/nakkda/` | `DCIM/nakkda/` |
 | 미허가 | 앱 전용 외부 저장소 | `DCIM/nakkda/` (MediaStore) |
 | 외부 저장소 없음 | 앱 내부 저장소 | 앱 내부 저장소 |
 

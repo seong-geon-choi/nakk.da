@@ -18,7 +18,9 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final prefs = await SharedPreferences.getInstance();
     // 구 패키지 경로(vo_rec) 또는 미설정이면 기본값으로 재계산
     final rawPath = prefs.getString(_savePathKey);
-    final savePath = (rawPath == null || rawPath.contains('vo_rec'))
+    final savePath = (rawPath == null ||
+            rawPath.contains('vo_rec') ||
+            rawPath.contains('/DCIM/nakkda'))
         ? await _defaultSavePath()
         : rawPath;
     final storedPhotoPath = prefs.getString(_photoSavePathKey);
@@ -62,11 +64,11 @@ class SettingsRepositoryImpl implements SettingsRepository {
   Future<String> _defaultSavePath() async {
     final appDir = await getExternalStorageDirectory();
     if (appDir != null) {
-      // MANAGE_EXTERNAL_STORAGE가 허가된 경우 DCIM/nakkda (앱 삭제 후에도 유지)
+      // MANAGE_EXTERNAL_STORAGE가 허가된 경우 Documents/nakkda (앱 삭제 후에도 유지)
       // 미허가 시 앱 전용 외부 저장소 (즉시 쓰기 가능, 권한 불필요)
       if (await Permission.manageExternalStorage.isGranted) {
         final base = appDir.path.split('/Android/').first;
-        return '$base/DCIM/nakkda';
+        return '$base/Documents/nakkda';
       }
       return appDir.path;
     }
