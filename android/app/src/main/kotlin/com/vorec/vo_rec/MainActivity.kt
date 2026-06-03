@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.*
 import android.content.pm.ServiceInfo
 import android.media.MediaScannerConnection
+import android.net.Uri
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -24,9 +25,11 @@ class MainActivity : FlutterActivity() {
 
     private var accessibilityChannel: MethodChannel? = null
     private var pendingArResult: MethodChannel.Result? = null
+    private var pendingGalleryResult: MethodChannel.Result? = null
 
     companion object {
         private const val AR_REQUEST_CODE = 1001
+        private const val GALLERY_PICK_REQUEST_CODE = 1002
     }
 
     private val voiceResultReceiver = object : BroadcastReceiver() {
@@ -41,10 +44,11 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
-        // ── 미디어 채널 (사진 저장) ──────────────────────────
+        // ── 미디어 채널 (사진 저장 / 갤러리 피커) ─────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, mediaChannelName)
             .setMethodCallHandler { call, result ->
-                if (call.method == "saveToGallery") {
+                when (call.method) {
+                "saveToGallery" -> {
                     val sourcePath = call.argument<String>("path")
                     val relativePath = call.argument<String>("relativePath") ?: "DCIM/nakkda"
                     if (sourcePath == null) {
@@ -56,7 +60,6 @@ class MainActivity : FlutterActivity() {
                         val isPng = sourceFile.name.lowercase().endsWith(".png")
                         val mimeType = if (isPng) "image/png" else "image/jpeg"
                         val ext = if (isPng) ".png" else ".jpg"
-                        // 의미 있는 파일명 생성 (임시 파일명 wm_xxx 등 대신)
                         val dateStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
                         val displayName = "NAKKDA_$dateStr$ext"
 
@@ -100,23 +103,28 @@ class MainActivity : FlutterActivity() {
                             filePath = "$base/$relativePath/$displayName"
                         }
 
-                        // 삼성 갤러리 등에서 즉시 표시되도록 미디어 스캐너 호출
                         val finalPath = filePath
                         if (finalPath != null) {
                             MediaScannerConnection.scanFile(
-                                applicationContext,
-                                arrayOf(finalPath),
-                                arrayOf(mimeType),
-                                null
+                                applicationContext, arrayOf(finalPath), arrayOf(mimeType), null
                             )
                         }
-
                         result.success(filePath)
                     } catch (e: Exception) {
                         result.error("SAVE_ERROR", e.message, null)
                     }
-                } else {
-                    result.notImplemented()
+                }
+                "pickGalleryImage" -> {
+                    if (pendingGalleryResult != null) {
+                        result.error("BUSY", "Gallery pick already in progress", null)
+                        return@setMethodCallHandler
+                    }
+                    pendingGalleryResult = result
+                    val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(intent, GALLERY_PICK_REQUEST_CODE)
+                }
+                else -> result.notImplemented()
                 }
             }
 
@@ -205,6 +213,41 @@ class MainActivity : FlutterActivity() {
                 pending?.success(null)
             }
         }
+        if (requestCode == GALLERY_PICK_REQUEST_CODE) {
+            val pending = pendingGalleryResult
+            pendingGalleryResult = null
+            if (resultCode == Activity.RESULT_OK && data?.data != null) {
+                val uri = data.data!!
+                var filePath: String? = null
+                // MANAGE_EXTERNAL_STORAGE 있으면 MediaStore에서 실제 파일 경로 조회
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                    Environment.isExternalStorageManager()) {
+                    contentResolver.query(
+                        uri, arrayOf(MediaStore.Images.Media.DATA), null, null, null
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val col = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
+                            if (col >= 0) filePath = cursor.getString(col)
+                        }
+                    }
+                }
+                // 권한 없거나 경로 조회 실패 시 앱 캐시에 복사
+                if (filePath == null) filePath = copyUriToCache(uri)
+                pending?.success(filePath)
+            } else {
+                pending?.success(null)  // 취소
+            }
+        }
+    }
+
+    private fun copyUriToCache(uri: Uri): String? {
+        return try {
+            val dest = File(cacheDir, "gallery_${System.currentTimeMillis()}.jpg")
+            contentResolver.openInputStream(uri)?.use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+            }
+            dest.absolutePath
+        } catch (e: Exception) { null }
     }
 
     override fun onResume() {

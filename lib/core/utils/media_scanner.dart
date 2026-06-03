@@ -18,10 +18,22 @@ Future<String?> saveToGallery(String sourcePath, {String relativePath = 'DCIM/na
   }
 }
 
-/// 갤러리에서 선택한 사진(캐시 경로)을 앱 전용 외부 저장소로 복사해 안정적인 경로 반환.
-/// Android/data/.../files/photos/ 에 저장 — 갤러리 스캔 대상 아님, 권한 불필요.
-/// 복사 실패 시 원본 경로 반환.
+/// 갤러리 피커를 열고 선택한 사진의 경로를 반환.
+/// MANAGE_EXTERNAL_STORAGE 허가 시 실제 파일 경로, 미허가 시 앱 캐시 복사 경로.
+/// 취소 또는 실패 시 null.
+Future<String?> pickGalleryImagePath() async {
+  try {
+    return await _channel.invokeMethod<String>('pickGalleryImage');
+  } catch (_) {
+    return null;
+  }
+}
+
+/// 갤러리에서 선택한 사진을 안정적인 앱 전용 외부 저장소로 복사.
+/// 이미 실제 파일 경로(캐시 외부)이면 복사 없이 그대로 반환.
 Future<String> copyGalleryPhotoToAppStorage(String srcPath) async {
+  // DCIM, Pictures 등 실제 갤러리 경로면 복사 불필요
+  if (!srcPath.contains('/cache/')) return srcPath;
   try {
     final appDir = await getExternalStorageDirectory();
     final photosDir = Directory('${appDir!.path}/photos');
