@@ -180,7 +180,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         subtitle: Text(desc, style: const TextStyle(fontSize: 12)),
         trailing: PermissionStatusChip(isGranted: isGranted),
         onTap: () async {
-          if (perm == Permission.manageExternalStorage && !isGranted) {
+          if (perm == Permission.manageExternalStorage) {
             await perm.request();
             ref.invalidate(permissionStatusProvider);
           } else {
