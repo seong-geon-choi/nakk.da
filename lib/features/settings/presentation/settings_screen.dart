@@ -143,7 +143,7 @@ class SettingsScreen extends ConsumerWidget {
       (Permission.camera, '카메라', '사진 촬영'),
       (Permission.photos, '사진', '갤러리 사진 선택'),
       (Permission.notification, '알림', '음성 메모 상태 표시'),
-      (Permission.manageExternalStorage, '전체 파일 접근', 'DCIM 영구 보관'),
+      (Permission.manageExternalStorage, '전체 파일 접근', '(선택) 사진 갤러리 직접 접근'),
     ];
 
     return items.map((item) {

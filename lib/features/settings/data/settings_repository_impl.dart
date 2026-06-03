@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
-import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../domain/models/app_settings.dart';
 import '../domain/settings_repository.dart';
@@ -20,7 +19,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final rawPath = prefs.getString(_savePathKey);
     final savePath = (rawPath == null ||
             rawPath.contains('vo_rec') ||
-            rawPath.contains('/DCIM/nakkda'))
+            rawPath.contains('/DCIM/nakkda') ||
+            // 이전 앱 전용 루트 경로 → Documents/nakkda 하위로 마이그레이션
+            (rawPath.contains('/Android/data/com.nakkda.nakkda/files') &&
+                !rawPath.contains('/Documents/nakkda')))
         ? await _defaultSavePath()
         : rawPath;
     final storedPhotoPath = prefs.getString(_photoSavePathKey);
@@ -64,15 +66,11 @@ class SettingsRepositoryImpl implements SettingsRepository {
   Future<String> _defaultSavePath() async {
     final appDir = await getExternalStorageDirectory();
     if (appDir != null) {
-      // MANAGE_EXTERNAL_STORAGE가 허가된 경우 Documents/nakkda (앱 삭제 후에도 유지)
-      // 미허가 시 앱 전용 외부 저장소 (즉시 쓰기 가능, 권한 불필요)
-      if (await Permission.manageExternalStorage.isGranted) {
-        final base = appDir.path.split('/Android/').first;
-        return '$base/Documents/nakkda';
-      }
-      return appDir.path;
+      // 앱 전용 외부 저장소 하위 Documents/nakkda (권한 불필요)
+      // 예: /storage/emulated/0/Android/data/com.nakkda.nakkda/files/Documents/nakkda
+      return '${appDir.path}/Documents/nakkda';
     }
-    return (await getApplicationDocumentsDirectory()).path;
+    return '${(await getApplicationDocumentsDirectory()).path}/nakkda';
   }
 
   Future<String> _defaultPhotoSavePath() async {
