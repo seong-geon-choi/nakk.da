@@ -41,6 +41,7 @@ android {
 
 dependencies {
     implementation("com.google.ar:core:1.44.0")
+    implementation("androidx.documentfile:documentfile:1.0.1")
 }
 
 flutter {

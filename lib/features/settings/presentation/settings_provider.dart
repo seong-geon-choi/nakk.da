@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/settings_repository_impl.dart';
 import '../domain/models/app_settings.dart';
 import '../domain/settings_repository.dart';
+import '../../../core/services/saf_service.dart';
 
 export '../domain/models/app_settings.dart'
     show
@@ -25,6 +26,23 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
   Future<AppSettings> build() async {
     final repo = ref.read(settingsRepositoryProvider);
     return repo.load();
+  }
+
+  final _saf = SafService();
+
+  /// SAF 폴더 피커를 열고 선택된 폴더를 savePath로 저장
+  Future<bool> pickSaveFolder() async {
+    final picked = await _saf.pickFolder();
+    if (picked == null) return false;
+    final current = state.valueOrNull;
+    if (current == null) return false;
+    final updated = current.copyWith(
+      savePath: picked.uri,
+      saveDisplayPath: picked.displayPath,
+    );
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+    return true;
   }
 
   Future<void> updateSavePath(String path) async {

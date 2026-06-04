@@ -61,12 +61,22 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               leading: const Icon(Icons.folder_outlined),
               title: const Text('메모 저장 위치'),
               subtitle: Text(
-                settings.savePath,
-                style: const TextStyle(fontSize: 12),
+                settings.saveDisplayPath.isNotEmpty
+                    ? settings.saveDisplayPath
+                    : settings.needsFolderSetup ? '폴더를 선택해 주세요' : settings.savePath,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: settings.needsFolderSetup
+                      ? Theme.of(context).colorScheme.error
+                      : null,
+                ),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              onTap: () => _showSavePathDialog(context, ref, settings.savePath),
+              trailing: settings.needsFolderSetup
+                  ? const Icon(Icons.warning_amber, color: Colors.orange)
+                  : null,
+              onTap: () => ref.read(settingsProvider.notifier).pickSaveFolder(),
             ),
             ListTile(
               leading: const Icon(Icons.photo_library_outlined),
@@ -300,57 +310,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     controller.dispose();
   }
 
-  Future<void> _showSavePathDialog(
-    BuildContext context,
-    WidgetRef ref,
-    String current,
-  ) async {
-    final controller = TextEditingController(text: current);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('저장 위치 변경'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: controller,
-              decoration: const InputDecoration(
-                labelText: '저장 경로',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '⚠️ 기존 파일은 이동되지 않습니다.\n변경 후에는 새 위치에 파일이 저장됩니다.',
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('저장'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true && context.mounted) {
-      final newPath = controller.text.trim();
-      if (newPath.isNotEmpty && newPath != current) {
-        await ref.read(settingsProvider.notifier).updateSavePath(newPath);
-      }
-    }
-    controller.dispose();
-  }
 }
 
 Future<void> _openMemoEditor(BuildContext context, WidgetRef ref) async {

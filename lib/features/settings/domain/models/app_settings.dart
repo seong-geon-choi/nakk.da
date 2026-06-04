@@ -132,15 +132,19 @@ class WatermarkSettings {
 // ── 앱 전체 설정 ───────────────────────────────────────────────
 
 class AppSettings {
-  final String savePath;
+  final String savePath;       // SAF URI (content://) 또는 빈 문자열
+  final String saveDisplayPath; // 사람이 읽을 수 있는 경로 (UI 표시용)
   final String photoSavePath;
   final bool showLocationButton;
   final bool autoSaveVoice;
   final String? khoaApiKey;
   final WatermarkSettings watermark;
 
+  bool get needsFolderSetup => savePath.isEmpty || !savePath.startsWith('content://');
+
   AppSettings({
     required this.savePath,
+    this.saveDisplayPath = '',
     required this.photoSavePath,
     this.showLocationButton = true,
     this.autoSaveVoice = false,
@@ -155,6 +159,7 @@ class AppSettings {
 
   AppSettings copyWith({
     String? savePath,
+    String? saveDisplayPath,
     String? photoSavePath,
     bool? showLocationButton,
     bool? autoSaveVoice,
@@ -164,6 +169,7 @@ class AppSettings {
   }) {
     return AppSettings(
       savePath: savePath ?? this.savePath,
+      saveDisplayPath: saveDisplayPath ?? this.saveDisplayPath,
       photoSavePath: photoSavePath ?? this.photoSavePath,
       showLocationButton: showLocationButton ?? this.showLocationButton,
       autoSaveVoice: autoSaveVoice ?? this.autoSaveVoice,

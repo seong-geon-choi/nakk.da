@@ -7,8 +7,10 @@ import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.Settings
+import androidx.documentfile.provider.DocumentFile
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -22,14 +24,17 @@ class MainActivity : FlutterActivity() {
     private val mediaChannelName = "com.nakkda.nakkda/media"
     private val accessibilityChannelName = "com.nakkda.nakkda/accessibility"
     private val arChannelName = "com.nakkda.nakkda/ar"
+    private val safChannelName = "com.nakkda.nakkda/saf"
 
     private var accessibilityChannel: MethodChannel? = null
     private var pendingArResult: MethodChannel.Result? = null
     private var pendingGalleryResult: MethodChannel.Result? = null
+    private var pendingSafResult: MethodChannel.Result? = null
 
     companion object {
         private const val AR_REQUEST_CODE = 1001
         private const val GALLERY_PICK_REQUEST_CODE = 1002
+        private const val SAF_FOLDER_REQUEST_CODE = 1003
     }
 
     private val voiceResultReceiver = object : BroadcastReceiver() {
@@ -154,6 +159,92 @@ class MainActivity : FlutterActivity() {
                 }
             }
 
+        // ── SAF 채널 (Storage Access Framework) ─────────────
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, safChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "pickFolder" -> {
+                        if (pendingSafResult != null) {
+                            result.error("BUSY", "Folder pick already in progress", null)
+                            return@setMethodCallHandler
+                        }
+                        pendingSafResult = result
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                     Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                            try {
+                                val initialUri = DocumentsContract.buildDocumentUri(
+                                    "com.android.externalstorage.documents", "primary:Documents")
+                                putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
+                            } catch (_: Exception) {}
+                        }
+                        @Suppress("DEPRECATION")
+                        startActivityForResult(intent, SAF_FOLDER_REQUEST_CODE)
+                    }
+                    "readTextFile" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        val filename = call.argument<String>("filename") ?: return@setMethodCallHandler result.error("ARG", "filename missing", null)
+                        result.success(safReadFile(uri, filename))
+                    }
+                    "writeTextFile" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        val filename = call.argument<String>("filename") ?: return@setMethodCallHandler result.error("ARG", "filename missing", null)
+                        val content = call.argument<String>("content") ?: return@setMethodCallHandler result.error("ARG", "content missing", null)
+                        safWriteFile(uri, filename, content)
+                        result.success(null)
+                    }
+                    "appendTextFile" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        val filename = call.argument<String>("filename") ?: return@setMethodCallHandler result.error("ARG", "filename missing", null)
+                        val content = call.argument<String>("content") ?: return@setMethodCallHandler result.error("ARG", "content missing", null)
+                        val existing = safReadFile(uri, filename) ?: ""
+                        safWriteFile(uri, filename, existing + content)
+                        result.success(null)
+                    }
+                    "fileExists" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        val filename = call.argument<String>("filename") ?: return@setMethodCallHandler result.error("ARG", "filename missing", null)
+                        result.success(safFileExists(uri, filename))
+                    }
+                    "listMdFiles" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        result.success(safListMdFiles(uri))
+                    }
+                    "ensureFolder" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        safEnsureNoMedia(uri)
+                        result.success(null)
+                    }
+                    "deleteFile" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        val filename = call.argument<String>("filename") ?: return@setMethodCallHandler result.error("ARG", "filename missing", null)
+                        safDeleteFile(uri, filename)
+                        result.success(null)
+                    }
+                    "renameFile" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        val oldFilename = call.argument<String>("oldFilename") ?: return@setMethodCallHandler result.error("ARG", "oldFilename missing", null)
+                        val newFilename = call.argument<String>("newFilename") ?: return@setMethodCallHandler result.error("ARG", "newFilename missing", null)
+                        safRenameFile(uri, oldFilename, newFilename)
+                        result.success(null)
+                    }
+                    "copyFile" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        val srcFilename = call.argument<String>("srcFilename") ?: return@setMethodCallHandler result.error("ARG", "srcFilename missing", null)
+                        val dstFilename = call.argument<String>("dstFilename") ?: return@setMethodCallHandler result.error("ARG", "dstFilename missing", null)
+                        val content = safReadFile(uri, srcFilename)
+                        if (content != null) safWriteFile(uri, dstFilename, content)
+                        result.success(null)
+                    }
+                    "getDisplayPath" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        result.success(safGetDisplayPath(uri))
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // ── 접근성 채널 ──────────────────────────────────────
         accessibilityChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger, accessibilityChannelName
@@ -221,6 +312,23 @@ class MainActivity : FlutterActivity() {
                 pending?.success(null)
             }
         }
+        if (requestCode == SAF_FOLDER_REQUEST_CODE) {
+            val pending = pendingSafResult
+            pendingSafResult = null
+            if (resultCode == Activity.RESULT_OK && data?.data != null) {
+                val uri = data.data!!
+                contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                )
+                pending?.success(mapOf(
+                    "uri" to uri.toString(),
+                    "displayPath" to safGetDisplayPath(uri.toString())
+                ))
+            } else {
+                pending?.success(null)
+            }
+        }
         if (requestCode == GALLERY_PICK_REQUEST_CODE) {
             val pending = pendingGalleryResult
             pendingGalleryResult = null
@@ -247,6 +355,64 @@ class MainActivity : FlutterActivity() {
             }
         }
     }
+
+    // ── SAF 헬퍼 ─────────────────────────────────────────────
+
+    private fun safFolder(uriString: String): DocumentFile? =
+        DocumentFile.fromTreeUri(this, Uri.parse(uriString))
+
+    private fun safReadFile(uriString: String, filename: String): String? {
+        val file = safFolder(uriString)?.findFile(filename) ?: return null
+        return try {
+            contentResolver.openInputStream(file.uri)?.use { it.bufferedReader(Charsets.UTF_8).readText() }
+        } catch (_: Exception) { null }
+    }
+
+    private fun safWriteFile(uriString: String, filename: String, content: String) {
+        val folder = safFolder(uriString) ?: return
+        val file = folder.findFile(filename) ?: folder.createFile("text/plain", filename) ?: return
+        try {
+            contentResolver.openOutputStream(file.uri, "wt")?.use {
+                it.write(content.toByteArray(Charsets.UTF_8))
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun safFileExists(uriString: String, filename: String): Boolean =
+        safFolder(uriString)?.findFile(filename)?.exists() == true
+
+    private fun safListMdFiles(uriString: String): List<String> =
+        safFolder(uriString)?.listFiles()
+            ?.filter { it.isFile && it.name?.endsWith(".md") == true }
+            ?.mapNotNull { it.name }
+            ?.sorted() ?: emptyList()
+
+    private fun safEnsureNoMedia(uriString: String) {
+        val folder = safFolder(uriString) ?: return
+        if (folder.findFile(".nomedia") == null) {
+            folder.createFile("application/octet-stream", ".nomedia")
+        }
+    }
+
+    private fun safDeleteFile(uriString: String, filename: String) {
+        safFolder(uriString)?.findFile(filename)?.delete()
+    }
+
+    private fun safRenameFile(uriString: String, oldFilename: String, newFilename: String) {
+        safFolder(uriString)?.findFile(oldFilename)?.renameTo(newFilename)
+    }
+
+    private fun safGetDisplayPath(uriString: String): String {
+        return try {
+            val uri = Uri.parse(uriString)
+            val docId = DocumentsContract.getTreeDocumentId(uri)
+            val colon = docId.indexOf(':')
+            if (colon >= 0) "/storage/emulated/0/${docId.substring(colon + 1)}"
+            else uriString
+        } catch (_: Exception) { uriString }
+    }
+
+    // ─────────────────────────────────────────────────────────
 
     private fun copyUriToCache(uri: Uri): String? {
         return try {

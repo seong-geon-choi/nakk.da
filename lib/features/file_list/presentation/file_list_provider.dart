@@ -17,25 +17,26 @@ class FileListNotifier extends AsyncNotifier<List<FileSummary>> {
   @override
   Future<List<FileSummary>> build() async {
     final settings = await ref.watch(settingsProvider.future);
-    return ref
-        .read(fileListRepositoryProvider)
-        .listFiles(settings.savePath);
+    return ref.read(fileListRepositoryProvider).listFiles(settings.savePath);
   }
 
   Future<void> rename(String filePath, String newName) async {
-    await ref.read(fileListRepositoryProvider).renameFile(filePath, newName);
+    final settings = await ref.read(settingsProvider.future);
+    await ref.read(fileListRepositoryProvider).renameFile(filePath, newName, settings.savePath);
     ref.invalidateSelf();
   }
 
   Future<void> copy(String filePath, String newName) async {
-    await ref.read(fileListRepositoryProvider).copyFile(filePath, newName);
+    final settings = await ref.read(settingsProvider.future);
+    await ref.read(fileListRepositoryProvider).copyFile(filePath, newName, settings.savePath);
     ref.invalidateSelf();
   }
 
   Future<void> delete(String filePath, {bool deletePhotos = false}) async {
-    await ref
-        .read(fileListRepositoryProvider)
-        .deleteFile(filePath, deletePhotos: deletePhotos);
+    final settings = await ref.read(settingsProvider.future);
+    await ref.read(fileListRepositoryProvider).deleteFile(
+      filePath, settings.savePath, deletePhotos: deletePhotos,
+    );
     ref.invalidateSelf();
   }
 }
