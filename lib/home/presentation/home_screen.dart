@@ -245,6 +245,7 @@ class _Body extends ConsumerStatefulWidget {
 
 class _BodyState extends ConsumerState<_Body> {
   final _scroll = ScrollController();
+  final _openItemKey = ValueNotifier<Key?>(null);
   int _prevCount = 0;
 
   @override
@@ -274,6 +275,7 @@ class _BodyState extends ConsumerState<_Body> {
   @override
   void dispose() {
     _scroll.dispose();
+    _openItemKey.dispose();
     super.dispose();
   }
 
@@ -301,6 +303,7 @@ class _BodyState extends ConsumerState<_Body> {
                 : 'block_$index';
         return _SwipeItem(
           key: ValueKey(blockKey),
+          openNotifier: _openItemKey,
           onEdit: () {
             if (block is MemoEntry) {
               MemoInputSheet.show(context,
@@ -345,12 +348,14 @@ class _SwipeItem extends StatefulWidget {
   final Widget child;
   final VoidCallback onEdit;
   final VoidCallback onDelete;
+  final ValueNotifier<Key?> openNotifier;
 
   const _SwipeItem({
     super.key,
     required this.child,
     required this.onEdit,
     required this.onDelete,
+    required this.openNotifier,
   });
 
   @override
@@ -361,7 +366,32 @@ class _SwipeItemState extends State<_SwipeItem> {
   static const double _actionWidth = 130.0;
   bool _open = false;
 
-  void _toggle(bool open) => setState(() => _open = open);
+  @override
+  void initState() {
+    super.initState();
+    widget.openNotifier.addListener(_onOpenChanged);
+  }
+
+  @override
+  void dispose() {
+    widget.openNotifier.removeListener(_onOpenChanged);
+    super.dispose();
+  }
+
+  void _onOpenChanged() {
+    if (_open && widget.openNotifier.value != widget.key) {
+      setState(() => _open = false);
+    }
+  }
+
+  void _toggle(bool open) {
+    setState(() => _open = open);
+    if (open) {
+      widget.openNotifier.value = widget.key;
+    } else if (widget.openNotifier.value == widget.key) {
+      widget.openNotifier.value = null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
