@@ -21,6 +21,7 @@ import android.widget.ImageButton
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.SeekBar
 import android.widget.Toast
 import com.google.ar.core.*
 import com.google.ar.core.ArCoreApk.InstallStatus
@@ -85,6 +86,18 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
     private var worldPoint2: FloatArray? = null
     private var measuredCm: Double? = null
     private var planeFound = false
+    @Volatile private var canMeasure = false
+    private var surfaceWidth = 0
+    private var surfaceHeight = 0
+    private lateinit var statusBg: GradientDrawable
+    private lateinit var pointCloudView: ArPointCloudView
+    private var pcFrameCount = 0
+    @Volatile private var confThreshold = 0.005f
+
+    // ── Drag/tap gesture ────────────────────────────────────────────
+    private var dragStart: Pair<Float, Float>? = null
+    private var isDragging = false
+    private val dragThresholdPx by lazy { 20 * resources.displayMetrics.density }
 
     // ── Lifecycle ───────────────────────────────────────────────────
 
@@ -151,7 +164,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             try {
                 session = Session(this).apply {
                     configure(Config(this).apply {
-                        planeFindingMode = Config.PlaneFindingMode.HORIZONTAL
+                        planeFindingMode = Config.PlaneFindingMode.HORIZONTAL_AND_VERTICAL
                         updateMode = Config.UpdateMode.LATEST_CAMERA_IMAGE
                     })
                 }
@@ -177,6 +190,8 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
     override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
         displayRotationHelper.onSurfaceChanged(width, height)
         GLES20.glViewport(0, 0, width, height)
+        surfaceWidth = width
+        surfaceHeight = height
     }
 
     override fun onDrawFrame(gl: GL10?) {
@@ -193,6 +208,45 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
                 planeFound = hasPlane
                 runOnUiThread { updateStatus() }
             }
+            if (worldPoint1 == null && worldPoint2 == null && surfaceWidth > 0) {
+                val hit = frame.hitTest(surfaceWidth / 2f, surfaceHeight / 2f).any { r ->
+                    when (val t = r.trackable) {
+                        is Plane -> t.trackingState == TrackingState.TRACKING
+                        is com.google.ar.core.Point ->
+                            t.orientationMode == com.google.ar.core.Point.OrientationMode.ESTIMATED_SURFACE_NORMAL
+                        else -> false
+                    }
+                }
+                if (hit != canMeasure) {
+                    canMeasure = hit
+                    runOnUiThread { updateStatus() }
+                }
+                if (++pcFrameCount % 3 == 0) {
+                    val pointCloud = frame.acquirePointCloud()
+                    val buf = pointCloud.points
+                    val proj = FloatArray(16); val view = FloatArray(16); val mvp = FloatArray(16)
+                    val cam = frame.camera
+                    cam.getProjectionMatrix(proj, 0, 0.1f, 100f)
+                    cam.getViewMatrix(view, 0)
+                    android.opengl.Matrix.multiplyMM(mvp, 0, proj, 0, view, 0)
+                    val vec = FloatArray(4); val clip = FloatArray(4)
+                    val pts = mutableListOf<Pair<Float, Float>>()
+                    var i = 0
+                    while (i + 3 < buf.limit()) {
+                        val x = buf[i]; val y = buf[i + 1]; val z = buf[i + 2]; val conf = buf[i + 3]
+                        i += 4
+                        if (conf < confThreshold) continue
+                        vec[0] = x; vec[1] = y; vec[2] = z; vec[3] = 1f
+                        android.opengl.Matrix.multiplyMV(clip, 0, mvp, 0, vec, 0)
+                        if (clip[3] <= 0f) continue
+                        val nx = clip[0] / clip[3]; val ny = clip[1] / clip[3]
+                        if (nx < -1f || nx > 1f || ny < -1f || ny > 1f) continue
+                        pts.add(Pair((nx + 1f) / 2f * surfaceWidth, (1f - ny) / 2f * surfaceHeight))
+                    }
+                    pointCloud.release()
+                    runOnUiThread { if (::pointCloudView.isInitialized) pointCloudView.updatePoints(pts) }
+                }
+            }
         } catch (e: CameraNotAvailableException) {
             Log.e(TAG, "Camera not available", e)
         }
@@ -201,41 +255,124 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
     // ── Touch ────────────────────────────────────────────────────────
 
     private fun onOverlayTouch(event: MotionEvent): Boolean {
-        if (event.action != MotionEvent.ACTION_DOWN) return true
         if (worldPoint2 != null) return true
 
-        val frame = currentFrame ?: return true
-        val hit = frame.hitTest(event.x, event.y).firstOrNull { r ->
-            val t = r.trackable
-            t is Plane && t.isPoseInPolygon(r.hitPose) && t.trackingState == TrackingState.TRACKING
-        } ?: run { toast("평면을 감지하는 중입니다. 잠시 후 시도해 주세요"); return true }
+        when (event.action) {
+            MotionEvent.ACTION_DOWN -> {
+                dragStart = Pair(event.x, event.y)
+                isDragging = false
+                if (worldPoint1 == null) dotsView.point1 = Pair(event.x, event.y)
+                dotsView.livePoint = Pair(event.x, event.y)
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val start = dragStart ?: return true
+                val dx = event.x - start.first
+                val dy = event.y - start.second
+                if (!isDragging && sqrt(dx * dx + dy * dy) > dragThresholdPx) isDragging = true
+                if (isDragging) dotsView.livePoint = Pair(event.x, event.y)
+            }
+            MotionEvent.ACTION_UP -> {
+                val start = dragStart ?: return true
+                dragStart = null
+                dotsView.livePoint = null
 
-        val pos = hit.hitPose.translation.clone()
-        if (worldPoint1 == null) {
-            worldPoint1 = pos
-            dotsView.point1 = Pair(event.x, event.y)
-            runOnUiThread { updateStatus() }
-        } else {
-            worldPoint2 = pos
-            dotsView.point2 = Pair(event.x, event.y)
-            measuredCm = distance3d(worldPoint1!!, pos) * 100.0
-            runOnUiThread { showDistance(measuredCm!!) }
+                if (isDragging) {
+                    isDragging = false
+                    if (worldPoint1 == null) {
+                        val p1 = hitTest(start.first, start.second)
+                        val p2 = hitTest(event.x, event.y)
+                        if (p1 == null || p2 == null) {
+                            dotsView.point1 = null
+                            showMsg("평면을 인식하지 못했습니다. 다시 시도해 주세요")
+                            runOnUiThread { updateStatus() }
+                            return true
+                        }
+                        worldPoint1 = p1; worldPoint2 = p2
+                        dotsView.point1 = start
+                        dotsView.point2 = Pair(event.x, event.y)
+                    } else {
+                        val p2 = hitTest(event.x, event.y) ?: run {
+                            showMsg("평면을 인식하지 못했습니다. 다시 시도해 주세요"); return true
+                        }
+                        worldPoint2 = p2
+                        dotsView.point2 = Pair(event.x, event.y)
+                    }
+                    measuredCm = distance3d(worldPoint1!!, worldPoint2!!) * 100.0
+                    runOnUiThread { showDistance(measuredCm!!) }
+                } else {
+                    val hit = hitTest(event.x, event.y) ?: run {
+                        if (worldPoint1 == null) dotsView.point1 = null
+                        showMsg("평면을 인식하지 못했습니다. 다시 시도해 주세요")
+                        runOnUiThread { updateStatus() }
+                        return true
+                    }
+                    if (worldPoint1 == null) {
+                        worldPoint1 = hit
+                        dotsView.point1 = Pair(event.x, event.y)
+                        runOnUiThread { updateStatus() }
+                    } else {
+                        worldPoint2 = hit
+                        dotsView.point2 = Pair(event.x, event.y)
+                        measuredCm = distance3d(worldPoint1!!, worldPoint2!!) * 100.0
+                        runOnUiThread { showDistance(measuredCm!!) }
+                    }
+                }
+            }
         }
         return true
+    }
+
+    private fun hitTest(x: Float, y: Float): FloatArray? {
+        val frame = currentFrame ?: return null
+
+        fun tryAt(tx: Float, ty: Float, relaxed: Boolean): FloatArray? =
+            frame.hitTest(tx, ty).firstOrNull { r ->
+                when (val t = r.trackable) {
+                    is Plane -> t.trackingState == TrackingState.TRACKING
+                    is com.google.ar.core.Point -> relaxed ||
+                        t.orientationMode == com.google.ar.core.Point.OrientationMode.ESTIMATED_SURFACE_NORMAL
+                    else -> false
+                }
+            }?.hitPose?.translation?.clone()
+
+        // 1차: 정확한 위치 (엄격한 필터)
+        tryAt(x, y, false)?.let { return it }
+
+        // 2차: 주변 8방향 (엄격한 필터)
+        val s = 30f
+        for ((dx, dy) in listOf(s to 0f, -s to 0f, 0f to s, 0f to -s,
+                                 s to s, -s to s, s to -s, -s to -s)) {
+            tryAt(x + dx, y + dy, false)?.let { return it }
+        }
+
+        // 3차: 주변 8방향 (완화된 필터 — Point 방향 조건 제거)
+        for ((dx, dy) in listOf(0f to 0f, s to 0f, -s to 0f, 0f to s, 0f to -s,
+                                 s to s, -s to s, s to -s, -s to -s)) {
+            tryAt(x + dx, y + dy, true)?.let { return it }
+        }
+
+        return null
     }
 
     // ── UI ───────────────────────────────────────────────────────────
 
     private fun updateStatus() {
-        statusText.text = when {
-            worldPoint2 != null -> "✓ 측정 완료  아래 촬영 버튼을 누르세요"
-            worldPoint1 != null -> "② 꼬리 끝을 터치하세요"
-            planeFound          -> "① 머리 끝을 터치하세요"
-            else                -> "카메라를 평평한 바닥에 향해 주세요"
+        val (txt, bgColor) = when {
+            worldPoint2 != null -> "✓ 측정 완료  아래 촬영 버튼을 누르세요" to 0xCC000000.toInt()
+            worldPoint1 != null -> "② 끝점을 터치하세요"                    to 0xCC1565C0.toInt()
+            canMeasure          -> "● 측정 가능  시작점을 터치하거나 드래그" to 0xCC2E7D32.toInt()
+            else                -> "⏳ 평면 인식 중..."                      to 0xCCE65100.toInt()
         }
+        statusText.text = txt
+        statusBg.setColor(bgColor)
         val measured = measuredCm != null
         shutterView.alpha = if (measured) 1f else 0.35f
         shutterView.isClickable = measured
+        if (::pointCloudView.isInitialized) {
+            val showCloud = worldPoint1 == null && worldPoint2 == null
+            pointCloudView.visibility = if (showCloud) View.VISIBLE else View.GONE
+            if (!showCloud) pointCloudView.clear()
+        }
     }
 
     private fun showDistance(cm: Double) {
@@ -246,6 +383,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
 
     private fun resetMeasurement() {
         worldPoint1 = null; worldPoint2 = null; measuredCm = null
+        dragStart = null; isDragging = false; canMeasure = false
         dotsView.reset()
         distanceCard.visibility = View.GONE
         updateStatus()
@@ -399,15 +537,21 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             setOnTouchListener { _, e -> onOverlayTouch(e) }
         }
 
+        pointCloudView = ArPointCloudView(this).apply {
+            isClickable = false
+            isFocusable = false
+        }
+
         // ── Status text ───────────────────────────────────
+        statusBg = GradientDrawable().apply {
+            setColor(0xCCE65100.toInt()); cornerRadius = dpToPx(24).toFloat()
+        }
         statusText = TextView(this).apply {
-            text = "카메라를 평평한 바닥에 향해 주세요"
+            text = "카메라를 측정 대상에 가까이 향해 주세요"
             setTextColor(Color.WHITE); textSize = 16f; typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setPadding(dpToPx(20), dpToPx(12), dpToPx(20), dpToPx(12))
-            background = GradientDrawable().apply {
-                setColor(0xCC000000.toInt()); cornerRadius = dpToPx(24).toFloat()
-            }
+            background = statusBg
         }
         val statusParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT
@@ -532,10 +676,35 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         sideButtons = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
+            clipChildren = false
+            clipToPadding = false
         }
         sideButtons.addView(watermarkBtn,
             LinearLayout.LayoutParams(iconSize, iconSize).apply { bottomMargin = dpToPx(12) })
-        sideButtons.addView(includeLengthBtn, LinearLayout.LayoutParams(iconSize, iconSize))
+        sideButtons.addView(includeLengthBtn,
+            LinearLayout.LayoutParams(iconSize, iconSize).apply { bottomMargin = dpToPx(12) })
+        sideButtons.addView(TextView(this).apply {
+            text = "감도"; setTextColor(Color.WHITE); textSize = 10f; gravity = Gravity.CENTER
+        }, LinearLayout.LayoutParams(iconSize, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dpToPx(4)
+        })
+        // 세로 SeekBar: layout은 130×32, rotation=270 → 시각적으로 32×130
+        val sliderWrapper = FrameLayout(this).apply { clipChildren = false; clipToPadding = false }
+        sliderWrapper.addView(SeekBar(this).apply {
+            max = 100
+            progress = 90  // 기본 감도 높음 (threshold ≈ 0.005)
+            rotation = 270f
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar, p: Int, user: Boolean) {
+                    // 비선형: 높은 감도 영역에서 세밀한 조정
+                    val r = (100 - p) / 100f
+                    confThreshold = r * r * 0.5f  // 0→0.5(적음), 100→0.0(많음)
+                }
+                override fun onStartTrackingTouch(sb: SeekBar) {}
+                override fun onStopTrackingTouch(sb: SeekBar) {}
+            })
+        }, FrameLayout.LayoutParams(dpToPx(130), dpToPx(32)).apply { gravity = Gravity.CENTER })
+        sideButtons.addView(sliderWrapper, LinearLayout.LayoutParams(iconSize, dpToPx(130)))
 
         val sideParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT
@@ -569,6 +738,8 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         val root = FrameLayout(this).apply {
             setBackgroundColor(Color.BLACK)
             addView(glSurfaceView, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
+            addView(pointCloudView, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))
             addView(dotsView, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT))

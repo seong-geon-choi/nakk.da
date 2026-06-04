@@ -19,12 +19,24 @@ class ArDotsOverlayView @JvmOverloads constructor(
     var point2: Pair<Float, Float>? = null
         set(value) { field = value; invalidate() }
 
+    var livePoint: Pair<Float, Float>? = null
+        set(value) { field = value; invalidate() }
+
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.parseColor("#FF4081")
         style = Paint.Style.FILL
     }
+    private val ghostPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.parseColor("#99FF4081")
+        style = Paint.Style.FILL
+    }
     private val dotBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = Color.WHITE
+        style = Paint.Style.STROKE
+        strokeWidth = 5f
+    }
+    private val ghostBorderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = 0x99FFFFFF.toInt()
         style = Paint.Style.STROKE
         strokeWidth = 5f
     }
@@ -38,20 +50,32 @@ class ArDotsOverlayView @JvmOverloads constructor(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val p1 = point1 ?: return
-
         val p2 = point2
+        val live = livePoint
+
         if (p2 != null) {
             canvas.drawLine(p1.first, p1.second, p2.first, p2.second, linePaint)
+            drawDot(canvas, p1.first, p1.second)
+            drawDot(canvas, p2.first, p2.second)
+        } else {
+            if (live != null) {
+                canvas.drawLine(p1.first, p1.second, live.first, live.second, linePaint)
+            }
+            drawDot(canvas, p1.first, p1.second)
+            if (live != null) drawGhostDot(canvas, live.first, live.second)
         }
-
-        drawDot(canvas, p1.first, p1.second)
-        if (p2 != null) drawDot(canvas, p2.first, p2.second)
     }
 
     private fun drawDot(canvas: Canvas, x: Float, y: Float) {
         val r = 22f
         canvas.drawCircle(x, y, r, dotPaint)
         canvas.drawCircle(x, y, r, dotBorderPaint)
+    }
+
+    private fun drawGhostDot(canvas: Canvas, x: Float, y: Float) {
+        val r = 22f
+        canvas.drawCircle(x, y, r, ghostPaint)
+        canvas.drawCircle(x, y, r, ghostBorderPaint)
     }
 
     fun distancePx(): Float? {
@@ -65,5 +89,6 @@ class ArDotsOverlayView @JvmOverloads constructor(
     fun reset() {
         point1 = null
         point2 = null
+        livePoint = null
     }
 }
