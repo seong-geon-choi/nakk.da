@@ -87,6 +87,20 @@ Future<List<({String contentUri, DateTime timestamp, double? lat, double? lng})>
   }
 }
 
+/// 빌드 버전 및 빌드 시각 반환.
+Future<({String version, String buildTime})?> getBuildInfo() async {
+  try {
+    final result = await _channel.invokeMapMethod<String, dynamic>('getBuildInfo');
+    if (result == null) return null;
+    return (
+      version:   result['version']   as String? ?? '-',
+      buildTime: result['buildTime'] as String? ?? '-',
+    );
+  } catch (_) {
+    return null;
+  }
+}
+
 /// content:// URI를 앱 캐시로 복사해 파일 경로 반환.
 Future<String?> copyContentUriToCache(String contentUri) async {
   try {

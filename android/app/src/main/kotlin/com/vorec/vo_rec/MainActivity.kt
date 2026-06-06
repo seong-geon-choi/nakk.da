@@ -214,6 +214,12 @@ class MainActivity : FlutterActivity() {
                     val uriStr = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
                     result.success(copyUriToCache(Uri.parse(uriStr)))
                 }
+                "getBuildInfo" -> {
+                    result.success(mapOf(
+                        "version"   to BuildConfig.VERSION_NAME,
+                        "buildTime" to BuildConfig.BUILD_TIME
+                    ))
+                }
                 else -> result.notImplemented()
                 }
             }

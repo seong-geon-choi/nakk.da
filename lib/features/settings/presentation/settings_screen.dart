@@ -11,6 +11,7 @@ import '../../memo/presentation/memo_editor_screen.dart';
 import '../../../core/constants/api_keys.dart';
 import '../../../core/widgets/permission_status_chip.dart';
 import '../../../core/services/accessibility_service.dart';
+import '../../../core/utils/media_scanner.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -176,6 +177,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               subtitle: const Text('메모에 포함되지 않은 복사 사진을 삭제합니다'),
               onTap: () => _cleanUnusedPhotos(context, ref),
             ),
+            const SizedBox(height: 16),
+            const _SectionHeader(label: 'About'),
+            _AboutTile(),
             const SizedBox(height: 16),
           ],
         ),
@@ -471,6 +475,38 @@ class _AccessibilityTileState extends State<_AccessibilityTile>
             ),
           ),
       ],
+    );
+  }
+}
+
+class _AboutTile extends StatefulWidget {
+  @override
+  State<_AboutTile> createState() => _AboutTileState();
+}
+
+class _AboutTileState extends State<_AboutTile> {
+  String _version = '-';
+  String _buildTime = '-';
+
+  @override
+  void initState() {
+    super.initState();
+    getBuildInfo().then((info) {
+      if (info != null && mounted) {
+        setState(() {
+          _version   = info.version;
+          _buildTime = info.buildTime;
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: const Icon(Icons.info_outline),
+      title: Text('버전 $_version'),
+      subtitle: Text('빌드: $_buildTime'),
     );
   }
 }
