@@ -10,6 +10,9 @@ import '../../location/domain/models/location_status.dart';
 import '../../settings/presentation/settings_provider.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/utils/file_name_parser.dart';
+import '../../../core/services/saf_service.dart';
+import '../../../core/widgets/memo_date_picker_dialog.dart';
+import '../../../core/widgets/saf_image.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
   final String? filePath;
@@ -26,11 +29,15 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   DateTime _loadedDate = DateTime.now();
   MapController _mapController = MapController();
   double _zoom = 14;
+  String _savePath = '';
 
   @override
   void initState() {
     super.initState();
     _loadFromToday();
+    ref.read(settingsProvider.future).then((s) {
+      if (mounted) setState(() => _savePath = s.savePath);
+    });
   }
 
   void _loadFromToday() {
@@ -65,14 +72,23 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   Future<Set<DateTime>> _loadExistingDates(String savePath) async {
-    final dir = Directory(savePath);
-    if (!await dir.exists()) return {};
+    if (savePath.isEmpty) return {};
     final dates = <DateTime>{};
-    await for (final entity in dir.list()) {
-      if (entity is File) {
-        final name = entity.uri.pathSegments.last;
+    if (SafService.isSafUri(savePath)) {
+      final names = await SafService().listMdFiles(savePath);
+      for (final name in names) {
         final date = FileNameParser.parseDate(name);
         if (date != null) dates.add(date);
+      }
+    } else {
+      final dir = Directory(savePath);
+      if (!await dir.exists()) return {};
+      await for (final entity in dir.list()) {
+        if (entity is File) {
+          final name = entity.uri.pathSegments.last;
+          final date = FileNameParser.parseDate(name);
+          if (date != null) dates.add(date);
+        }
       }
     }
     return dates;
@@ -85,7 +101,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
     final picked = await showDialog<DateTime>(
       context: context,
-      builder: (_) => _DatePickerDialog(
+      builder: (_) => MemoDatePickerDialog(
         initialDate: _loadedDate,
         firstDate: DateTime(2020),
         lastDate: DateTime.now(),
@@ -155,6 +171,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
   void _zoomToCluster(_Cluster cluster) {
     setState(() => _selected = null);
+    // zoom 18 기준 임계값(~4m) 이내면 지도 확대 대신 목록 시트 표시
+    if (cluster.spread < 0.0000375) {
+      _showClusterSheet(cluster);
+      return;
+    }
     _mapController.fitCamera(
       CameraFit.bounds(
         bounds: LatLngBounds.fromPoints(
@@ -162,6 +183,25 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         ),
         padding: const EdgeInsets.all(100),
         maxZoom: 18,
+      ),
+    );
+  }
+
+  void _showClusterSheet(_Cluster cluster) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (_) => _ClusterSheet(
+        cluster: cluster,
+        allPoints: _points,
+        savePath: _savePath,
+        onSelect: (point) {
+          Navigator.of(context).pop();
+          setState(() => _selected = point);
+        },
       ),
     );
   }
@@ -306,6 +346,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               bottom: 12 + MediaQuery.of(context).padding.bottom,
               child: _PointPopup(
                 point: _selected!,
+                savePath: _savePath,
                 onClose: () => setState(() => _selected = null),
                 onConnect: () => setState(() {
                   _showLines = !_showLines;
@@ -357,6 +398,16 @@ class _Cluster {
     final lng = points.map((p) => p.lng).reduce((a, b) => a + b) / points.length;
     return LatLng(lat, lng);
   }
+
+  // 클러스터 내 최대 좌표 편차 (도 단위)
+  double get spread {
+    if (points.length <= 1) return 0;
+    final lats = points.map((p) => p.lat);
+    final lngs = points.map((p) => p.lng);
+    final latSpread = lats.reduce(math.max) - lats.reduce(math.min);
+    final lngSpread = lngs.reduce(math.max) - lngs.reduce(math.min);
+    return math.max(latSpread, lngSpread);
+  }
 }
 
 // ── GPS 포인트 모델 ─────────────────────────────────────────
@@ -402,12 +453,14 @@ class _GpsPoint {
 
 class _PointPopup extends StatelessWidget {
   final _GpsPoint point;
+  final String savePath;
   final VoidCallback onClose;
   final VoidCallback onConnect;
   final bool linesActive;
 
   const _PointPopup({
     required this.point,
+    required this.savePath,
     required this.onClose,
     required this.onConnect,
     required this.linesActive,
@@ -458,41 +511,11 @@ class _PointPopup extends StatelessWidget {
             if (point.photoPath != null)
               Padding(
                 padding: const EdgeInsets.only(bottom: 6),
-                child: GestureDetector(
-                  onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => Scaffold(
-                      backgroundColor: Colors.black,
-                      appBar: AppBar(
-                        backgroundColor: Colors.transparent,
-                        foregroundColor: Colors.white,
-                      ),
-                      body: Center(
-                        child: InteractiveViewer(
-                          child: Image.file(
-                            File(point.photoPath!),
-                            errorBuilder: (_, __, ___) => const Icon(
-                              Icons.broken_image,
-                              color: Colors.white,
-                              size: 64,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  )),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(6),
-                    child: Image.file(
-                      File(point.photoPath!),
-                      height: 80,
-                      width: double.infinity,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) => const SizedBox(
-                        height: 40,
-                        child: Center(child: Icon(Icons.broken_image)),
-                      ),
-                    ),
-                  ),
+                child: SafImage(
+                  photoPath: point.photoPath!,
+                  savePath: savePath,
+                  height: 80,
+                  fit: BoxFit.cover,
                 ),
               ),
             if (point.text != null && point.text!.isNotEmpty)
@@ -546,202 +569,147 @@ class _PointPopup extends StatelessWidget {
   }
 }
 
-// ── 날짜 선택 다이얼로그 (파일 있는 날 점 표시) ──────────────────
+// ── 클러스터 목록 시트 ─────────────────────────────────────────
 
-class _DatePickerDialog extends StatefulWidget {
-  final DateTime initialDate;
-  final DateTime firstDate;
-  final DateTime lastDate;
-  final Set<DateTime> markedDates;
+class _ClusterSheet extends StatelessWidget {
+  final _Cluster cluster;
+  final List<_GpsPoint> allPoints;
+  final String savePath;
+  final void Function(_GpsPoint) onSelect;
 
-  const _DatePickerDialog({
-    required this.initialDate,
-    required this.firstDate,
-    required this.lastDate,
-    required this.markedDates,
+  const _ClusterSheet({
+    required this.cluster,
+    required this.allPoints,
+    required this.savePath,
+    required this.onSelect,
   });
 
   @override
-  State<_DatePickerDialog> createState() => _DatePickerDialogState();
-}
-
-class _DatePickerDialogState extends State<_DatePickerDialog> {
-  late DateTime _month;
-  late DateTime _selected;
-
-  @override
-  void initState() {
-    super.initState();
-    _month = DateTime(widget.initialDate.year, widget.initialDate.month);
-    _selected = widget.initialDate;
-  }
-
-  bool _isMarked(DateTime date) =>
-      widget.markedDates.contains(DateTime(date.year, date.month, date.day));
-
-  @override
   Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final daysInMonth =
-        DateUtils.getDaysInMonth(_month.year, _month.month);
-    final leadingBlanks =
-        DateTime(_month.year, _month.month, 1).weekday - 1; // 월=0
-    final today = DateTime.now();
-    final prevMonth = DateTime(_month.year, _month.month - 1);
-    final nextMonth = DateTime(_month.year, _month.month + 1);
-    final canBack = !prevMonth
-        .isBefore(DateTime(widget.firstDate.year, widget.firstDate.month));
-    final canForward = !nextMonth
-        .isAfter(DateTime(widget.lastDate.year, widget.lastDate.month));
+    final points = cluster.points;
+    final bottomPad = MediaQuery.of(context).padding.bottom;
 
-    return Dialog(
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            // 월 이동 헤더
-            Row(
-              children: [
-                IconButton(
-                  icon: const Icon(Icons.chevron_left),
-                  onPressed: canBack
-                      ? () => setState(
-                          () => _month = DateTime(_month.year, _month.month - 1))
-                      : null,
-                ),
-                Expanded(
-                  child: Text(
-                    '${_month.year}년 ${_month.month}월',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                        fontWeight: FontWeight.bold, fontSize: 16),
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          margin: const EdgeInsets.symmetric(vertical: 10),
+          width: 32,
+          height: 4,
+          decoration: BoxDecoration(
+            color: Colors.grey.shade400,
+            borderRadius: BorderRadius.circular(2),
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+          child: Row(
+            children: [
+              const Icon(Icons.location_on, size: 18),
+              const SizedBox(width: 6),
+              Text(
+                '이 위치의 기록 ${points.length}개',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+              ),
+            ],
+          ),
+        ),
+        const Divider(height: 1),
+        ConstrainedBox(
+          constraints: BoxConstraints(
+            maxHeight: MediaQuery.of(context).size.height * 0.55,
+          ),
+          child: ListView.separated(
+            shrinkWrap: true,
+            itemCount: points.length,
+            separatorBuilder: (_, __) =>
+                const Divider(height: 1, indent: 16, endIndent: 16),
+            itemBuilder: (context, i) {
+              final pt = points[i];
+              final mapIdx = allPoints.indexOf(pt) + 1;
+              return InkWell(
+                onTap: () => onSelect(pt),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // 지도 인덱스 번호
+                      CircleAvatar(
+                        radius: 16,
+                        backgroundColor: pt.isMemo
+                            ? Colors.blue.shade700
+                            : Colors.teal.shade600,
+                        child: Text(
+                          '$mapIdx',
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 11),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      // 내용 영역
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            // 시간 + 어획
+                            Row(
+                              children: [
+                                Text(pt.timeLabel,
+                                    style: const TextStyle(
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 14)),
+                                if (pt.fishLength != null) ...[
+                                  const SizedBox(width: 8),
+                                  Text(
+                                    '📏 ${pt.fishLength!.toStringAsFixed(1)}cm',
+                                    style: TextStyle(
+                                        fontSize: 12,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .primary),
+                                  ),
+                                ],
+                              ],
+                            ),
+                            // 주소
+                            if (pt.address != null) ...[
+                              const SizedBox(height: 3),
+                              Text('📍 ${pt.address}',
+                                  style: const TextStyle(fontSize: 12),
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis),
+                            ],
+                            // 텍스트
+                            if (pt.text != null && pt.text!.isNotEmpty) ...[
+                              const SizedBox(height: 3),
+                              Text(pt.text!,
+                                  style: const TextStyle(fontSize: 13),
+                                  maxLines: 3,
+                                  overflow: TextOverflow.ellipsis),
+                            ],
+                            // 사진
+                            if (pt.photoPath != null) ...[
+                              const SizedBox(height: 6),
+                              SafImage(
+                                photoPath: pt.photoPath!,
+                                savePath: savePath,
+                                height: 100,
+                                fit: BoxFit.cover,
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-                IconButton(
-                  icon: const Icon(Icons.chevron_right),
-                  onPressed: canForward
-                      ? () => setState(
-                          () => _month = DateTime(_month.year, _month.month + 1))
-                      : null,
-                ),
-              ],
-            ),
-            // 요일 헤더
-            Row(
-              children: ['월', '화', '수', '목', '금', '토', '일']
-                  .asMap()
-                  .entries
-                  .map((e) => Expanded(
-                        child: Center(
-                          child: Text(
-                            e.value,
-                            style: TextStyle(
-                              fontSize: 11,
-                              fontWeight: FontWeight.w600,
-                              color: e.key == 5
-                                  ? Colors.blue.shade400
-                                  : e.key == 6
-                                      ? Colors.red.shade400
-                                      : Colors.grey,
-                            ),
-                          ),
-                        ),
-                      ))
-                  .toList(),
-            ),
-            const SizedBox(height: 4),
-            // 날짜 그리드
-            GridView.count(
-              crossAxisCount: 7,
-              shrinkWrap: true,
-              physics: const NeverScrollableScrollPhysics(),
-              childAspectRatio: 0.85,
-              children: [
-                ...List.generate(leadingBlanks, (_) => const SizedBox()),
-                ...List.generate(daysInMonth, (i) {
-                  final day = DateTime(_month.year, _month.month, i + 1);
-                  final isToday = DateUtils.isSameDay(day, today);
-                  final isSelected = DateUtils.isSameDay(day, _selected);
-                  final isMarked = _isMarked(day);
-                  final isFuture = day.isAfter(widget.lastDate);
-
-                  return GestureDetector(
-                    onTap: isFuture
-                        ? null
-                        : () => setState(() => _selected = day),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Container(
-                          width: 30,
-                          height: 30,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: isSelected
-                                ? colorScheme.primary
-                                : isToday
-                                    ? colorScheme.primary.withAlpha(30)
-                                    : null,
-                          ),
-                          child: Center(
-                            child: Text(
-                              '${i + 1}',
-                              style: TextStyle(
-                                fontSize: 13,
-                                color: isFuture
-                                    ? Colors.grey.shade300
-                                    : isSelected
-                                        ? Colors.white
-                                        : isToday
-                                            ? colorScheme.primary
-                                            : null,
-                                fontWeight: isToday || isSelected
-                                    ? FontWeight.bold
-                                    : null,
-                              ),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 2),
-                        Container(
-                          width: 4,
-                          height: 4,
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: isMarked
-                                ? (isSelected
-                                    ? Colors.white
-                                    : colorScheme.primary)
-                                : Colors.transparent,
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                }),
-              ],
-            ),
-            const SizedBox(height: 4),
-            // 버튼
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.pop(context),
-                  child: const Text('취소'),
-                ),
-                const SizedBox(width: 4),
-                FilledButton(
-                  onPressed: () => Navigator.pop(context, _selected),
-                  child: const Text('확인'),
-                ),
-              ],
-            ),
-          ],
+              );
+            },
+          ),
         ),
-      ),
+        SizedBox(height: bottomPad + 8),
+      ],
     );
   }
 }

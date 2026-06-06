@@ -137,10 +137,11 @@ class AppSettings {
   final String photoSavePath;
   final bool showLocationButton;
   final bool autoSaveVoice;
+  final bool showAddressInMemoName;
   final String? khoaApiKey;
   final WatermarkSettings watermark;
 
-  bool get needsFolderSetup => savePath.isEmpty || !savePath.startsWith('content://');
+  bool get needsFolderSetup => savePath.isEmpty;
 
   AppSettings({
     required this.savePath,
@@ -148,6 +149,7 @@ class AppSettings {
     required this.photoSavePath,
     this.showLocationButton = true,
     this.autoSaveVoice = false,
+    this.showAddressInMemoName = true,
     this.khoaApiKey,
     WatermarkSettings? watermark,
   }) : watermark = watermark ?? WatermarkSettings();
@@ -163,6 +165,7 @@ class AppSettings {
     String? photoSavePath,
     bool? showLocationButton,
     bool? autoSaveVoice,
+    bool? showAddressInMemoName,
     String? khoaApiKey,
     bool clearKhoaApiKey = false,
     WatermarkSettings? watermark,
@@ -173,6 +176,7 @@ class AppSettings {
       photoSavePath: photoSavePath ?? this.photoSavePath,
       showLocationButton: showLocationButton ?? this.showLocationButton,
       autoSaveVoice: autoSaveVoice ?? this.autoSaveVoice,
+      showAddressInMemoName: showAddressInMemoName ?? this.showAddressInMemoName,
       khoaApiKey: clearKhoaApiKey ? null : (khoaApiKey ?? this.khoaApiKey),
       watermark: watermark ?? this.watermark,
     );

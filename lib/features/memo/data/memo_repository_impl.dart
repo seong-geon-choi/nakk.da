@@ -46,6 +46,21 @@ class MemoRepositoryImpl implements MemoRepository {
   }
 
   @override
+  Future<void> appendEntries(DateTime date, List<MemoEntry> entries, String savePath) async {
+    if (entries.isEmpty) return;
+    final filename = _filenameFor(date);
+    final toAppend = entries.map(MdSerializer.serializeEntry).join();
+    if (SafService.isSafUri(savePath)) {
+      await _safEnsureHeader(savePath, filename, date);
+      await _saf.appendFile(savePath, filename, toAppend);
+    } else {
+      final file = File('$savePath/$filename');
+      await _ensureHeader(file, date);
+      await file.writeAsString(toAppend, mode: FileMode.append);
+    }
+  }
+
+  @override
   Future<void> appendLocationBlock(DateTime date, LocationStatus loc, String savePath) async {
     final filename = _filenameFor(date);
     final toAppend = MdSerializer.serializeLocationBlock(loc);
@@ -83,15 +98,14 @@ class MemoRepositoryImpl implements MemoRepository {
   @override
   Future<void> removeBlock(DateTime date, int blockIndex, String savePath) async {
     final filename = _filenameFor(date);
+    final dayFile = await loadDayFile(date, savePath);
+    if (dayFile == null || blockIndex >= dayFile.blocks.length) return;
+    final blocks = List<dynamic>.from(dayFile.blocks)..removeAt(blockIndex);
+    final content = MdSerializer.buildFullContent(date, blocks);
     if (SafService.isSafUri(savePath)) {
-      final content = await _saf.readFile(savePath, filename);
-      if (content == null) return;
-      await _saf.writeFile(savePath, filename, MdSerializer.removeBlockAt(content, blockIndex));
+      await _saf.writeFile(savePath, filename, content);
     } else {
-      final file = File('$savePath/$filename');
-      if (!await file.exists()) return;
-      final content = await file.readAsString();
-      await file.writeAsString(MdSerializer.removeBlockAt(content, blockIndex));
+      await File('$savePath/$filename').writeAsString(content);
     }
   }
 

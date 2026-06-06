@@ -17,6 +17,11 @@ import '../../features/memo/presentation/memo_input_sheet.dart';
 import '../../features/memo/presentation/location_edit_sheet.dart';
 import '../../features/settings/presentation/settings_provider.dart';
 import '../../features/location/presentation/location_provider.dart';
+import '../../core/utils/file_name_parser.dart';
+import '../../core/utils/media_scanner.dart';
+import '../../core/widgets/memo_date_picker_dialog.dart';
+import '../../core/services/saf_service.dart';
+import 'dart:io';
 import 'package:geolocator/geolocator.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -33,10 +38,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    // 앱이 포어그라운드일 때 AccessibilityService 결과 수신
     setVoiceResultHandler(_handleVoiceResult);
-    // 앱 시작 시 미처리 결과 확인
-    WidgetsBinding.instance.addPostFrameCallback((_) => _checkPendingVoiceResult());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkPendingVoiceResult();
+      _autoSetupSaveFolderIfNeeded();
+    });
+  }
+
+  Future<void> _autoSetupSaveFolderIfNeeded() async {
+    final settings = ref.read(settingsProvider).valueOrNull;
+    if (settings == null || !settings.needsFolderSetup) return;
+    if (!mounted) return;
+    await ref.read(settingsProvider.notifier).pickSaveFolder();
   }
 
   @override
@@ -121,6 +134,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.add_photo_alternate_outlined),
+            tooltip: '날짜별 사진 일괄 추가',
+            onPressed: _importDayPhotos,
+          ),
+          IconButton(
             icon: const Icon(Icons.folder_outlined),
             tooltip: '파일 목록',
             onPressed: () => context.push(AppRoutes.fileList),
@@ -177,15 +195,206 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     MemoInputSheet.show(context, voiceMode: voiceMode);
   }
 
+  Future<Set<DateTime>> _loadMarkedDates(String savePath) async {
+    if (savePath.isEmpty) return {};
+    final dates = <DateTime>{};
+    if (SafService.isSafUri(savePath)) {
+      final names = await SafService().listMdFiles(savePath);
+      for (final name in names) {
+        final d = FileNameParser.parseDate(name);
+        if (d != null) dates.add(d);
+      }
+    } else {
+      final dir = Directory(savePath);
+      if (!await dir.exists()) return {};
+      await for (final entity in dir.list()) {
+        if (entity is File) {
+          final d = FileNameParser.parseDate(entity.uri.pathSegments.last);
+          if (d != null) dates.add(d);
+        }
+      }
+    }
+    return dates;
+  }
+
+  Future<void> _importDayPhotos() async {
+    final settings = ref.read(settingsProvider).valueOrNull;
+    if (settings == null) return;
+    final markedDates = await _loadMarkedDates(settings.savePath);
+    if (!mounted) return;
+
+    final date = await showDialog<DateTime>(
+      context: context,
+      builder: (_) => MemoDatePickerDialog(
+        initialDate: DateTime.now(),
+        firstDate: DateTime(2020),
+        lastDate: DateTime.now(),
+        markedDates: markedDates,
+        title: '사진 일괄 추가하기',
+      ),
+    );
+    if (date == null || !mounted) return;
+
+    // 스캔 중 안내
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('사진 검색 중...'), duration: Duration(minutes: 1)),
+    );
+    final photos = await scanGalleryPhotosByDate(date);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+    if (photos.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('해당 날짜에 촬영된 사진이 없습니다')),
+      );
+      return;
+    }
+
+    final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+    // 50장 이상 추가 확인
+    if (photos.length >= 50) {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('사진이 많습니다'),
+          content: Text('${photos.length}장의 사진이 검색됐습니다. 모두 추가하시겠습니까?'),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
+            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('추가')),
+          ],
+        ),
+      );
+      if (ok != true || !mounted) return;
+    }
+
+    // 확인 다이얼로그
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('사진 일괄 추가'),
+        content: Text('$dateStr에 촬영된 사진 ${photos.length}장을\n메모에 추가하시겠습니까?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('추가')),
+        ],
+      ),
+    );
+    if (confirmed != true || !mounted) return;
+
+    final savePath = settings.savePath;
+
+    // 진행률 다이얼로그
+    final progress = ValueNotifier<int>(0);
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => _ImportProgressDialog(progress: progress, total: photos.length),
+    );
+
+    // 사진 처리
+    final entries = <MemoEntry>[];
+    for (int i = 0; i < photos.length; i++) {
+      final photo = photos[i];
+      final ts = photo.timestamp.millisecondsSinceEpoch;
+      final cachePath = await copyContentUriToCache(photo.contentUri);
+      if (cachePath != null) {
+        final ext = cachePath.contains('.') ? cachePath.split('.').last.toLowerCase() : 'jpg';
+        final dest = await MemoInputSheet.copyGalleryPhoto(
+          cachePath, savePath,
+          filenameOverride: 'import_${ts}_$i.$ext',
+        );
+        if (dest != null) {
+          entries.add(MemoEntry(
+            timestamp: photo.timestamp,
+            latitude: photo.lat,
+            longitude: photo.lng,
+            photoPath: dest,
+          ));
+        }
+      }
+      progress.value = i + 1;
+    }
+
+    // 벌크 저장
+    if (entries.isNotEmpty) {
+      await ref.read(memoRepositoryProvider).appendEntries(date, entries, savePath);
+      final today = DateTime.now();
+      if (date.year == today.year && date.month == today.month && date.day == today.day) {
+        ref.invalidate(todayFileProvider);
+      }
+    }
+
+    if (!mounted) return;
+    Navigator.of(context).pop(); // 진행률 다이얼로그 닫기
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${entries.length}개 사진을 메모에 추가했습니다')),
+    );
+
+    // 오늘이 아닌 날짜면 해당 메모로 이동
+    final today = DateTime.now();
+    final isToday = date.year == today.year && date.month == today.month && date.day == today.day;
+    if (!isToday && entries.isNotEmpty && mounted) {
+      final y = date.year;
+      final m = date.month.toString().padLeft(2, '0');
+      final d = date.day.toString().padLeft(2, '0');
+      final filePath = '$savePath/$y-$m-$d.md';
+      context.push('${AppRoutes.fileList}/${Uri.encodeComponent(filePath)}?name=${Uri.encodeComponent('$y-$m-$d')}');
+    }
+  }
+
   Future<void> _onPhotoTap() async {
-    final result = await MemoInputSheet.pickPhoto(context, ref);
+    final result = await MemoInputSheet.pickMedia(context, ref);
     if (result == null || !mounted) return;
-    MemoInputSheet.show(context,
-      initialPhotoPath: result.path,
+
+    Future<void> Function(MemoEntry)? onAddSave;
+    bool savedToPhotoDate = false;
+    String? photoFilePath;
+
+    if (!result.isVideo && result.timestamp != null) {
+      final today = DateTime.now();
+      final photoDate = result.timestamp!;
+      if (photoDate.year != today.year ||
+          photoDate.month != today.month ||
+          photoDate.day != today.day) {
+        final m = today.month.toString().padLeft(2, '0');
+        final d = today.day.toString().padLeft(2, '0');
+        final choice = await _showPhotoDateDialog(
+          context, photoDate, '오늘 (${today.year}-$m-$d)');
+        if (!mounted || choice == _PhotoDateChoice.cancel) return;
+        if (choice == _PhotoDateChoice.photoDate) {
+          final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+          final repo = ref.read(memoRepositoryProvider);
+          final py = photoDate.year;
+          final pm = photoDate.month.toString().padLeft(2, '0');
+          final pd = photoDate.day.toString().padLeft(2, '0');
+          photoFilePath = '$savePath/$py-$pm-$pd.md';
+          onAddSave = (entry) async {
+            await repo.appendEntry(photoDate, entry, savePath);
+            savedToPhotoDate = true;
+          };
+        }
+      }
+    }
+
+    if (!mounted) return;
+    await MemoInputSheet.show(context,
+      initialPhotoPath: result.isVideo ? null : result.path,
+      initialVideoPath: result.isVideo ? result.path : null,
       initialFishLength: result.length,
       initialLatitude: result.gps?.lat,
       initialLongitude: result.gps?.lng,
+      initialTimestamp: result.timestamp,
+      onAddSave: onAddSave,
     );
+
+    if (savedToPhotoDate && photoFilePath != null && mounted) {
+      final name = photoFilePath.split('/').last.replaceAll('.md', '');
+      context.push(
+        '${AppRoutes.fileList}/${Uri.encodeComponent(photoFilePath)}?name=${Uri.encodeComponent(name)}',
+      );
+    }
   }
 
   Future<void> _onLocationTap() async {
@@ -334,7 +543,7 @@ class _BodyState extends ConsumerState<_Body> {
             }
           },
           child: block is MemoEntry
-              ? MemoEntryCard(entry: block)
+              ? MemoEntryCard(entry: block, savePath: ref.read(settingsProvider).valueOrNull?.savePath ?? '')
               : block is LocationStatus
                   ? LocationStatusCard(status: block)
                   : const SizedBox.shrink(),
@@ -562,26 +771,25 @@ class _ActionBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return SafeArea(
-      child: Container(
-        height: 80,
-        padding: const EdgeInsets.symmetric(horizontal: 24),
-        decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.surface,
-          border: Border(
-            top: BorderSide(
-              color: Theme.of(context).colorScheme.outlineVariant,
-            ),
+    final bottomPadding = MediaQuery.of(context).padding.bottom;
+    return Container(
+      height: 80 + bottomPadding,
+      padding: EdgeInsets.fromLTRB(24, 0, 24, bottomPadding),
+      decoration: BoxDecoration(
+        color: Theme.of(context).colorScheme.surface,
+        border: Border(
+          top: BorderSide(
+            color: Theme.of(context).colorScheme.outlineVariant,
           ),
         ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            ActionButton(icon: Icons.mic, label: '음성', onTap: onVoiceTap),
-            ActionButton(icon: Icons.camera_alt, label: '사진', onTap: onPhotoTap),
-            ActionButton(icon: Icons.map_outlined, label: '지도', onTap: onMapTap),
-          ],
-        ),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceAround,
+        children: [
+          ActionButton(icon: Icons.edit_note, label: '메모', onTap: onVoiceTap),
+          ActionButton(icon: Icons.camera_alt, label: '사진', onTap: onPhotoTap),
+          ActionButton(icon: Icons.map_outlined, label: '지도', onTap: onMapTap),
+        ],
       ),
     );
   }
@@ -740,17 +948,61 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
   }
 
   Future<void> _onPhotoTap() async {
-    final result = await MemoInputSheet.pickPhoto(context, ref);
+    final result = await MemoInputSheet.pickMedia(context, ref);
     if (result == null || !mounted) return;
-    MemoInputSheet.show(
+
+    Future<void> Function(MemoEntry) addSave =
+        (entry) => ref.read(dayFileProvider(widget.filePath).notifier).addEntry(entry);
+    bool savedToPhotoDate = false;
+    String? photoFilePath;
+
+    if (!result.isVideo && result.timestamp != null) {
+      final filename = widget.filePath.replaceAll('\\', '/').split('/').last;
+      final screenDate = FileNameParser.parseDate(filename);
+      final photoDate = result.timestamp!;
+      if (screenDate != null &&
+          (photoDate.year != screenDate.year ||
+           photoDate.month != screenDate.month ||
+           photoDate.day != screenDate.day)) {
+        final sy = screenDate.year;
+        final sm = screenDate.month.toString().padLeft(2, '0');
+        final sd = screenDate.day.toString().padLeft(2, '0');
+        final choice = await _showPhotoDateDialog(
+          context, photoDate, '$sy-$sm-$sd');
+        if (!mounted || choice == _PhotoDateChoice.cancel) return;
+        if (choice == _PhotoDateChoice.photoDate) {
+          final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+          final repo = ref.read(memoRepositoryProvider);
+          final py = photoDate.year;
+          final pm = photoDate.month.toString().padLeft(2, '0');
+          final pd = photoDate.day.toString().padLeft(2, '0');
+          photoFilePath = '$savePath/$py-$pm-$pd.md';
+          addSave = (entry) async {
+            await repo.appendEntry(photoDate, entry, savePath);
+            savedToPhotoDate = true;
+          };
+        }
+      }
+    }
+
+    if (!mounted) return;
+    await MemoInputSheet.show(
       context,
-      initialPhotoPath: result.path,
+      initialPhotoPath: result.isVideo ? null : result.path,
+      initialVideoPath: result.isVideo ? result.path : null,
       initialFishLength: result.length,
       initialLatitude: result.gps?.lat,
       initialLongitude: result.gps?.lng,
-      onAddSave: (entry) =>
-          ref.read(dayFileProvider(widget.filePath).notifier).addEntry(entry),
+      initialTimestamp: result.timestamp,
+      onAddSave: addSave,
     );
+
+    if (savedToPhotoDate && photoFilePath != null && mounted) {
+      final name = photoFilePath.split('/').last.replaceAll('.md', '');
+      context.push(
+        '${AppRoutes.fileList}/${Uri.encodeComponent(photoFilePath)}?name=${Uri.encodeComponent(name)}',
+      );
+    }
   }
 
   Future<void> _onLocationTap() async {
@@ -790,4 +1042,69 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
     }
   }
 
+}
+
+// ── 사진 날짜 선택 다이얼로그 헬퍼 ────────────────────────────
+
+enum _PhotoDateChoice { photoDate, current, cancel }
+
+Future<_PhotoDateChoice> _showPhotoDateDialog(
+  BuildContext context,
+  DateTime photoDate,
+  String currentLabel,
+) async {
+  final py = photoDate.year;
+  final pm = photoDate.month.toString().padLeft(2, '0');
+  final pd = photoDate.day.toString().padLeft(2, '0');
+  final photoLabel = '$py-$pm-$pd';
+  final result = await showDialog<_PhotoDateChoice>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('메모 날짜 선택'),
+      content: Text('사진 촬영 날짜: $photoLabel\n어느 날짜의 메모에 추가하겠습니까?'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(_PhotoDateChoice.cancel),
+          child: const Text('취소'),
+        ),
+        OutlinedButton(
+          onPressed: () => Navigator.of(ctx).pop(_PhotoDateChoice.current),
+          child: Text(currentLabel),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(_PhotoDateChoice.photoDate),
+          child: Text(photoLabel),
+        ),
+      ],
+    ),
+  );
+  return result ?? _PhotoDateChoice.cancel;
+}
+
+class _ImportProgressDialog extends StatelessWidget {
+  final ValueNotifier<int> progress;
+  final int total;
+  const _ImportProgressDialog({required this.progress, required this.total});
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: ValueListenableBuilder<int>(
+          valueListenable: progress,
+          builder: (_, current, __) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('사진 추가 중...', style: Theme.of(context).textTheme.titleMedium),
+              const SizedBox(height: 16),
+              LinearProgressIndicator(value: total > 0 ? current / total : 0),
+              const SizedBox(height: 8),
+              Text('$current / $total'),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }

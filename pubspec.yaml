@@ -49,6 +49,9 @@ dependencies:
   latlong2: ^0.9.0
   flutter_image_compress: ^2.3.0
   exif: ^3.3.0
+  video_player: ^2.9.2
+  video_thumbnail: ^0.5.3
+  photo_manager: ^3.4.0
 
 dev_dependencies:
   flutter_test:

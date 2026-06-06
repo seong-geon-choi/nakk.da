@@ -29,12 +29,14 @@ class MainActivity : FlutterActivity() {
     private var accessibilityChannel: MethodChannel? = null
     private var pendingArResult: MethodChannel.Result? = null
     private var pendingGalleryResult: MethodChannel.Result? = null
+    private var pendingMediaResult: MethodChannel.Result? = null
     private var pendingSafResult: MethodChannel.Result? = null
 
     companion object {
         private const val AR_REQUEST_CODE = 1001
         private const val GALLERY_PICK_REQUEST_CODE = 1002
         private const val SAF_FOLDER_REQUEST_CODE = 1003
+        private const val GALLERY_MEDIA_REQUEST_CODE = 1004
     }
 
     private val voiceResultReceiver = object : BroadcastReceiver() {
@@ -129,6 +131,89 @@ class MainActivity : FlutterActivity() {
                     @Suppress("DEPRECATION")
                     startActivityForResult(intent, GALLERY_PICK_REQUEST_CODE)
                 }
+                "pickGalleryMedia" -> {
+                    if (pendingMediaResult != null) {
+                        result.error("BUSY", "Media pick already in progress", null)
+                        return@setMethodCallHandler
+                    }
+                    pendingMediaResult = result
+                    val mimeFilter = call.argument<String>("mimeFilter") ?: "*/*"
+                    val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                        if (mimeFilter == "*/*") {
+                            type = "*/*"
+                            putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("image/*", "video/*"))
+                        } else {
+                            type = mimeFilter
+                        }
+                    }
+                    @Suppress("DEPRECATION")
+                    startActivityForResult(intent, GALLERY_MEDIA_REQUEST_CODE)
+                }
+                "scanPhotosByDate" -> {
+                    val year  = call.argument<Int>("year")  ?: return@setMethodCallHandler result.error("ARG", "year missing", null)
+                    val month = call.argument<Int>("month") ?: return@setMethodCallHandler result.error("ARG", "month missing", null)
+                    val day   = call.argument<Int>("day")   ?: return@setMethodCallHandler result.error("ARG", "day missing", null)
+                    val cal = java.util.Calendar.getInstance()
+                    cal.set(year, month - 1, day, 0, 0, 0); cal.set(java.util.Calendar.MILLISECOND, 0)
+                    val startMs = cal.timeInMillis
+                    cal.set(year, month - 1, day, 23, 59, 59); cal.set(java.util.Calendar.MILLISECOND, 999)
+                    val endMs = cal.timeInMillis
+                    android.util.Log.d("ScanPhotos", "scan $year-$month-$day startMs=$startMs endMs=$endMs")
+                    // 전체 사진 및 DATE_TAKEN 샘플 로깅
+                    contentResolver.query(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_TAKEN),
+                        null, null, "${MediaStore.Images.Media.DATE_TAKEN} DESC"
+                    )?.use { c ->
+                        android.util.Log.d("ScanPhotos", "total=${c.count}")
+                        val dtCol = c.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+                        var n = 0; while (c.moveToNext() && n < 5) { android.util.Log.d("ScanPhotos", "  sample=${c.getLong(dtCol)}"); n++ }
+                    }
+                    val items = mutableListOf<Map<String, Any?>>()
+                    contentResolver.query(
+                        MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                        arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_TAKEN),
+                        "${MediaStore.Images.Media.DATE_TAKEN} BETWEEN ? AND ?",
+                        arrayOf(startMs.toString(), endMs.toString()),
+                        "${MediaStore.Images.Media.DATE_TAKEN} ASC"
+                    )?.use { cursor ->
+                        android.util.Log.d("ScanPhotos", "matched=${cursor.count}")
+                        val idCol = cursor.getColumnIndex(MediaStore.Images.Media._ID)
+                        val dtCol = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+                        while (cursor.moveToNext()) {
+                            val id = cursor.getLong(idCol)
+                            val dateTaken = cursor.getLong(dtCol)
+                            if (dateTaken == 0L) continue
+                            val contentUri = android.content.ContentUris.withAppendedId(
+                                MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
+                            var gpsLat: Double? = null; var gpsLng: Double? = null
+                            try {
+                                val exifUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                                    MediaStore.setRequireOriginal(contentUri) else contentUri
+                                contentResolver.openInputStream(exifUri)?.use { stream ->
+                                    val exif = android.media.ExifInterface(stream)
+                                    val latStr = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LATITUDE)
+                                    val lngStr = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LONGITUDE)
+                                    val latRef = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LATITUDE_REF)
+                                    val lngRef = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LONGITUDE_REF)
+                                    if (latStr != null && lngStr != null) {
+                                        var lat = parseDms(latStr); var lng = parseDms(lngStr)
+                                        if (latRef?.uppercase() == "S") lat = -lat
+                                        if (lngRef?.uppercase() == "W") lng = -lng
+                                        if (lat != 0.0 || lng != 0.0) { gpsLat = lat; gpsLng = lng }
+                                    }
+                                }
+                            } catch (_: Exception) {}
+                            items.add(mapOf("contentUri" to contentUri.toString(), "dateTaken" to dateTaken, "lat" to gpsLat, "lng" to gpsLng))
+                        }
+                    }
+                    android.util.Log.d("ScanPhotos", "result=${items.size}")
+                    result.success(items)
+                }
+                "copyContentUriToCache" -> {
+                    val uriStr = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                    result.success(copyUriToCache(Uri.parse(uriStr)))
+                }
                 else -> result.notImplemented()
                 }
             }
@@ -169,14 +254,21 @@ class MainActivity : FlutterActivity() {
                             return@setMethodCallHandler
                         }
                         pendingSafResult = result
+                        val initialPath = call.argument<String>("initialPath")
                         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
                                      Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                                      Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                             try {
-                                val initialUri = DocumentsContract.buildDocumentUri(
-                                    "com.android.externalstorage.documents", "primary:Documents")
-                                putExtra(DocumentsContract.EXTRA_INITIAL_URI, initialUri)
+                                val docId = if (initialPath != null) {
+                                    val rel = initialPath.removePrefix("/storage/emulated/0/")
+                                    "primary:$rel"
+                                } else {
+                                    "primary:Documents"
+                                }
+                                putExtra(DocumentsContract.EXTRA_INITIAL_URI,
+                                    DocumentsContract.buildDocumentUri(
+                                        "com.android.externalstorage.documents", docId))
                             } catch (_: Exception) {}
                         }
                         @Suppress("DEPRECATION")
@@ -240,6 +332,79 @@ class MainActivity : FlutterActivity() {
                     "getDisplayPath" -> {
                         val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
                         result.success(safGetDisplayPath(uri))
+                    }
+                    "copyFileToSafFolder" -> {
+                        val sourcePath = call.argument<String>("sourcePath") ?: return@setMethodCallHandler result.error("ARG", "sourcePath missing", null)
+                        val folderUri  = call.argument<String>("folderUri")  ?: return@setMethodCallHandler result.error("ARG", "folderUri missing", null)
+                        val filename   = call.argument<String>("filename")   ?: return@setMethodCallHandler result.error("ARG", "filename missing", null)
+                        try {
+                            val root = DocumentFile.fromTreeUri(this, Uri.parse(folderUri))
+                            val sub  = root?.findFile("photos") ?: root?.createDirectory("photos")
+                            val dest = sub?.findFile(filename)  ?: sub?.createFile("image/jpeg", filename)
+                            if (dest == null) { result.error("CREATE_FAILED", "cannot create file", null); return@setMethodCallHandler }
+                            java.io.FileInputStream(java.io.File(sourcePath)).use { inp ->
+                                contentResolver.openOutputStream(dest.uri)?.use { out -> inp.copyTo(out) }
+                            }
+                            result.success(null)
+                        } catch (e: Exception) { result.error("COPY_ERROR", e.message, null) }
+                    }
+                    "readSafImage" -> {
+                        val folderUri = call.argument<String>("folderUri") ?: return@setMethodCallHandler result.error("ARG", "folderUri missing", null)
+                        val subpath   = call.argument<String>("subpath")   ?: return@setMethodCallHandler result.error("ARG", "subpath missing", null)
+                        try {
+                            var node = DocumentFile.fromTreeUri(this, Uri.parse(folderUri))
+                            for (part in subpath.split("/")) { node = node?.findFile(part) }
+                            val bytes = node?.let { contentResolver.openInputStream(it.uri)?.use { s -> s.readBytes() } }
+                            result.success(bytes)
+                        } catch (e: Exception) { result.error("READ_ERROR", e.message, null) }
+                    }
+                    "listPhotosFolder" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        val photosFolder = safFolder(uri)?.findFile("photos")
+                        val names = photosFolder?.listFiles()
+                            ?.filter { it.isFile }
+                            ?.mapNotNull { it.name }
+                            ?: emptyList<String>()
+                        result.success(names)
+                    }
+                    "deletePhotoFile" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        val filename = call.argument<String>("filename") ?: return@setMethodCallHandler result.error("ARG", "filename missing", null)
+                        safFolder(uri)?.findFile("photos")?.findFile(filename)?.delete()
+                        result.success(null)
+                    }
+                    "readExifGps" -> {
+                        val path = call.argument<String>("path") ?: return@setMethodCallHandler result.error("ARG", "path missing", null)
+                        android.util.Log.d("ExifGps", "readExifGps path=$path")
+                        android.util.Log.d("ExifGps", "file exists=${java.io.File(path).exists()}, size=${java.io.File(path).length()}")
+                        try {
+                            val exif = android.media.ExifInterface(path)
+                            val latStr = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LATITUDE)
+                            val latRef = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LATITUDE_REF)
+                            val lngStr = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LONGITUDE)
+                            val lngRef = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LONGITUDE_REF)
+                            android.util.Log.d("ExifGps", "latStr=$latStr latRef=$latRef lngStr=$lngStr lngRef=$lngRef")
+                            if (latStr == null || lngStr == null) {
+                                android.util.Log.d("ExifGps", "no GPS attributes, returning null")
+                                result.success(null)
+                                return@setMethodCallHandler
+                            }
+                            var lat = parseDms(latStr)
+                            var lng = parseDms(lngStr)
+                            if (latRef?.uppercase() == "S") lat = -lat
+                            if (lngRef?.uppercase() == "W") lng = -lng
+                            android.util.Log.d("ExifGps", "parsed lat=$lat lng=$lng")
+                            if (lat == 0.0 && lng == 0.0) {
+                                android.util.Log.d("ExifGps", "lat/lng both 0.0, returning null")
+                                result.success(null)
+                            } else {
+                                android.util.Log.d("ExifGps", "success lat=$lat lng=$lng")
+                                result.success(mapOf("lat" to lat, "lng" to lng))
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.e("ExifGps", "exception: ${e.message}", e)
+                            result.success(null)
+                        }
                     }
                     else -> result.notImplemented()
                 }
@@ -329,6 +494,43 @@ class MainActivity : FlutterActivity() {
                 pending?.success(null)
             }
         }
+        if (requestCode == GALLERY_MEDIA_REQUEST_CODE) {
+            val pending = pendingMediaResult
+            pendingMediaResult = null
+            if (resultCode == Activity.RESULT_OK && data?.data != null) {
+                val uri = data.data!!
+                val mimeType = contentResolver.getType(uri) ?: ""
+                val isVideo = mimeType.startsWith("video/")
+                val filePath = copyUriToCache(uri)
+                if (isVideo) {
+                    pending?.success(mapOf("path" to filePath, "isVideo" to true, "lat" to null, "lng" to null))
+                } else {
+                    // 이미지: GPS 읽기 시도
+                    var gpsLat: Double? = null
+                    var gpsLng: Double? = null
+                    try {
+                        val exifUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                            MediaStore.setRequireOriginal(uri) else uri
+                        contentResolver.openInputStream(exifUri)?.use { stream ->
+                            val exif = android.media.ExifInterface(stream)
+                            val latStr = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LATITUDE)
+                            val lngStr = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LONGITUDE)
+                            val latRef = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LATITUDE_REF)
+                            val lngRef = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LONGITUDE_REF)
+                            if (latStr != null && lngStr != null) {
+                                var lat = parseDms(latStr); var lng = parseDms(lngStr)
+                                if (latRef?.uppercase() == "S") lat = -lat
+                                if (lngRef?.uppercase() == "W") lng = -lng
+                                if (lat != 0.0 || lng != 0.0) { gpsLat = lat; gpsLng = lng }
+                            }
+                        }
+                    } catch (_: Exception) {}
+                    pending?.success(mapOf("path" to filePath, "isVideo" to false, "lat" to gpsLat, "lng" to gpsLng))
+                }
+            } else {
+                pending?.success(null)
+            }
+        }
         if (requestCode == GALLERY_PICK_REQUEST_CODE) {
             val pending = pendingGalleryResult
             pendingGalleryResult = null
@@ -349,11 +551,55 @@ class MainActivity : FlutterActivity() {
                 }
                 // 권한 없거나 경로 조회 실패 시 앱 캐시에 복사
                 if (filePath == null) filePath = copyUriToCache(uri)
-                pending?.success(filePath)
+
+                // ACCESS_MEDIA_LOCATION 권한으로 원본 URI에서 GPS 읽기
+                var gpsLat: Double? = null
+                var gpsLng: Double? = null
+                try {
+                    val exifUri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                        MediaStore.setRequireOriginal(uri) else uri
+                    contentResolver.openInputStream(exifUri)?.use { stream ->
+                        val exif = android.media.ExifInterface(stream)
+                        val latStr = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LATITUDE)
+                        val lngStr = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LONGITUDE)
+                        val latRef = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LATITUDE_REF)
+                        val lngRef = exif.getAttribute(android.media.ExifInterface.TAG_GPS_LONGITUDE_REF)
+                        android.util.Log.d("ExifGps", "gallery original URI: latStr=$latStr lngStr=$lngStr latRef=$latRef")
+                        if (latStr != null && lngStr != null) {
+                            var lat = parseDms(latStr); var lng = parseDms(lngStr)
+                            if (latRef?.uppercase() == "S") lat = -lat
+                            if (lngRef?.uppercase() == "W") lng = -lng
+                            if (lat != 0.0 || lng != 0.0) { gpsLat = lat; gpsLng = lng }
+                            android.util.Log.d("ExifGps", "gallery GPS: lat=$lat lng=$lng")
+                        }
+                    }
+                } catch (e: UnsupportedOperationException) {
+                    android.util.Log.d("ExifGps", "ACCESS_MEDIA_LOCATION not granted")
+                } catch (e: Exception) {
+                    android.util.Log.w("ExifGps", "gallery GPS read failed: ${e.message}")
+                }
+
+                pending?.success(mapOf("path" to filePath, "lat" to gpsLat, "lng" to gpsLng))
             } else {
                 pending?.success(null)  // 취소
             }
         }
+    }
+
+    // ── EXIF DMS 파서 ────────────────────────────────────────
+
+    private fun parseRatio(r: String): Double {
+        val idx = r.trim().indexOf('/')
+        if (idx < 0) return r.trim().toDoubleOrNull() ?: 0.0
+        val n = r.substring(0, idx).trim().toDoubleOrNull() ?: 0.0
+        val d = r.substring(idx + 1).trim().toDoubleOrNull() ?: 1.0
+        return if (d == 0.0) 0.0 else n / d
+    }
+
+    private fun parseDms(dms: String): Double {
+        val parts = dms.split(",")
+        if (parts.size < 3) return 0.0
+        return parseRatio(parts[0]) + parseRatio(parts[1]) / 60.0 + parseRatio(parts[2]) / 3600.0
     }
 
     // ── SAF 헬퍼 ─────────────────────────────────────────────
@@ -370,7 +616,7 @@ class MainActivity : FlutterActivity() {
 
     private fun safWriteFile(uriString: String, filename: String, content: String) {
         val folder = safFolder(uriString) ?: return
-        val file = folder.findFile(filename) ?: folder.createFile("text/plain", filename) ?: return
+        val file = folder.findFile(filename) ?: folder.createFile("application/octet-stream", filename) ?: return
         try {
             contentResolver.openOutputStream(file.uri, "wt")?.use {
                 it.write(content.toByteArray(Charsets.UTF_8))
@@ -416,7 +662,13 @@ class MainActivity : FlutterActivity() {
 
     private fun copyUriToCache(uri: Uri): String? {
         return try {
-            val dest = File(cacheDir, "gallery_${System.currentTimeMillis()}.jpg")
+            val mimeType = contentResolver.getType(uri) ?: "image/jpeg"
+            val ext = when {
+                mimeType.startsWith("video/") -> "mp4"
+                mimeType.contains("png") -> "png"
+                else -> "jpg"
+            }
+            val dest = File(cacheDir, "gallery_${System.currentTimeMillis()}.$ext")
             contentResolver.openInputStream(uri)?.use { input ->
                 dest.outputStream().use { output -> input.copyTo(output) }
             }

@@ -4,6 +4,7 @@ class MemoEntry {
   final double? longitude;
   final String? text;
   final String? photoPath;
+  final String? videoPath;
   final double? fishLength;
 
   const MemoEntry({
@@ -12,10 +13,12 @@ class MemoEntry {
     this.longitude,
     this.text,
     this.photoPath,
+    this.videoPath,
     this.fishLength,
   });
 
   bool get isPhoto => photoPath != null;
+  bool get isVideo => videoPath != null;
   bool get hasGps => latitude != null && longitude != null;
 
   String get timeLabel {

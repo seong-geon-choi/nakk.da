@@ -30,6 +30,7 @@ class FileListRepositoryImpl implements FileListRepository {
         displayName: name.replaceAll('.md', ''),
         entryCount: _countEntries(content),
         displayFolderPath: displayPath,
+        address: _extractAddress(content),
       ));
     }
     summaries.sort((a, b) => b.date.compareTo(a.date));
@@ -49,13 +50,14 @@ class FileListRepositoryImpl implements FileListRepository {
       final name = file.uri.pathSegments.last;
       final date = FileNameParser.parseDate(name);
       if (date == null) continue;
-      final count = await _countEntriesFile(file);
+      final content = await file.readAsString();
       summaries.add(FileSummary(
         date: date,
         filePath: file.path,
         displayName: name.replaceAll('.md', ''),
-        entryCount: count,
+        entryCount: _countEntries(content),
         displayFolderPath: savePath,
+        address: _extractAddress(content),
       ));
     }
     summaries.sort((a, b) => b.date.compareTo(a.date));
@@ -99,17 +101,69 @@ class FileListRepositoryImpl implements FileListRepository {
     }
   }
 
+  @override
+  Future<int> cleanUnusedPhotos(String savePath) async {
+    if (savePath.isEmpty) return 0;
+
+    // 모든 .md 파일에서 참조된 photos/ 파일명 수집
+    final referenced = <String>{};
+    if (SafService.isSafUri(savePath)) {
+      final names = await _saf.listMdFiles(savePath);
+      for (final name in names) {
+        final content = await _saf.readFile(savePath, name) ?? '';
+        _extractPhotoFilenames(content, referenced);
+      }
+    } else {
+      final dir = Directory(savePath);
+      if (await dir.exists()) {
+        await for (final entity in dir.list()) {
+          if (entity is File && entity.path.endsWith('.md')) {
+            _extractPhotoFilenames(await entity.readAsString(), referenced);
+          }
+        }
+      }
+    }
+
+    // photos/ 폴더의 파일 중 미참조 파일 삭제
+    int deleted = 0;
+    if (SafService.isSafUri(savePath)) {
+      final photos = await _saf.listPhotosFolder(savePath);
+      for (final filename in photos) {
+        if (!referenced.contains(filename)) {
+          await _saf.deletePhotoFile(savePath, filename);
+          deleted++;
+        }
+      }
+    } else {
+      final photosDir = Directory('$savePath/photos');
+      if (await photosDir.exists()) {
+        await for (final entity in photosDir.list()) {
+          if (entity is File) {
+            final filename = entity.uri.pathSegments.last;
+            if (!referenced.contains(filename)) {
+              await entity.delete();
+              deleted++;
+            }
+          }
+        }
+      }
+    }
+    return deleted;
+  }
+
+  void _extractPhotoFilenames(String content, Set<String> out) {
+    for (final m in RegExp(r'!\[\]\(photos/([^)]+)\)').allMatches(content)) {
+      out.add(m.group(1)!);
+    }
+  }
+
   int _countEntries(String content) {
     return '### '.allMatches(content).length;
   }
 
-  Future<int> _countEntriesFile(File file) async {
-    int count = 0;
-    final lines = await file.readAsLines();
-    for (final line in lines) {
-      if (line.startsWith('### ')) count++;
-    }
-    return count;
+  String? _extractAddress(String content) {
+    final match = RegExp(r'- 📍 (.+)').firstMatch(content);
+    return match?.group(1)?.trim();
   }
 
   Future<void> _deleteLinkedPhotosSaf(String folderUri, String filename) async {

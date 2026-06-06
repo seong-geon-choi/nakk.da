@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'memo_provider.dart';
 import '../../settings/presentation/settings_provider.dart';
+import '../../../core/services/saf_service.dart';
 
 class MemoEditorScreen extends ConsumerStatefulWidget {
   final String filePath;
@@ -36,9 +37,20 @@ class _MemoEditorScreenState extends ConsumerState<MemoEditorScreen> {
     super.dispose();
   }
 
+  (String folderUri, String filename) _splitSafPath() {
+    final idx = widget.filePath.lastIndexOf('/');
+    return (widget.filePath.substring(0, idx), widget.filePath.substring(idx + 1));
+  }
+
   Future<void> _load() async {
     try {
-      final content = await File(widget.filePath).readAsString();
+      String content;
+      if (SafService.isSafUri(widget.filePath)) {
+        final (folderUri, filename) = _splitSafPath();
+        content = await SafService().readFile(folderUri, filename) ?? '';
+      } else {
+        content = await File(widget.filePath).readAsString();
+      }
       _controller.text = content;
     } catch (_) {}
     setState(() => _loading = false);
@@ -50,7 +62,12 @@ class _MemoEditorScreenState extends ConsumerState<MemoEditorScreen> {
   Future<void> _save() async {
     setState(() => _saving = true);
     try {
-      await File(widget.filePath).writeAsString(_controller.text);
+      if (SafService.isSafUri(widget.filePath)) {
+        final (folderUri, filename) = _splitSafPath();
+        await SafService().writeFile(folderUri, filename, _controller.text);
+      } else {
+        await File(widget.filePath).writeAsString(_controller.text);
+      }
       _invalidateTodayIfNeeded();
       if (mounted) {
         setState(() {

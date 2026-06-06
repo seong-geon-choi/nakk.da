@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'package:flutter/services.dart';
 
 class SafService {
@@ -5,8 +6,9 @@ class SafService {
 
   static bool isSafUri(String? path) => path?.startsWith('content://') == true;
 
-  Future<({String uri, String displayPath})?> pickFolder() async {
-    final result = await _channel.invokeMapMethod<String, String>('pickFolder');
+  Future<({String uri, String displayPath})?> pickFolder({String? initialPath}) async {
+    final args = initialPath != null ? {'initialPath': initialPath} : null;
+    final result = await _channel.invokeMapMethod<String, String>('pickFolder', args);
     if (result == null) return null;
     final uri = result['uri'];
     final displayPath = result['displayPath'];
@@ -49,4 +51,40 @@ class SafService {
 
   Future<String> getDisplayPath(String folderUri) async =>
       await _channel.invokeMethod<String>('getDisplayPath', {'uri': folderUri}) ?? folderUri;
+
+  /// 로컬 캐시 파일을 SAF 폴더의 photos/ 서브폴더로 복사
+  Future<void> copyFileToSafFolder(String sourcePath, String folderUri, String filename) =>
+      _channel.invokeMethod('copyFileToSafFolder', {
+        'sourcePath': sourcePath,
+        'folderUri': folderUri,
+        'filename': filename,
+      });
+
+  Future<List<String>> listPhotosFolder(String folderUri) async {
+    final result = await _channel.invokeListMethod<String>('listPhotosFolder', {'uri': folderUri});
+    return result ?? [];
+  }
+
+  Future<void> deletePhotoFile(String folderUri, String filename) =>
+      _channel.invokeMethod('deletePhotoFile', {'uri': folderUri, 'filename': filename});
+
+  /// 로컬 파일 경로에서 EXIF GPS 좌표 읽기 (Android native ExifInterface 사용)
+  Future<({double lat, double lng})?> readExifGpsFromPath(String filePath) async {
+    final result = await _channel.invokeMapMethod<String, dynamic>('readExifGps', {'path': filePath});
+    if (result == null) return null;
+    final lat = (result['lat'] as num?)?.toDouble();
+    final lng = (result['lng'] as num?)?.toDouble();
+    if (lat == null || lng == null) return null;
+    if (lat == 0.0 && lng == 0.0) return null;
+    return (lat: lat, lng: lng);
+  }
+
+  /// SAF 폴더 내 subpath(예: "photos/photo_123.jpg")의 이미지 bytes 반환
+  Future<Uint8List?> readSafImage(String folderUri, String subpath) async {
+    final bytes = await _channel.invokeMethod<Uint8List>('readSafImage', {
+      'folderUri': folderUri,
+      'subpath': subpath,
+    });
+    return bytes;
+  }
 }

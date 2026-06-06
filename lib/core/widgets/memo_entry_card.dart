@@ -1,12 +1,14 @@
-import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../features/memo/domain/models/memo_entry.dart';
+import 'saf_image.dart';
+import 'video_player_widget.dart';
 
 class MemoEntryCard extends StatelessWidget {
   final MemoEntry entry;
+  final String savePath;
   final int? maxLines;
 
-  const MemoEntryCard({super.key, required this.entry, this.maxLines});
+  const MemoEntryCard({super.key, required this.entry, required this.savePath, this.maxLines});
 
   @override
   Widget build(BuildContext context) {
@@ -17,7 +19,10 @@ class MemoEntryCard extends StatelessWidget {
         children: [
           _Header(entry: entry),
           const SizedBox(height: 6),
-          if (entry.photoPath != null) _PhotoBody(path: entry.photoPath!),
+          if (entry.photoPath != null)
+            SafImage(photoPath: entry.photoPath!, savePath: savePath, height: 120),
+          if (entry.videoPath != null)
+            VideoPlayerWidget(videoPath: entry.videoPath!, height: 120),
           if (entry.fishLength != null) ...[
             const SizedBox(height: 4),
             Text(
@@ -67,73 +72,6 @@ class _TextBody extends StatelessWidget {
       style: const TextStyle(fontSize: 15, height: 1.4),
       maxLines: maxLines,
       overflow: maxLines != null ? TextOverflow.ellipsis : null,
-    );
-  }
-}
-
-class _PhotoBody extends StatelessWidget {
-  final String path;
-  const _PhotoBody({required this.path});
-
-  @override
-  Widget build(BuildContext context) {
-    final file = File(path);
-    return GestureDetector(
-      onTap: () => _openViewer(context, path),
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(8),
-        child: file.existsSync()
-            ? Image.file(file,
-                height: 120,
-                width: double.infinity,
-                fit: BoxFit.cover)
-            : Container(
-                height: 120,
-                color: Theme.of(context).colorScheme.surfaceContainerHighest,
-                child: const Center(child: Icon(Icons.broken_image, size: 36)),
-              ),
-      ),
-    );
-  }
-
-  void _openViewer(BuildContext context, String path) {
-    // android_intent_plus 없이 flutter 기본 방식으로 전체화면 표시
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => _FullScreenImagePage(path: path),
-      ),
-    );
-  }
-}
-
-class _FullScreenImagePage extends StatelessWidget {
-  final String path;
-  const _FullScreenImagePage({required this.path});
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.transparent,
-        foregroundColor: Colors.white,
-      ),
-      body: SafeArea(
-        top: false,
-        child: Center(
-          child: InteractiveViewer(
-            child: Image.file(
-              File(path),
-              fit: BoxFit.contain,
-              errorBuilder: (ctx, err, stack) => const Icon(
-                Icons.broken_image,
-                color: Colors.white,
-                size: 64,
-              ),
-            ),
-          ),
-        ),
-      ),
     );
   }
 }

@@ -32,9 +32,12 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
 
   /// SAF 폴더 피커를 열고 선택된 폴더를 savePath로 저장
   Future<bool> pickSaveFolder() async {
-    final picked = await _saf.pickFolder();
-    if (picked == null) return false;
     final current = state.valueOrNull;
+    final hint = current?.saveDisplayPath.isNotEmpty == true
+        ? current!.saveDisplayPath
+        : SettingsRepositoryImpl.defaultMemoDisplayPath;
+    final picked = await _saf.pickFolder(initialPath: hint);
+    if (picked == null) return false;
     if (current == null) return false;
     final updated = current.copyWith(
       savePath: picked.uri,
@@ -51,6 +54,17 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     final updated = current.copyWith(savePath: path);
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
+  }
+
+  Future<bool> pickPhotoSaveFolder() async {
+    final current = state.valueOrNull;
+    final picked = await _saf.pickFolder(initialPath: current?.photoSavePath);
+    if (picked == null) return false;
+    if (current == null) return false;
+    final updated = current.copyWith(photoSavePath: picked.displayPath);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+    return true;
   }
 
   Future<void> updatePhotoSavePath(String path) async {
@@ -73,6 +87,14 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     final current = state.valueOrNull;
     if (current == null) return;
     final updated = current.copyWith(showLocationButton: show);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  Future<void> updateShowAddressInMemoName(bool value) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(showAddressInMemoName: value);
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
   }

@@ -10,8 +10,11 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _photoSavePathKey = 'photo_save_path';
   static const _showLocationButtonKey = 'show_location_button';
   static const _autoSaveVoiceKey = 'auto_save_voice';
+  static const _showAddressInMemoNameKey = 'show_address_in_memo_name';
   static const _khoaApiKeyKey = 'khoa_api_key';
   static const _watermarkKey = 'watermark_settings';
+
+  static const defaultMemoDisplayPath = '/storage/emulated/0/Documents/nakkda';
 
   @override
   Future<AppSettings> load() async {
@@ -24,6 +27,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
         : storedPhotoPath;
     final showLocationButton = prefs.getBool(_showLocationButtonKey) ?? true;
     final autoSaveVoice = prefs.getBool(_autoSaveVoiceKey) ?? false;
+    final showAddressInMemoName = prefs.getBool(_showAddressInMemoNameKey) ?? true;
     final khoaApiKey = prefs.getString(_khoaApiKeyKey);
     final wmJson = prefs.getString(_watermarkKey);
     final watermark = wmJson != null
@@ -35,6 +39,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       photoSavePath: photoSavePath,
       showLocationButton: showLocationButton,
       autoSaveVoice: autoSaveVoice,
+      showAddressInMemoName: showAddressInMemoName,
       khoaApiKey: khoaApiKey,
       watermark: watermark,
     );
@@ -48,6 +53,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setString(_photoSavePathKey, settings.photoSavePath);
     await prefs.setBool(_showLocationButtonKey, settings.showLocationButton);
     await prefs.setBool(_autoSaveVoiceKey, settings.autoSaveVoice);
+    await prefs.setBool(_showAddressInMemoNameKey, settings.showAddressInMemoName);
     if (settings.khoaApiKey != null) {
       await prefs.setString(_khoaApiKeyKey, settings.khoaApiKey!);
     } else {

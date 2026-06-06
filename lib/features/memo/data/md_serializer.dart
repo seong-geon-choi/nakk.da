@@ -10,6 +10,7 @@ class MdSerializer {
         : '### ${entry.timeLabel}';
     final parts = <String>[];
     if (entry.photoPath != null) parts.add('![](${entry.photoPath})');
+    if (entry.videoPath != null) parts.add('[video](${entry.videoPath})');
     if (entry.fishLength != null) parts.add('- 📏 ${entry.fishLength!.toStringAsFixed(1)}cm');
     if (entry.text != null && entry.text!.isNotEmpty) parts.add(entry.text!);
     final body = parts.join('\n');
@@ -200,19 +201,20 @@ class MdSerializer {
         final body = bodyLines.join('\n');
         final photoMatch = RegExp(r'!\[\]\((.+?)\)').firstMatch(body);
         final photoPath = photoMatch?.group(1);
-        String? text;
-        if (photoPath != null) {
-          final remaining = body.replaceFirst('![]($photoPath)', '').trim();
-          text = remaining.isEmpty ? null : remaining;
-        } else {
-          text = body.isEmpty ? null : body;
-        }
+        final videoMatch = RegExp(r'\[video\]\((.+?)\)').firstMatch(body);
+        final videoPath = videoMatch?.group(1);
+        var remaining = body;
+        if (photoPath != null) remaining = remaining.replaceFirst('![]($photoPath)', '');
+        if (videoPath != null) remaining = remaining.replaceFirst('[video]($videoPath)', '');
+        remaining = remaining.trim();
+        final text = remaining.isEmpty ? null : remaining;
         result.add(MemoEntry(
           timestamp: ts,
           latitude: lat,
           longitude: lng,
           text: text,
           photoPath: photoPath,
+          videoPath: videoPath,
           fishLength: fishLength,
         ));
         continue;
@@ -220,6 +222,11 @@ class MdSerializer {
 
       i++;
     }
+    result.sort((a, b) {
+      final ta = a is MemoEntry ? a.timestamp : (a as LocationStatus).timestamp;
+      final tb = b is MemoEntry ? b.timestamp : (b as LocationStatus).timestamp;
+      return ta.compareTo(tb);
+    });
     return result;
   }
 

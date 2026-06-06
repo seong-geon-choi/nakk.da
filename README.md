@@ -1,14 +1,6 @@
-# 낚.다 (NAKK.DA)
+# vo-rec
 
-낚시 현장에서 바로 쓰는 메모 앱. 음성 메모, 사진 촬영, GPS 기록, 물때·날씨 정보를 하나의 앱에서 관리합니다.
-
----
-
-## 스크린샷
-
-| 홈 화면 | 파일 목록 | 지도 | 설정 |
-|:---:|:---:|:---:|:---:|
-| ![홈](docs/screenshots/01_home.png) | ![파일목록](docs/screenshots/02_file_list.png) | ![지도](docs/screenshots/03_map.png) | ![설정](docs/screenshots/05_settings.png) |
+낚시·야외 활동 중 현재 위치, 환경 정보(기온·물때·수온)와 함께 메모를 빠르게 남길 수 있는 Android 현장 기록 앱.
 
 ---
 
@@ -16,128 +8,125 @@
 
 | 기능 | 설명 |
 |------|------|
-| **음성 메모** | 화면을 켜지 않아도 볼륨 버튼으로 음성 인식 트리거, Foreground Service로 백그라운드 동작 |
-| **사진 메모** | 일반 카메라(줄자 사진) / AR 카메라(ARCore 실측) / 갤러리 선택 3가지 입력 방식 |
-| **워터마크** | 날짜·시간·커스텀 텍스트를 사진에 합성, 위치·폰트·크기·투명도 설정 가능 |
-| **GPS 기록** | 메모마다 위도·경도 자동 첨부, 물고기 길이(cm) 별도 기록 |
-| **현황 블록** | 기온·수온·물때·관측소 정보를 메모 파일에 실시간 삽입 |
-| **지도 보기** | GPS가 첨부된 메모를 flutter_map으로 마커 클러스터링하여 표시 |
-| **파일 목록** | 날짜별 메모 파일(.md) 목록 및 전체 검색 |
-| **저장 경로** | DCIM/nakkda (앱 삭제 후에도 유지) / 앱 전용 저장소 자동 선택 |
+| **음성 메모** | 탭 → 음성 인식 시작, 3초 침묵 후 자동 종료. 말하는 동안 실시간 미리보기 표시 |
+| **사진 첨부** | 카메라 촬영 또는 갤러리 선택 → DCIM/nakkda에 저장, 갤러리 즉시 반영 |
+| **동영상 촬영·첨부** | 카메라 스와이프로 동영상 모드 전환, 720p/1080p 해상도 선택. 갤러리에서도 선택 가능. 메모에 썸네일로 표시, 탭 시 전체화면 재생 |
+| **GPS 자동 삽입** | 메모·사진 저장 시 현재 GPS 좌표 자동 기록 (캐시 → 최근 위치 순 fallback) |
+| **위치 추가** | 현재 위치·기온·물때·수온을 수집해 미리보기 후 저장 |
+| **지도 보기** | 날짜별 GPS 지점 지도 표시, 경로 연결, 줌 연동 자동 클러스터링 |
+| **날짜별 .md 저장** | 모든 메모를 `YYYY-MM-DD.md` 파일 하나에 통합 저장 |
+| **환경 정보 자동 입력** | GPS 기반 역지오코딩 주소, 기온(기상청), 물때·수온(해양조사원 API) |
+
+---
+
+## 스크린샷 구성
+
+```
+권한 요청 → 메인(홈) → 메모 입력 시트
+                     → 소스 선택 시트 → 카메라 (사진/동영상 모드)
+                                      → 갤러리 피커 (전체/사진/동영상 탭)
+                     → 위치 추가 미리보기
+                     → 지도
+                     → 파일 목록 → 파일 뷰어
+                     → 설정
+```
 
 ---
 
 ## 기술 스택
 
-- **Flutter** 3.x (Android 전용)
-- **Kotlin** — AR 카메라 Activity, Foreground Service, MediaStore 저장
-- **ARCore** — 실세계 거리 측정 (AR 카메라)
-- **Riverpod** — 상태 관리 (AsyncNotifier 패턴)
-- **go_router** — 선언적 라우팅
-- **flutter_map + latlong2** — 지도 표시
-- **speech_to_text** — 음성 인식
-- **camera** — 일반 카메라 프리뷰 / 촬영
-- **flutter_image_compress** — 워터마크 이미지 처리
-- **MediaStore API** — Android 10+ 갤러리 저장
-
----
-
-## 개발 환경
-
-| 항목 | 버전 |
+| 항목 | 내용 |
 |------|------|
-| Flutter SDK | ^3.11.4 |
-| Dart SDK | ^3.11.4 |
-| Android minSdk | 26 (Android 8.0) |
-| Android targetSdk | 36 (Android 16) |
-| ARCore | 필수 (AR 카메라 기능) |
-
-### 사전 준비
-
-```bash
-# Flutter SDK 설치 후
-flutter pub get
-```
-
-### API 키 설정
-
-`lib/core/constants/api_keys.dart` 에 [data.go.kr](https://www.data.go.kr) 공공데이터포털 API 키를 입력합니다.
-
-```dart
-// 국립해양조사원 조위관측 API 키 (디코딩 키)
-const String kDefaultKhoaApiKey = '발급받은_키_입력';
-```
-
-> API 키는 [국립해양조사원 바다누리 API](https://www.khoa.go.kr/api/oceangrid/tideObsPreTab/search.do) 에서 발급받을 수 있습니다.
+| 플랫폼 | Android (Flutter) |
+| 최소 SDK | API 26 (Android 8.0) |
+| 상태 관리 | flutter_riverpod ^2.x |
+| 라우팅 | go_router ^14.x |
+| 지도 | flutter_map ^7.x + latlong2 |
+| 음성 인식 | speech_to_text ^7.x (디바이스 내장 엔진) |
+| 사진 | camera ^0.11.x + MediaStore API (Kotlin 채널) |
+| 동영상 | video_player ^2.9.x + video_thumbnail ^0.5.x |
+| 갤러리 피커 | photo_manager ^3.4.x (커스텀 갤러리, 탭 필터링) |
+| GPS | geolocator ^13.x |
+| 권한 | permission_handler ^11.x |
+| 저장소 | path_provider + shared_preferences |
+| HTTP | http ^1.x (기상청·해양조사원 API) |
 
 ---
 
-## 빌드
-
-```bash
-# 디버그 APK
-flutter build apk --debug
-
-# 릴리즈 APK
-flutter build apk --release
-```
-
----
-
-## 앱 구조
+## 저장 구조
 
 ```
-lib/
-├── app.dart                      # MaterialApp 루트
-├── main.dart                     # 앱 진입점
-├── core/
-│   ├── constants/                # API 키, 앱 상수
-│   ├── router/                   # go_router 라우팅
-│   ├── services/                 # AR, 접근성 서비스 브릿지
-│   ├── theme/                    # 앱 테마
-│   ├── utils/                    # 워터마크, 미디어스캐너, 날짜 포매터
-│   └── widgets/                  # 공통 위젯
-└── features/
-    ├── file_list/                # 메모 파일 목록 / 뷰어
-    ├── location/                 # GPS·역지오코딩·날씨·물때
-    ├── map/                      # 지도 화면
-    ├── memo/                     # 메모 CRUD, 직렬화(.md)
-    ├── permission/               # 권한 요청 화면
-    ├── photo/                    # 카메라·갤러리 촬영
-    ├── settings/                 # 앱 설정 (저장 경로, 워터마크)
-    ├── tide/                     # 물때 API 서비스
-    └── weather/                  # 날씨 API 서비스
+[메모 저장 경로]/
+├── 2026-06-03.md
+├── 2026-06-02.md
+└── ...
 
-android/app/src/main/kotlin/com/nakkda/nakkda/
-├── MainActivity.kt               # Flutter 진입점, MediaStore 저장 채널
-├── ArMeasureActivity.kt          # AR 카메라 (ARCore + OpenGL)
-├── ArDotsOverlayView.kt          # AR 측정 점 오버레이
-├── VoiceRecordForegroundService.kt  # 볼륨 버튼 감지 + 음성 인식
-├── VoiceRecordAccessibilityService.kt # 접근성 서비스 (보조)
-├── BackgroundRenderer.kt         # ARCore 배경 렌더러
-└── DisplayRotationHelper.kt      # AR 디스플레이 회전 보조
+DCIM/nakkda/                          # 사진 (갤러리에 표시)
+└── NAKKDA_20260603_143000.jpg
+
+Android/data/com.nakkda.nakkda/files/videos/   # 동영상 (앱 전용)
+├── video_1717394400000.mp4
+└── gallery_video_1717394500000.mp4
 ```
 
----
-
-## 메모 저장 형식
-
-메모는 날짜별 마크다운(`.md`) 파일로 저장됩니다.
+### .md 파일 포맷
 
 ```markdown
 # 2026-06-03
 
-## 현황
-- 📍 인천광역시 중구
-- 🌡 기온: 22°C | 💧 수온 18°C
-- 관측소: 인천 (2.1km) | 🌊 5물 (만조 18:03)
+## 현황 (14:30 이동)
+- 📍 경남 통영시 미수동
+- 🌡 기온: 22.5°C | 🌊 5물 (만조 18:03) | 💧 수온 19.6°C
+- 관측소: 통영 (12.3km)
 
 ---
 
-### 14:32 | 🛰 37.4563, 126.7051
-![](/storage/emulated/0/DCIM/nakkda/NAKKDA_20260603_143201.jpg)
-- 📏 42.5cm
+### 14:35 | 🛰 34.8540, 128.4330
+감성돔 노림. 조류 약하고 바람 없음.
+
+---
+
+### 14:52 | 🛰 34.8540, 128.4330
+![](/storage/emulated/0/DCIM/nakkda/NAKKDA_20260603_145200.jpg)
+- 📏 38.5cm
+
+---
+
+### 15:10 | 🛰 34.8540, 128.4330
+[video](/storage/emulated/0/Android/data/com.nakkda.nakkda/files/videos/video_1717395000000.mp4)
 ```
+
+---
+
+## 빌드 및 실행
+
+```bash
+cd vo_rec
+flutter pub get
+flutter run
+```
+
+APK 빌드:
+```bash
+flutter build apk --debug
+# 한글 경로 기기에 설치:
+adb install -r build/app/outputs/flutter-apk/app-debug.apk
+```
+
+앱 아이콘 재생성:
+```bash
+flutter pub run flutter_launcher_icons
+```
+
+---
+
+## 문서
+
+| 문서 | 설명 |
+|------|------|
+| [docs/prd.md](docs/prd.md) | 제품 요구사항 정의서 |
+| [docs/architecture.md](docs/architecture.md) | 아키텍처 설계서 |
+| [docs/screens.md](docs/screens.md) | 화면 설계서 |
 
 ---
 
@@ -145,17 +134,10 @@ android/app/src/main/kotlin/com/nakkda/nakkda/
 
 | 권한 | 용도 |
 |------|------|
-| 마이크 | 음성 메모 녹음 |
-| 위치 | GPS 좌표 기록 |
-| 카메라 | 사진 촬영 |
-| 사진/미디어 | 갤러리 접근 |
-| 알림 | Foreground Service 알림 표시 |
-| 전체 파일 접근 | DCIM/nakkda 영구 저장 (선택) |
-
----
-
-## 문서
-
-- [아키텍처](docs/architecture.md)
-- [기능 상세](docs/features.md)
-- [API 키 설정](docs/api_setup.md)
+| `RECORD_AUDIO` | 음성 메모 녹음, 동영상 오디오 녹음 |
+| `ACCESS_FINE_LOCATION` | GPS 좌표 기록 |
+| `CAMERA` | 사진 촬영 및 동영상 녹화 |
+| `READ_MEDIA_IMAGES` | 갤러리 사진 접근 |
+| `READ_MEDIA_VIDEO` | 갤러리 동영상 접근 |
+| `READ_MEDIA_VISUAL_USER_SELECTED` | Android 14+ 부분 접근 모드 지원 |
+| `ACCESS_MEDIA_LOCATION` | 갤러리 사진 EXIF GPS 읽기 |

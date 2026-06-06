@@ -1,5 +1,7 @@
 package com.nakkda.nakkda
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
@@ -8,19 +10,24 @@ import android.os.*
 import android.speech.*
 import android.view.KeyEvent
 import android.view.accessibility.AccessibilityEvent
+import androidx.core.app.NotificationCompat
 
 class VoiceRecordAccessibilityService : AccessibilityService() {
 
     companion object {
         const val PREFS_NAME = "nakkda_prefs"
         const val PREFS_KEY = "pending_voice_result"
+        const val PREFS_VOICE_RUNNING = "voice_running"
         const val BROADCAST_ACTION = "com.nakkda.nakkda.VOICE_RESULT"
         private const val DOUBLE_PRESS_MS = 500L
+        private const val RESULT_CHANNEL_ID = "nakkda_result_channel"
+        private const val RESULT_NOTIFICATION_ID = 1003
     }
 
     private var isRecording = false
     private var speechRecognizer: SpeechRecognizer? = null
     private val handler = Handler(Looper.getMainLooper())
+    private var wakeLock: PowerManager.WakeLock? = null
 
     // 첫 번째 누름을 소비하고, 두 번째가 오지 않으면 볼륨을 보상 조정
     private var pendingCompensate = false
@@ -45,6 +52,9 @@ class VoiceRecordAccessibilityService : AccessibilityService() {
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP &&
             event.action == KeyEvent.ACTION_DOWN
         ) {
+            val running = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(PREFS_VOICE_RUNNING, true)
+            if (!running) return false
             if (pendingCompensate) {
                 // 두 번째 누름 — 보상 취소 + 음성 메모 시작 (볼륨 변화 없음)
                 pendingCompensate = false
@@ -60,9 +70,39 @@ class VoiceRecordAccessibilityService : AccessibilityService() {
         return false
     }
 
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "nakkda:accessibility_voice")
+        wakeLock?.acquire(30_000L)
+    }
+
+    private fun releaseWakeLock() {
+        if (wakeLock?.isHeld == true) wakeLock?.release()
+        wakeLock = null
+    }
+
+    private fun showRecordingNotification() {
+        ensureResultChannel()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(RESULT_NOTIFICATION_ID)
+        nm.notify(RESULT_NOTIFICATION_ID,
+            NotificationCompat.Builder(this, RESULT_CHANNEL_ID)
+                .setContentTitle("음성 인식 중")
+                .setContentText("말씀하세요...")
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setSilent(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .build()
+        )
+    }
+
     private fun startVoiceRecording() {
         if (isRecording) return
         isRecording = true
+        acquireWakeLock()
+        showRecordingNotification()
 
         vibrate(longArrayOf(0, 80))
 
@@ -77,20 +117,25 @@ class VoiceRecordAccessibilityService : AccessibilityService() {
 
             override fun onError(error: Int) {
                 isRecording = false
-                vibrate(longArrayOf(0, 40, 60, 40)) // 실패 패턴
+                releaseWakeLock()
+                vibrate(longArrayOf(0, 40, 60, 40))
+                showErrorNotification()
             }
 
             override fun onResults(results: Bundle?) {
                 isRecording = false
+                releaseWakeLock()
                 val text = results
                     ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()
                 if (!text.isNullOrBlank()) {
                     saveResult(text)
                     broadcastResult(text)
-                    vibrate(longArrayOf(0, 50, 50, 100)) // 성공 패턴
+                    vibrate(longArrayOf(0, 50, 50, 100))
+                    showResultNotification(text)
                 } else {
                     vibrate(longArrayOf(0, 40, 60, 40))
+                    showErrorNotification()
                 }
             }
 
@@ -132,7 +177,52 @@ class VoiceRecordAccessibilityService : AccessibilityService() {
         }
     }
 
+    private fun ensureResultChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val ch = NotificationChannel(
+                RESULT_CHANNEL_ID, "음성 메모 결과", NotificationManager.IMPORTANCE_HIGH
+            ).apply { setSound(null, null); enableVibration(false); setShowBadge(false) }
+            (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .createNotificationChannel(ch)
+        }
+    }
+
+    private fun showResultNotification(text: String) {
+        ensureResultChannel()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(RESULT_NOTIFICATION_ID)
+        nm.notify(RESULT_NOTIFICATION_ID,
+            NotificationCompat.Builder(this, RESULT_CHANNEL_ID)
+                .setContentTitle("음성 메모 저장됨")
+                .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+                .setSmallIcon(android.R.drawable.ic_btn_speak_now)
+                .setAutoCancel(true).setSilent(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .build()
+        )
+        handler.postDelayed({ nm.cancel(RESULT_NOTIFICATION_ID) }, 4000L)
+    }
+
+    private fun showErrorNotification() {
+        ensureResultChannel()
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        nm.cancel(RESULT_NOTIFICATION_ID)
+        nm.notify(RESULT_NOTIFICATION_ID,
+            NotificationCompat.Builder(this, RESULT_CHANNEL_ID)
+                .setContentTitle("음성 인식 실패")
+                .setContentText("다시 시도해 주세요")
+                .setSmallIcon(android.R.drawable.ic_delete)
+                .setAutoCancel(true).setSilent(true)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+                .build()
+        )
+        handler.postDelayed({ nm.cancel(RESULT_NOTIFICATION_ID) }, 2000L)
+    }
+
     override fun onDestroy() {
+        releaseWakeLock()
         handler.post {
             speechRecognizer?.destroy()
             speechRecognizer = null

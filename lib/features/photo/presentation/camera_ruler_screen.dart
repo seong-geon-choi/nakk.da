@@ -1,11 +1,15 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../settings/presentation/settings_provider.dart';
 import '../../settings/domain/models/app_settings.dart';
 import '../../../core/utils/watermark.dart';
+import '../../../core/utils/media_scanner.dart';
 
 class CameraRulerScreen extends ConsumerStatefulWidget {
   const CameraRulerScreen({super.key});
@@ -27,16 +31,35 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   bool _toastVisible = false;
   Timer? _toastTimer;
 
+  // 동영상 모드
+  bool _isVideoMode = false;
+  bool _isRecording = false;
+  int _recordSeconds = 0;
+  Timer? _recordTimer;
+  ResolutionPreset _videoResolution = ResolutionPreset.high; // 720p
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _initCamera();
+    _loadPrefsAndInit();
+  }
+
+  Future<void> _loadPrefsAndInit() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('video_resolution') ?? '720p';
+    if (mounted) {
+      setState(() {
+        _videoResolution = saved == '1080p' ? ResolutionPreset.veryHigh : ResolutionPreset.high;
+      });
+    }
+    await _initCamera();
   }
 
   @override
   void dispose() {
     _toastTimer?.cancel();
+    _recordTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _ctrl?.dispose();
     super.dispose();
@@ -62,6 +85,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     final ctrl = _ctrl;
     if (ctrl == null || !ctrl.value.isInitialized) return;
     if (state == AppLifecycleState.inactive) {
+      if (_isRecording) _stopRecording();
       ctrl.dispose();
       _ctrl = null;
     } else if (state == AppLifecycleState.resumed) {
@@ -82,8 +106,8 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       );
       final ctrl = CameraController(
         back,
-        ResolutionPreset.high,
-        enableAudio: false,
+        _isVideoMode ? _videoResolution : ResolutionPreset.high,
+        enableAudio: _isVideoMode,
         imageFormatGroup: ImageFormatGroup.jpeg,
       );
       await ctrl.initialize();
@@ -102,6 +126,35 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     }
   }
 
+  Future<void> _switchMode(bool toVideo) async {
+    if (_isRecording) return;
+    final oldCtrl = _ctrl;
+    setState(() {
+      _isVideoMode = toVideo;
+      _ctrl = null;
+    });
+    await oldCtrl?.dispose();
+    await _initCamera();
+    _showToast(toVideo ? '동영상 모드' : '사진 모드');
+  }
+
+  Future<void> _toggleResolution() async {
+    if (_isRecording) return;
+    final next = _videoResolution == ResolutionPreset.high
+        ? ResolutionPreset.veryHigh
+        : ResolutionPreset.high;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('video_resolution', next == ResolutionPreset.veryHigh ? '1080p' : '720p');
+    final oldCtrl = _ctrl;
+    setState(() {
+      _videoResolution = next;
+      _ctrl = null;
+    });
+    await oldCtrl?.dispose();
+    await _initCamera();
+    _showToast(next == ResolutionPreset.veryHigh ? '1080p' : '720p');
+  }
+
   Future<void> _capture() async {
     final ctrl = _ctrl;
     if (ctrl == null || !ctrl.value.isInitialized || _capturing) return;
@@ -110,17 +163,79 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       final file = await ctrl.takePicture();
       if (!mounted) return;
 
-      // 워터마크 적용 (설정에서 활성화된 경우)
       final wmSettings = ref.read(settingsProvider).valueOrNull?.watermark;
       final photoPath = (wmSettings != null && wmSettings.enabled)
           ? await applyWatermark(file.path, wmSettings)
           : file.path;
 
       if (!mounted) return;
-      Navigator.of(context).pop<String>(photoPath);
+      Navigator.of(context).pop<({String path, bool isVideo})>(
+        (path: photoPath, isVideo: false),
+      );
     } finally {
       if (mounted) setState(() => _capturing = false);
     }
+  }
+
+  Future<void> _startRecording() async {
+    final ctrl = _ctrl;
+    if (ctrl == null || !ctrl.value.isInitialized || _isRecording) return;
+    try {
+      await ctrl.startVideoRecording();
+      setState(() {
+        _isRecording = true;
+        _recordSeconds = 0;
+      });
+      _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+        if (mounted) setState(() => _recordSeconds++);
+      });
+    } catch (e) {
+      _showToast('녹화 오류: $e');
+    }
+  }
+
+  Future<void> _stopRecording() async {
+    final ctrl = _ctrl;
+    if (ctrl == null || !_isRecording) return;
+    _recordTimer?.cancel();
+    _recordTimer = null;
+    try {
+      final file = await ctrl.stopVideoRecording();
+      if (mounted) setState(() => _isRecording = false);
+      if (!mounted) return;
+      final savedPath = await _saveVideo(file.path);
+      if (!mounted) return;
+      Navigator.of(context).pop<({String path, bool isVideo})>(
+        (path: savedPath ?? file.path, isVideo: true),
+      );
+    } catch (e) {
+      if (mounted) {
+        setState(() => _isRecording = false);
+        _showToast('저장 오류: $e');
+      }
+    }
+  }
+
+  Future<String?> _saveVideo(String tempPath) async {
+    try {
+      final dir = await getExternalStorageDirectory();
+      if (dir == null) return tempPath;
+      final videosDir = Directory('${dir.path}/videos');
+      await videosDir.create(recursive: true);
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final destPath = '${videosDir.path}/video_$ts.mp4';
+      await File(tempPath).copy(destPath);
+      saveToGallery(tempPath, relativePath: 'DCIM/nakkda');
+      return destPath;
+    } catch (_) {
+      return tempPath;
+    }
+  }
+
+  String get _timerLabel {
+    final m = (_recordSeconds ~/ 60).toString().padLeft(2, '0');
+    final s = (_recordSeconds % 60).toString().padLeft(2, '0');
+    return '$m:$s';
   }
 
   @override
@@ -153,8 +268,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     if (ctrl == null || !ctrl.value.isInitialized) {
       return const Scaffold(
         backgroundColor: Colors.black,
-        body: Center(
-            child: CircularProgressIndicator(color: Colors.white)),
+        body: Center(child: CircularProgressIndicator(color: Colors.white)),
       );
     }
 
@@ -184,12 +298,49 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               setState(() => _currentZoom = newZoom);
               _ctrl?.setZoomLevel(newZoom);
             },
+            onHorizontalDragEnd: (d) {
+              if (_isRecording) return;
+              final v = d.primaryVelocity ?? 0;
+              if (v < -300 && !_isVideoMode) _switchMode(true);
+              else if (v > 300 && _isVideoMode) _switchMode(false);
+            },
             child: CameraPreview(ctrl),
           ),
-          // 워터마크 프리뷰 오버레이
-          if (wmEnabled && wm != null)
+          // 워터마크 프리뷰 (사진 모드에서만)
+          if (!_isVideoMode && wmEnabled && wm != null)
             _WatermarkOverlay(wm: wm, previewSize: ctrl.value.previewSize!),
-          // 상단 바 (뒤로가기만)
+          // 녹화 중 인디케이터
+          if (_isRecording)
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: SafeArea(
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                    margin: const EdgeInsets.only(top: 4),
+                    decoration: BoxDecoration(
+                      color: Colors.black54,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(Icons.circle, color: Colors.red, size: 10),
+                        const SizedBox(width: 6),
+                        Text(
+                          'REC  $_timerLabel',
+                          style: const TextStyle(
+                            color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          // 상단 바
           Positioned(
             top: 0,
             left: 0,
@@ -199,53 +350,63 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                 children: [
                   IconButton(
                     icon: const Icon(Icons.arrow_back, color: Colors.white),
-                    onPressed: () => Navigator.of(context).pop(),
+                    onPressed: _isRecording ? null : () => Navigator.of(context).pop(),
                   ),
+                  const Spacer(),
+                  // 동영상 모드: 해상도 버튼
+                  if (_isVideoMode)
+                    GestureDetector(
+                      onTap: _isRecording ? null : _toggleResolution,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          _videoResolution == ResolutionPreset.veryHigh ? '1080p' : '720p',
+                          style: TextStyle(
+                            color: _isRecording ? Colors.white38 : Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ),
+                  // 사진 모드: 워터마크 토글
+                  if (!_isVideoMode)
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: GestureDetector(
+                        onTap: wm == null
+                            ? null
+                            : () {
+                                final next = !wmEnabled;
+                                ref.read(settingsProvider.notifier)
+                                    .updateWatermark(wm.copyWith(enabled: next));
+                                _showToast(next ? '워터마크 ON' : '워터마크 OFF');
+                              },
+                        child: Container(
+                          width: 40,
+                          height: 40,
+                          padding: const EdgeInsets.all(8),
+                          decoration: const BoxDecoration(
+                            color: Color(0x99000000),
+                            shape: BoxShape.circle,
+                          ),
+                          child: Icon(
+                            Icons.water,
+                            color: wmEnabled ? const Color(0xFF40C4FF) : Colors.white54,
+                          ),
+                        ),
+                      ),
+                    ),
+                  const SizedBox(width: 8),
                 ],
               ),
             ),
           ),
-          // 워터마크 토글 — AR 카메라와 동일한 우측 중앙 아이콘 버튼
-          Positioned(
-            right: 0,
-            top: 0,
-            bottom: 0,
-            child: SafeArea(
-              left: false,
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: GestureDetector(
-                    onTap: wm == null
-                        ? null
-                        : () {
-                            final next = !wmEnabled;
-                            ref.read(settingsProvider.notifier).updateWatermark(
-                                wm.copyWith(enabled: next));
-                            _showToast(
-                                next ? '워터마크 표시 ON' : '워터마크 표시 OFF');
-                          },
-                    child: Container(
-                      width: 48,
-                      height: 48,
-                      padding: const EdgeInsets.all(10),
-                      decoration: const BoxDecoration(
-                        color: Color(0x99000000),
-                        shape: BoxShape.circle,
-                      ),
-                      child: Icon(
-                        Icons.water,
-                        color: wmEnabled
-                            ? const Color(0xFF40C4FF)
-                            : Colors.white54,
-                      ),
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-          // 촬영 버튼 — 하단 SafeArea 처리
+          // 하단: 모드 선택 + 촬영 버튼
           Positioned(
             bottom: 0,
             left: 0,
@@ -253,34 +414,93 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
             child: SafeArea(
               top: false,
               child: Padding(
-                padding: const EdgeInsets.only(bottom: 24),
-                child: Center(
-                  child: GestureDetector(
-                    onTap: _capturing ? null : _capture,
-                    child: Container(
-                      width: 68,
-                      height: 68,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: _capturing
-                            ? Colors.white.withValues(alpha: 0.5)
-                            : Colors.white,
-                        border: Border.all(
-                            color: Colors.grey.shade400, width: 4),
-                      ),
-                      child: _capturing
-                          ? const Padding(
-                              padding: EdgeInsets.all(18),
-                              child: CircularProgressIndicator(strokeWidth: 3),
-                            )
-                          : null,
+                padding: const EdgeInsets.only(bottom: 16),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // 모드 선택 탭
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        GestureDetector(
+                          onTap: _isVideoMode && !_isRecording
+                              ? () => _switchMode(false)
+                              : null,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                            child: Text(
+                              '사진',
+                              style: TextStyle(
+                                color: !_isVideoMode ? Colors.white : Colors.white38,
+                                fontSize: 14,
+                                fontWeight: !_isVideoMode
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                          ),
+                        ),
+                        GestureDetector(
+                          onTap: !_isVideoMode && !_isRecording
+                              ? () => _switchMode(true)
+                              : null,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+                            child: Text(
+                              '동영상',
+                              style: TextStyle(
+                                color: _isVideoMode ? Colors.white : Colors.white38,
+                                fontSize: 14,
+                                fontWeight: _isVideoMode
+                                    ? FontWeight.bold
+                                    : FontWeight.normal,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ],
                     ),
-                  ),
+                    const SizedBox(height: 8),
+                    // 촬영 버튼
+                    GestureDetector(
+                      onTap: _isVideoMode
+                          ? (_isRecording ? _stopRecording : _startRecording)
+                          : (_capturing ? null : _capture),
+                      child: Container(
+                        width: 68,
+                        height: 68,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Colors.white,
+                          border: Border.all(color: Colors.grey.shade400, width: 4),
+                        ),
+                        child: Center(
+                          child: _isVideoMode
+                              ? AnimatedContainer(
+                                  duration: const Duration(milliseconds: 200),
+                                  width: _isRecording ? 24 : 38,
+                                  height: _isRecording ? 24 : 38,
+                                  decoration: BoxDecoration(
+                                    color: Colors.red,
+                                    borderRadius: BorderRadius.circular(
+                                        _isRecording ? 5 : 19),
+                                  ),
+                                )
+                              : (_capturing
+                                  ? const Padding(
+                                      padding: EdgeInsets.all(18),
+                                      child: CircularProgressIndicator(strokeWidth: 3),
+                                    )
+                                  : null),
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ),
           ),
-          // 옵션 변경 알림 토스트
+          // 토스트
           if (_toastMsg != null)
             Positioned(
               left: 24,
@@ -289,15 +509,14 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               child: SafeArea(
                 top: false,
                 child: Padding(
-                  padding: const EdgeInsets.only(bottom: 120),
+                  padding: const EdgeInsets.only(bottom: 140),
                   child: IgnorePointer(
                     child: AnimatedOpacity(
                       opacity: _toastVisible ? 1.0 : 0.0,
                       duration: const Duration(milliseconds: 300),
                       child: Center(
                         child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 20, vertical: 10),
+                          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                           decoration: BoxDecoration(
                             color: Colors.black87,
                             borderRadius: BorderRadius.circular(24),
@@ -305,10 +524,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                           child: Text(
                             _toastMsg!,
                             style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
+                              color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
                           ),
                         ),
                       ),
@@ -327,7 +543,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
 
 class _WatermarkOverlay extends StatefulWidget {
   final WatermarkSettings wm;
-  final Size previewSize; // 카메라 센서 치수 (보통 가로 방향)
+  final Size previewSize;
   const _WatermarkOverlay({required this.wm, required this.previewSize});
 
   @override
@@ -368,20 +584,13 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
     final screenW = mq.size.width;
     final screenH = mq.size.height;
 
-    // 센서 치수(보통 가로)에서 세로 사진 종횡비 계산
-    // 세로 사진: 짧은 쪽 = 가로, 긴 쪽 = 세로
     final sensor = widget.previewSize;
     final photoAspect = math.max(sensor.width, sensor.height) /
         math.min(sensor.width, sensor.height);
 
-    // applyWatermark 공식: margin = fontSize × shortSide / 960
-    // Stack(StackFit.expand) → CameraPreview가 화면을 stretch하여 채움
-    // → 사진 좌표 → 화면 좌표: marginX = fontSize × screenW / 960
-    //                            marginY = fontSize × screenH / (960 × photoAspect)
     final marginX = wm.fontSize * screenW / 960.0;
     final marginY = wm.fontSize * screenH / (960.0 * photoAspect);
 
-    // 폰트: 사진 픽셀의 scaledFont를 화면 좌표로 변환한 크기
     final _fontMax = mq.size.shortestSide * 0.09;
     final overlayFont = math.min(
       wm.fontSize * screenW / 480.0,
@@ -433,8 +642,7 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
                     style: TextStyle(
                       color: Colors.white,
                       fontSize: overlayFont,
-                      fontWeight:
-                          wm.bold ? FontWeight.bold : FontWeight.normal,
+                      fontWeight: wm.bold ? FontWeight.bold : FontWeight.normal,
                       fontFamily: _fontFam(wm.fontFamily),
                       shadows: const [Shadow(blurRadius: 2)],
                       height: 1.35,

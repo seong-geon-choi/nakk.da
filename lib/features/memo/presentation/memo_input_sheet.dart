@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../domain/models/memo_entry.dart';
 import 'memo_provider.dart';
@@ -16,16 +17,22 @@ import '../../../core/utils/media_scanner.dart';
 import '../../../core/utils/watermark.dart';
 import '../../../core/services/ar_service.dart';
 import '../../../core/utils/exif_utils.dart';
+import '../../../core/services/saf_service.dart';
+import '../../../core/widgets/saf_image.dart';
+import '../../../core/widgets/video_player_widget.dart';
+import '../../../core/screens/gallery_picker_screen.dart';
 
 class MemoInputSheet extends ConsumerStatefulWidget {
   final bool startWithVoice;
   final MemoEntry? existingEntry;
   final int? blockIndex;
   final String? initialPhotoPath;
+  final String? initialVideoPath;
   final double? initialFishLength;
   final String? initialText;
   final double? initialLatitude;
   final double? initialLongitude;
+  final DateTime? initialTimestamp;
   final Future<void> Function(int blockIndex, MemoEntry updated)? onEditSave;
   final Future<void> Function(MemoEntry entry)? onAddSave;
 
@@ -35,10 +42,12 @@ class MemoInputSheet extends ConsumerStatefulWidget {
     this.existingEntry,
     this.blockIndex,
     this.initialPhotoPath,
+    this.initialVideoPath,
     this.initialFishLength,
     this.initialText,
     this.initialLatitude,
     this.initialLongitude,
+    this.initialTimestamp,
     this.onEditSave,
     this.onAddSave,
   });
@@ -49,10 +58,12 @@ class MemoInputSheet extends ConsumerStatefulWidget {
     MemoEntry? existingEntry,
     int? blockIndex,
     String? initialPhotoPath,
+    String? initialVideoPath,
     double? initialFishLength,
     String? initialText,
     double? initialLatitude,
     double? initialLongitude,
+    DateTime? initialTimestamp,
     Future<void> Function(int, MemoEntry)? onEditSave,
     Future<void> Function(MemoEntry)? onAddSave,
   }) {
@@ -67,18 +78,20 @@ class MemoInputSheet extends ConsumerStatefulWidget {
         existingEntry: existingEntry,
         blockIndex: blockIndex,
         initialPhotoPath: initialPhotoPath,
+        initialVideoPath: initialVideoPath,
         initialFishLength: initialFishLength,
         initialText: initialText,
         initialLatitude: initialLatitude,
         initialLongitude: initialLongitude,
+        initialTimestamp: initialTimestamp,
         onEditSave: onEditSave,
         onAddSave: onAddSave,
       ),
     );
   }
 
-  /// 소스 선택 → 사진 촬영/선택까지 처리. 메모폼 열기 전에 호출.
-  static Future<({String path, double? length, ({double lat, double lng})? gps})?> pickPhoto(
+  /// 소스 선택 → 사진/동영상 촬영/선택까지 처리.
+  static Future<({String path, bool isVideo, double? length, ({double lat, double lng})? gps, DateTime? timestamp})?> pickMedia(
     BuildContext context,
     WidgetRef ref,
   ) async {
@@ -98,12 +111,13 @@ class MemoInputSheet extends ConsumerStatefulWidget {
             ),
             ListTile(
               leading: const Icon(Icons.camera_alt),
-              title: const Text('일반 카메라'),
+              title: const Text('카메라'),
+              subtitle: const Text('사진/동영상 스와이프로 선택'),
               onTap: () => Navigator.of(sheetCtx).pop(PhotoSource.camera),
             ),
             ListTile(
-              leading: const Icon(Icons.photo_library),
-              title: const Text('갤러리에서 선택'),
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('갤러리'),
               onTap: () => Navigator.of(sheetCtx).pop(PhotoSource.gallery),
             ),
           ],
@@ -115,8 +129,10 @@ class MemoInputSheet extends ConsumerStatefulWidget {
     final settings = ref.read(settingsProvider).valueOrNull;
     final relPath = _mediaRelPath(settings?.photoSavePath ?? 'DCIM/nakkda');
     String? path;
+    bool isVideo = false;
     double? length;
     ({double lat, double lng})? gps;
+    String? exifSourcePath;
 
     if (source == PhotoSource.arCamera) {
       final wmSettings = settings?.watermark;
@@ -128,23 +144,114 @@ class MemoInputSheet extends ConsumerStatefulWidget {
       final rawPath = (arResult.applyWatermark && wmSettings != null)
           ? await applyWatermark(arResult.path, wmSettings.copyWith(enabled: true))
           : arResult.path;
+      exifSourcePath = rawPath;
       path = await saveToGallery(rawPath, relativePath: relPath);
       length = arResult.distanceCm;
     } else if (source == PhotoSource.camera) {
-      final camPath = await Navigator.of(context).push<String>(
+      final camResult = await Navigator.of(context)
+          .push<({String path, bool isVideo})>(
         MaterialPageRoute(builder: (_) => const CameraRulerScreen()),
       );
-      if (camPath == null || !context.mounted) return null;
-      path = await saveToGallery(camPath, relativePath: relPath);
+      if (camResult == null || !context.mounted) return null;
+
+      if (camResult.isVideo) {
+        // 카메라 동영상: _saveVideo()가 이미 앱 스토리지에 저장했으므로 경로 그대로 사용
+        isVideo = true;
+        path = camResult.path;
+        // GPS는 현재 위치로 폴백
+        final loc = ref.read(locationProvider).valueOrNull;
+        if (loc?.latitude != null) {
+          gps = (lat: loc!.latitude!, lng: loc.longitude!);
+        } else {
+          final cached = ref.read(locationProvider.notifier).cached;
+          if (cached?.latitude != null) {
+            gps = (lat: cached!.latitude!, lng: cached.longitude!);
+          }
+        }
+      } else {
+        // 카메라 사진: 기존 플로우
+        exifSourcePath = camResult.path;
+        path = await saveToGallery(camResult.path, relativePath: relPath);
+      }
     } else {
-      final pickedPath = await pickGalleryImagePath();
-      if (pickedPath == null || !context.mounted) return null;
-      gps = await readExifGps(pickedPath);
-      path = await copyGalleryPhotoToAppStorage(pickedPath);
+      // gallery: 커스텀 갤러리 화면 (전체/사진/동영상 탭)
+      final picked = await Navigator.of(context).push<({String path, bool isVideo})>(
+        MaterialPageRoute(builder: (_) => const GalleryPickerScreen()),
+      );
+      if (picked == null || !context.mounted) return null;
+      isVideo = picked.isVideo;
+      if (isVideo) {
+        final savedPath = await MemoInputSheet.copyGalleryVideo(picked.path);
+        if (savedPath == null) return null;
+        path = savedPath;
+      } else {
+        exifSourcePath = picked.path;
+        final savePath = settings?.savePath ?? '';
+        path = await MemoInputSheet.copyGalleryPhoto(picked.path, savePath);
+      }
+    }
+
+    // EXIF GPS·촬영 시간 (사진 전용)
+    DateTime? timestamp;
+    if (exifSourcePath != null) {
+      gps ??= await readExifGps(exifSourcePath);
+      timestamp = await readExifTimestamp(exifSourcePath);
+    }
+
+    // 카메라/AR 소스 GPS 폴백
+    if (!isVideo && gps == null &&
+        (source == PhotoSource.camera || source == PhotoSource.arCamera)) {
+      final loc = ref.read(locationProvider).valueOrNull;
+      if (loc?.latitude != null) {
+        gps = (lat: loc!.latitude!, lng: loc.longitude!);
+      } else {
+        final cached = ref.read(locationProvider.notifier).cached;
+        if (cached?.latitude != null) {
+          gps = (lat: cached!.latitude!, lng: cached.longitude!);
+        }
+      }
     }
 
     if (path == null) return null;
-    return (path: path, length: length, gps: gps);
+    return (path: path, isVideo: isVideo, length: length, gps: gps, timestamp: timestamp);
+  }
+
+  /// 갤러리 사진을 savePath의 photos/ 서브폴더에 복사, 상대 경로 반환
+  static Future<String?> copyGalleryPhoto(String cachePath, String savePath, {String? filenameOverride}) async {
+    final ts = DateTime.now().millisecondsSinceEpoch;
+    final ext = cachePath.contains('.') ? cachePath.split('.').last.toLowerCase() : 'jpg';
+    final filename = filenameOverride ?? 'gallery_$ts.$ext';
+    if (SafService.isSafUri(savePath)) {
+      try {
+        await SafService().copyFileToSafFolder(cachePath, savePath, filename);
+        return 'photos/$filename';
+      } catch (_) { return null; }
+    } else if (savePath.isNotEmpty) {
+      try {
+        final photosDir = Directory('$savePath/photos');
+        await photosDir.create(recursive: true);
+        await File(cachePath).copy('${photosDir.path}/$filename');
+        return 'photos/$filename';
+      } catch (_) { return null; }
+    }
+    return null;
+  }
+
+  /// 갤러리 동영상을 앱 전용 스토리지에 복사, 절대 경로 반환
+  static Future<String?> copyGalleryVideo(String tempPath) async {
+    try {
+      final dir = await getExternalStorageDirectory();
+      if (dir == null) return null;
+      final videosDir = Directory('${dir.path}/videos');
+      await videosDir.create(recursive: true);
+      final ts = DateTime.now().millisecondsSinceEpoch;
+      final ext = tempPath.contains('.') ? tempPath.split('.').last.toLowerCase() : 'mp4';
+      final dest = '${videosDir.path}/gallery_video_$ts.$ext';
+      await File(tempPath).copy(dest);
+      return dest;
+    } catch (_) {
+      return null;
+    }
   }
 
   static String _mediaRelPath(String photoSavePath) {
@@ -165,8 +272,9 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
   final _latCtrl = TextEditingController();
   final _lngCtrl = TextEditingController();
   final _fishLengthCtrl = TextEditingController();
-  DateTime _timestamp = DateTime.now();
+  late DateTime _timestamp;
   String? _photoPath;
+  String? _videoPath;
   bool _saving = false;
   bool _gpsUpdating = false;
 
@@ -179,13 +287,16 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     if (entry != null) {
       _timestamp = entry.timestamp;
       _photoPath = entry.photoPath;
+      _videoPath = entry.videoPath;
       _textCtrl.text = entry.text ?? '';
       if (entry.latitude != null) _latCtrl.text = entry.latitude!.toStringAsFixed(4);
       if (entry.longitude != null) _lngCtrl.text = entry.longitude!.toStringAsFixed(4);
       if (entry.fishLength != null) _fishLengthCtrl.text = entry.fishLength!.toStringAsFixed(1);
     } else {
+      _timestamp = widget.initialTimestamp ?? DateTime.now();
       if (widget.initialText != null) _textCtrl.text = widget.initialText!;
       _photoPath = widget.initialPhotoPath;
+      _videoPath = widget.initialVideoPath;
       if (widget.initialFishLength != null) {
         _fishLengthCtrl.text = widget.initialFishLength!.toStringAsFixed(1);
       }
@@ -224,7 +335,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
         if (pos != null) { lat = pos.latitude; lng = pos.longitude; }
       } catch (_) {}
     }
-    if (lat != null && mounted) {
+    if (lat != null && mounted && _latCtrl.text.isEmpty) {
       setState(() {
         _latCtrl.text = lat!.toStringAsFixed(4);
         _lngCtrl.text = lng!.toStringAsFixed(4);
@@ -278,13 +389,15 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
                     const Divider(height: 16),
                     _buildGpsRow(),
                     const Divider(height: 16),
-                    _buildPhotoSection(),
+                    _buildMediaSection(),
                     const Divider(height: 16),
                     _buildFishLengthRow(),
                     const Divider(height: 16),
                     TextField(
                       controller: _textCtrl,
-                      autofocus: !widget.startWithVoice && widget.initialPhotoPath == null,
+                      autofocus: !widget.startWithVoice &&
+                          widget.initialPhotoPath == null &&
+                          widget.initialVideoPath == null,
                       maxLines: null,
                       minLines: 3,
                       decoration: InputDecoration(
@@ -471,17 +584,25 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     }
   }
 
-  // ── 사진 ────────────────────────────────────────────────
+  // ── 미디어 (사진/동영상) ──────────────────────────────────
 
-  Widget _buildPhotoSection() {
+  Widget _buildMediaSection() {
     final colorScheme = Theme.of(context).colorScheme;
-    final hasPhoto = _photoPath != null && File(_photoPath!).existsSync();
+    final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+    final hasPhoto = _photoPath != null;
+    final hasVideo = _videoPath != null;
+    final hasMedia = hasPhoto || hasVideo;
+
+    final mediaIcon = hasVideo
+        ? Icons.videocam_outlined
+        : Icons.photo_camera_outlined;
+
     return Row(
-      crossAxisAlignment: hasPhoto ? CrossAxisAlignment.start : CrossAxisAlignment.center,
+      crossAxisAlignment: hasMedia ? CrossAxisAlignment.start : CrossAxisAlignment.center,
       children: [
         Padding(
-          padding: hasPhoto ? const EdgeInsets.only(top: 2) : EdgeInsets.zero,
-          child: const Icon(Icons.photo_camera_outlined, size: 18),
+          padding: hasMedia ? const EdgeInsets.only(top: 2) : EdgeInsets.zero,
+          child: Icon(mediaIcon, size: 18),
         ),
         const SizedBox(width: 8),
         Expanded(
@@ -489,11 +610,10 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (hasPhoto) ...[
-                ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.file(File(_photoPath!),
-                      height: (MediaQuery.of(context).size.shortestSide * 0.3).clamp(100.0, 220.0),
-                      width: double.infinity, fit: BoxFit.cover),
+                SafImage(
+                  photoPath: _photoPath!,
+                  savePath: savePath,
+                  height: (MediaQuery.of(context).size.shortestSide * 0.3).clamp(100.0, 220.0),
                 ),
                 const SizedBox(height: 6),
                 Row(children: [
@@ -502,7 +622,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    onPressed: _saving ? null : _pickPhoto,
+                    onPressed: _saving ? null : _pickMedia,
                     child: const Text('변경'),
                   ),
                   const SizedBox(width: 8),
@@ -512,14 +632,44 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
                       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                       minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                     ),
-                    onPressed: _saving ? null : () => setState(() => _photoPath = null),
+                    onPressed: _saving
+                        ? null
+                        : () => setState(() { _photoPath = null; _videoPath = null; }),
+                    child: const Text('삭제'),
+                  ),
+                ]),
+              ] else if (hasVideo) ...[
+                VideoPlayerWidget(
+                  videoPath: _videoPath!,
+                  height: (MediaQuery.of(context).size.shortestSide * 0.3).clamp(100.0, 220.0),
+                ),
+                const SizedBox(height: 6),
+                Row(children: [
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: _saving ? null : _pickMedia,
+                    child: const Text('변경'),
+                  ),
+                  const SizedBox(width: 8),
+                  OutlinedButton(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: colorScheme.error,
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      minimumSize: Size.zero, tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    ),
+                    onPressed: _saving
+                        ? null
+                        : () => setState(() { _photoPath = null; _videoPath = null; }),
                     child: const Text('삭제'),
                   ),
                 ]),
               ] else
                 OutlinedButton(
-                  onPressed: _saving ? null : _pickPhoto,
-                  child: const Text('사진 추가'),
+                  onPressed: _saving ? null : _pickMedia,
+                  child: const Text('미디어 추가'),
                 ),
             ],
           ),
@@ -528,17 +678,26 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     );
   }
 
-  Future<void> _pickPhoto() async {
-    final result = await MemoInputSheet.pickPhoto(context, ref);
+  Future<void> _pickMedia() async {
+    final result = await MemoInputSheet.pickMedia(context, ref);
     if (result == null || !mounted) return;
     setState(() {
-      _photoPath = result.path;
+      if (result.isVideo) {
+        _videoPath = result.path;
+        _photoPath = null;
+      } else {
+        _photoPath = result.path;
+        _videoPath = null;
+      }
       if (result.length != null && _fishLengthCtrl.text.isEmpty) {
         _fishLengthCtrl.text = result.length!.toStringAsFixed(1);
       }
       if (result.gps != null) {
         _latCtrl.text = result.gps!.lat.toStringAsFixed(4);
         _lngCtrl.text = result.gps!.lng.toStringAsFixed(4);
+      }
+      if (result.timestamp != null) {
+        _timestamp = result.timestamp!;
       }
     });
   }
@@ -596,7 +755,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
 
   Future<void> _save() async {
     final text = _textCtrl.text.trim();
-    if (text.isEmpty && _photoPath == null) {
+    if (text.isEmpty && _photoPath == null && _videoPath == null) {
       Navigator.of(context).pop();
       return;
     }
@@ -622,6 +781,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
         longitude: lng,
         text: text.isEmpty ? null : text,
         photoPath: _photoPath,
+        videoPath: _videoPath,
         fishLength: fishLength,
       );
 

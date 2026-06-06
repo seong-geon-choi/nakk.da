@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="accessibility_service_label">음성메모하기앱</string>
-    <string name="accessibility_service_description">볼륨 상 버튼을 빠르게 두 번 눌러 음성 메모를 시작합니다. 잠금 화면에서도 동작합니다.</string>
+    <string name="accessibility_service_label">낚.다 음성 메모</string>
+    <string name="accessibility_service_description">볼륨 ↑ 버튼을 빠르게 두 번 눌러 음성 메모를 시작합니다. 잠금 화면·화면 꺼짐 상태에서도 동작합니다.</string>
 </resources>

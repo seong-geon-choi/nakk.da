@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/router/app_router.dart';
-import '../../../features/settings/presentation/settings_provider.dart';
 import 'permission_provider.dart';
 
 class PermissionScreen extends ConsumerStatefulWidget {
@@ -15,8 +14,6 @@ class PermissionScreen extends ConsumerStatefulWidget {
 }
 
 class _PermissionScreenState extends ConsumerState<PermissionScreen> {
-  bool _folderPicked = false;
-
   @override
   Widget build(BuildContext context) {
     final statusAsync = ref.watch(permissionStatusProvider);
@@ -36,7 +33,7 @@ class _PermissionScreenState extends ConsumerState<PermissionScreen> {
               ),
               const SizedBox(height: 8),
               Text(
-                '앱을 사용하려면 아래 권한과 저장 폴더 설정이 필요합니다',
+                '앱을 사용하려면 아래 권한이 필요합니다',
                 style: Theme.of(context).textTheme.bodyLarge,
                 textAlign: TextAlign.center,
               ),
@@ -46,8 +43,6 @@ class _PermissionScreenState extends ConsumerState<PermissionScreen> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildFolderItem(context),
-                      const SizedBox(height: 16),
                       ..._permissionItems(context, statusAsync),
                     ],
                   ),
@@ -60,11 +55,6 @@ class _PermissionScreenState extends ConsumerState<PermissionScreen> {
                 ),
                 onPressed: () async {
                   await ref.read(permissionStatusProvider.notifier).requestAll();
-                  if (!context.mounted) return;
-                  if (!_folderPicked) {
-                    final picked = await ref.read(settingsProvider.notifier).pickSaveFolder();
-                    if (mounted) setState(() => _folderPicked = picked);
-                  }
                   if (!context.mounted) return;
                   await _markDoneAndGo(context);
                 },
@@ -82,42 +72,6 @@ class _PermissionScreenState extends ConsumerState<PermissionScreen> {
             ],
           ),
         ),
-      ),
-    );
-  }
-
-  Widget _buildFolderItem(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 0),
-      child: Row(
-        children: [
-          Container(
-            width: 48,
-            height: 48,
-            decoration: BoxDecoration(
-              color: Theme.of(context).colorScheme.surfaceContainerHighest,
-              borderRadius: BorderRadius.circular(12),
-            ),
-            child: const Icon(Icons.folder_outlined, size: 24),
-          ),
-          const SizedBox(width: 16),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('메모 저장 폴더',
-                    style: TextStyle(fontSize: 15, fontWeight: FontWeight.w600)),
-                Text('메모 파일을 저장할 폴더를 선택합니다',
-                    style: Theme.of(context).textTheme.bodySmall),
-              ],
-            ),
-          ),
-          Icon(
-            _folderPicked ? Icons.check_circle : Icons.radio_button_unchecked,
-            color: _folderPicked ? Colors.green : Colors.grey,
-            size: 22,
-          ),
-        ],
       ),
     );
   }

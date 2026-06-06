@@ -8,14 +8,19 @@ class PhotoServiceImpl implements PhotoService {
   @override
   Future<String?> pickImage({required PhotoSource source}) async {
     if (source == PhotoSource.gallery) {
-      // 갤러리: MethodChannel 사용 → MANAGE_EXTERNAL_STORAGE 있으면 실제 경로 반환
-      return await pickGalleryImagePath();
+      final result = await pickGalleryImagePath();
+      return result?.path;
     }
-    // 카메라
     final XFile? picked = await _picker.pickImage(
       source: ImageSource.camera,
       imageQuality: 85,
     );
+    return picked?.path;
+  }
+
+  @override
+  Future<String?> pickVideoFromGallery() async {
+    final XFile? picked = await _picker.pickVideo(source: ImageSource.gallery);
     return picked?.path;
   }
 }

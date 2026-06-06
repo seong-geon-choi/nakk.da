@@ -6,12 +6,45 @@ import '../domain/models/file_summary.dart';
 import '../../../core/widgets/empty_state_view.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/router/app_router.dart';
+import '../../settings/presentation/settings_provider.dart';
 
-class FileListScreen extends ConsumerWidget {
+class FileListScreen extends ConsumerStatefulWidget {
   const FileListScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<FileListScreen> createState() => _FileListScreenState();
+}
+
+class _FileListScreenState extends ConsumerState<FileListScreen> {
+  final Set<int> _expandedYears = {};
+  bool _initialized = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      ref.invalidate(fileListProvider);
+    });
+  }
+
+  void _toggle(int year) => setState(() {
+        if (_expandedYears.contains(year)) {
+          _expandedYears.remove(year);
+        } else {
+          _expandedYears.add(year);
+        }
+      });
+
+  Map<int, List<FileSummary>> _groupByYear(List<FileSummary> files) {
+    final map = <int, List<FileSummary>>{};
+    for (final f in files) {
+      (map[f.date.year] ??= []).add(f);
+    }
+    return map;
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final listAsync = ref.watch(fileListProvider);
 
     return Scaffold(
@@ -33,13 +66,103 @@ class FileListScreen extends ConsumerWidget {
               subMessage: '음성 또는 텍스트로 첫 메모를 남겨보세요',
             );
           }
+
+          final grouped = _groupByYear(files);
+          final years = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
+
+          // 첫 로드 시 가장 최근 연도 자동 확장
+          if (!_initialized) {
+            _initialized = true;
+            _expandedYears.add(years.first);
+          }
+
+          // 연도 헤더(int)와 파일(FileSummary) 섞인 플랫 리스트 구성
+          final items = <dynamic>[];
+          for (final year in years) {
+            items.add(year);
+            if (_expandedYears.contains(year)) {
+              items.addAll(grouped[year]!);
+            }
+          }
+
           return ListView.separated(
-            itemCount: files.length,
-            separatorBuilder: (_, _) => const Divider(height: 1),
-            itemBuilder: (context, index) =>
-                _FileItem(file: files[index]),
+            itemCount: items.length,
+            separatorBuilder: (_, index) {
+              // 연속된 파일 항목 사이에만 구분선 표시
+              if (items[index] is FileSummary &&
+                  index + 1 < items.length &&
+                  items[index + 1] is FileSummary) {
+                return const Divider(height: 1, indent: 16, endIndent: 16);
+              }
+              return const SizedBox.shrink();
+            },
+            itemBuilder: (context, index) {
+              final item = items[index];
+              if (item is int) {
+                return _YearHeader(
+                  year: item,
+                  count: grouped[item]!.length,
+                  expanded: _expandedYears.contains(item),
+                  onTap: () => _toggle(item),
+                );
+              }
+              return _FileItem(file: item as FileSummary);
+            },
           );
         },
+      ),
+    );
+  }
+}
+
+class _YearHeader extends StatelessWidget {
+  final int year;
+  final int count;
+  final bool expanded;
+  final VoidCallback onTap;
+
+  const _YearHeader({
+    required this.year,
+    required this.count,
+    required this.expanded,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+        child: Row(
+          children: [
+            AnimatedRotation(
+              turns: expanded ? 0.25 : 0,
+              duration: const Duration(milliseconds: 200),
+              child: Icon(Icons.chevron_right,
+                  size: 20, color: colorScheme.primary),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '$year년',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+                color: colorScheme.primary,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '$count개',
+              style: TextStyle(
+                fontSize: 12,
+                color: colorScheme.onSurface.withValues(alpha: 0.45),
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -58,6 +181,10 @@ class _FileItemState extends ConsumerState<_FileItem> {
 
   @override
   Widget build(BuildContext context) {
+    final showAddress = ref.watch(
+      settingsProvider.select((s) => s.valueOrNull?.showAddressInMemoName ?? true),
+    );
+    final textColor = Theme.of(context).colorScheme.onSurface;
     return InkWell(
       onTap: () => _openViewer(context),
       onLongPress: () => _showContextMenu(context),
@@ -70,20 +197,27 @@ class _FileItemState extends ConsumerState<_FileItem> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    file.displayName,
-                    style: const TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w600),
-                  ),
-                  const SizedBox(height: 2),
-                  Text(
-                    DateFormatter.toRelativeDate(file.date),
-                    style: TextStyle(
-                      fontSize: 13,
-                      color: Theme.of(context)
-                          .colorScheme
-                          .onSurface
-                          .withValues(alpha: 0.6),
+                  RichText(
+                    overflow: TextOverflow.ellipsis,
+                    text: TextSpan(
+                      text: file.displayName,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w600,
+                        color: textColor,
+                      ),
+                      children: showAddress && file.address != null
+                          ? [
+                              TextSpan(
+                                text: ' (${file.address})',
+                                style: TextStyle(
+                                  fontSize: 12.8,
+                                  fontWeight: FontWeight.normal,
+                                  color: textColor.withValues(alpha: 0.4),
+                                ),
+                              ),
+                            ]
+                          : null,
                     ),
                   ),
                 ],
@@ -93,19 +227,13 @@ class _FileItemState extends ConsumerState<_FileItem> {
               '${file.entryCount}개',
               style: TextStyle(
                 fontSize: 13,
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withValues(alpha: 0.5),
+                color: textColor.withValues(alpha: 0.5),
               ),
             ),
             const SizedBox(width: 4),
             Icon(
               Icons.chevron_right,
-              color: Theme.of(context)
-                  .colorScheme
-                  .onSurface
-                  .withValues(alpha: 0.3),
+              color: textColor.withValues(alpha: 0.3),
             ),
           ],
         ),

@@ -4,6 +4,7 @@ class FileSummary {
   final String displayName;
   final int entryCount;
   final String displayFolderPath; // UI 표시용 폴더 경로
+  final String? address;
 
   const FileSummary({
     required this.date,
@@ -11,5 +12,6 @@ class FileSummary {
     required this.displayName,
     required this.entryCount,
     this.displayFolderPath = '',
+    this.address,
   });
 }

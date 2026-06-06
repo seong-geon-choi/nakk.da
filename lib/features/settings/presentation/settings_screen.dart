@@ -80,14 +80,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ),
             ListTile(
               leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('사진 저장 위치'),
+              title: const Text('카메라 사진 저장 위치'),
               subtitle: Text(
                 settings.photoSavePath,
                 style: const TextStyle(fontSize: 12),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
-              onTap: () => _showPhotoSavePathDialog(context, ref, settings.photoSavePath),
+              onTap: () => ref.read(settingsProvider.notifier).pickPhotoSaveFolder(),
             ),
 
             // ── 표시 섹션 ─────────────────────────────
@@ -107,6 +107,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               value: settings.autoSaveVoice,
               onChanged: (v) =>
                   ref.read(settingsProvider.notifier).updateAutoSaveVoice(v),
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.place_outlined),
+              title: const Text('메모 이름에 지역정보 표시'),
+              subtitle: const Text('메모 목록에서 날짜 옆에 촬영 지역 주소를 표시합니다'),
+              value: settings.showAddressInMemoName,
+              onChanged: (v) =>
+                  ref.read(settingsProvider.notifier).updateShowAddressInMemoName(v),
             ),
 
             // ── API 섹션 ──────────────────────────────
@@ -143,7 +151,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ),
 
             // ── 볼륨 버튼 음성 입력 섹션 ─────────────────
-            const _SectionHeader(label: '볼륨 버튼 음성 입력'),
+            const _SectionHeader(label: '볼륨 버튼 음성 메모'),
             const _AccessibilityTile(),
 
             // ── 권한 섹션 ─────────────────────────────
@@ -162,6 +170,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               subtitle: const Text('마크다운 파일을 직접 편집합니다'),
               onTap: () => _openMemoEditor(context, ref),
             ),
+            ListTile(
+              leading: const Icon(Icons.photo_outlined),
+              title: const Text('미사용 사진 정리'),
+              subtitle: const Text('메모에 포함되지 않은 복사 사진을 삭제합니다'),
+              onTap: () => _cleanUnusedPhotos(context, ref),
+            ),
             const SizedBox(height: 16),
           ],
         ),
@@ -179,7 +193,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
       (Permission.camera, '카메라', '사진 촬영'),
       (Permission.photos, '사진', '갤러리 사진 선택'),
       (Permission.notification, '알림', '음성 메모 상태 표시'),
-      (Permission.manageExternalStorage, '전체 파일 접근', '(선택) 사진 갤러리 직접 접근'),
     ];
 
     return items.map((item) {
@@ -190,12 +203,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         subtitle: Text(desc, style: const TextStyle(fontSize: 12)),
         trailing: PermissionStatusChip(isGranted: isGranted),
         onTap: () async {
-          if (perm == Permission.manageExternalStorage) {
-            await perm.request();
-            ref.invalidate(permissionStatusProvider);
-          } else {
-            await openAppSettings();
-          }
+          await openAppSettings();
         },
       );
     }).toList();
@@ -257,59 +265,50 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     controller.dispose();
   }
 
-  Future<void> _showPhotoSavePathDialog(
-    BuildContext context,
-    WidgetRef ref,
-    String current,
-  ) async {
-    final controller = TextEditingController(text: current);
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('사진 저장 위치 변경'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: controller,
-              decoration: const InputDecoration(
-                labelText: '저장 경로',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              '⚠️ 기존 사진은 이동되지 않습니다.\n'
-              'DCIM 등 공용 폴더 접근은 파일 관리 권한이 필요합니다.',
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('저장'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed == true && context.mounted) {
-      final newPath = controller.text.trim();
-      if (newPath.isNotEmpty && newPath != current) {
-        await ref.read(settingsProvider.notifier).updatePhotoSavePath(newPath);
-      }
-    }
-    controller.dispose();
-  }
+}
 
+Future<void> _cleanUnusedPhotos(BuildContext context, WidgetRef ref) async {
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('미사용 사진 정리'),
+      content: const Text(
+        '메모에 포함되지 않은 복사 사진을 삭제합니다.\n갤러리 원본 사진은 영향을 받지 않습니다.',
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context, false),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(context, true),
+          child: const Text('정리'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) return;
+
+  final settings = ref.read(settingsProvider).valueOrNull;
+  if (settings == null) return;
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(
+      content: Text('사진 정리 중...'),
+      duration: Duration(minutes: 1),
+    ),
+  );
+
+  final count = await ref
+      .read(fileListRepositoryProvider)
+      .cleanUnusedPhotos(settings.savePath);
+
+  if (context.mounted) {
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${count}개 사진 삭제 완료')),
+    );
+  }
 }
 
 Future<void> _openMemoEditor(BuildContext context, WidgetRef ref) async {
@@ -440,38 +439,31 @@ class _AccessibilityTileState extends State<_AccessibilityTile>
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        ListTile(
-          leading: Icon(
-            _enabled ? Icons.volume_up : Icons.volume_off_outlined,
+        SwitchListTile(
+          secondary: Icon(
+            _enabled ? Icons.lock_open : Icons.lock_outline,
             color: _enabled ? Colors.green : null,
           ),
-          title: const Text('볼륨 ↑ 두 번 → 음성 메모'),
+          title: const Text('잠금화면 · 화면 꺼짐 상태 지원'),
           subtitle: Text(
-            _enabled ? '활성화됨 — 잠금 화면에서도 동작합니다' : '비활성화됨',
+            _enabled
+                ? '활성화됨 — 화면 꺼짐·잠금 상태에서도 동작합니다'
+                : '화면 켜진 상태에서만 동작합니다',
             style: TextStyle(
               fontSize: 12,
               color: _enabled ? Colors.green : null,
             ),
           ),
-          trailing: _enabled
-              ? const Icon(Icons.check_circle, color: Colors.green)
-              : FilledButton(
-                  onPressed: () async {
-                    await openAccessibilitySettings();
-                  },
-                  style: FilledButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                  child: const Text('활성화'),
-                ),
+          value: _enabled,
+          onChanged: (_) async => await openAccessibilitySettings(),
         ),
         if (!_enabled)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: Text(
-              '활성화 버튼 → 접근성 → 설치된 서비스 → 낚.다 음성 메모 → 켜기',
+              '볼륨 ↑ 두 번으로 음성 메모를 입력할 수 있습니다.\n'
+              '잠금화면·화면 꺼짐 상태에서도 사용하려면 접근성 서비스를 활성화하세요.\n'
+              '활성화 → 접근성 → 설치된 서비스 → 낚.다 음성 메모 → 켜기',
               style: TextStyle(
                 fontSize: 12,
                 color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
