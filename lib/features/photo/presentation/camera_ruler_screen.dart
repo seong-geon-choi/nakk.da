@@ -218,15 +218,24 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
 
   Future<String?> _saveVideo(String tempPath) async {
     try {
-      final dir = await getExternalStorageDirectory();
-      if (dir == null) return tempPath;
-      final videosDir = Directory('${dir.path}/videos');
-      await videosDir.create(recursive: true);
+      final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
       final ts = DateTime.now().millisecondsSinceEpoch;
-      final destPath = '${videosDir.path}/video_$ts.mp4';
-      await File(tempPath).copy(destPath);
+      final filename = 'video_$ts.mp4';
       saveToGallery(tempPath, relativePath: 'DCIM/nakkda');
-      return destPath;
+      if (savePath.isNotEmpty && !savePath.startsWith('content://')) {
+        final videosDir = Directory('$savePath/videos');
+        await videosDir.create(recursive: true);
+        await File(tempPath).copy('$savePath/videos/$filename');
+        return 'videos/$filename';
+      } else {
+        final dir = await getExternalStorageDirectory();
+        if (dir == null) return tempPath;
+        final videosDir = Directory('${dir.path}/videos');
+        await videosDir.create(recursive: true);
+        final destPath = '${videosDir.path}/$filename';
+        await File(tempPath).copy(destPath);
+        return destPath;
+      }
     } catch (_) {
       return tempPath;
     }

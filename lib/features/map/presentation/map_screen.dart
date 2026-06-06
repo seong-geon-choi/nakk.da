@@ -13,6 +13,7 @@ import '../../../core/utils/file_name_parser.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/widgets/memo_date_picker_dialog.dart';
 import '../../../core/widgets/saf_image.dart';
+import '../../../core/widgets/video_player_widget.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
   final String? filePath;
@@ -348,11 +349,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 point: _selected!,
                 savePath: _savePath,
                 onClose: () => setState(() => _selected = null),
-                onConnect: () => setState(() {
-                  _showLines = !_showLines;
-                  _selected = null;
-                }),
-                linesActive: _showLines,
               ),
             ),
           // GPS 없음 안내
@@ -419,6 +415,7 @@ class _GpsPoint {
   final bool isMemo;
   final String? text;
   final String? photoPath;
+  final String? videoPath;
   final double? fishLength;
   final String? address;
 
@@ -429,6 +426,7 @@ class _GpsPoint {
         isMemo = true,
         text = e.text,
         photoPath = e.photoPath,
+        videoPath = e.videoPath,
         fishLength = e.fishLength,
         address = null;
 
@@ -439,6 +437,7 @@ class _GpsPoint {
         isMemo = false,
         text = null,
         photoPath = null,
+        videoPath = null,
         fishLength = null,
         address = l.address;
 
@@ -455,15 +454,11 @@ class _PointPopup extends StatelessWidget {
   final _GpsPoint point;
   final String savePath;
   final VoidCallback onClose;
-  final VoidCallback onConnect;
-  final bool linesActive;
 
   const _PointPopup({
     required this.point,
     required this.savePath,
     required this.onClose,
-    required this.onConnect,
-    required this.linesActive,
   });
 
   @override
@@ -518,6 +513,14 @@ class _PointPopup extends StatelessWidget {
                   fit: BoxFit.cover,
                 ),
               ),
+            if (point.videoPath != null)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 6),
+                child: VideoPlayerWidget(
+                  videoPath: point.videoPath!,
+                  height: 80,
+                ),
+              ),
             if (point.text != null && point.text!.isNotEmpty)
               Padding(
                 padding: const EdgeInsets.only(bottom: 4),
@@ -540,28 +543,6 @@ class _PointPopup extends StatelessWidget {
                   ),
                 ),
               ),
-            const SizedBox(height: 4),
-            // 버튼
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                OutlinedButton.icon(
-                  onPressed: onConnect,
-                  icon: Icon(
-                    linesActive ? Icons.timeline : Icons.timeline_outlined,
-                    size: 16,
-                  ),
-                  label:
-                      Text(linesActive ? '연결 해제' : '연결'),
-                  style: OutlinedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 6),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  ),
-                ),
-              ],
-            ),
           ],
         ),
       ),
@@ -696,6 +677,14 @@ class _ClusterSheet extends StatelessWidget {
                                 savePath: savePath,
                                 height: 100,
                                 fit: BoxFit.cover,
+                              ),
+                            ],
+                            // 동영상
+                            if (pt.videoPath != null) ...[
+                              const SizedBox(height: 6),
+                              VideoPlayerWidget(
+                                videoPath: pt.videoPath!,
+                                height: 100,
                               ),
                             ],
                           ],

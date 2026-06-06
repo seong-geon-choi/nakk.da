@@ -1,10 +1,13 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
+import '../../features/settings/presentation/settings_provider.dart';
 
-class VideoPlayerWidget extends StatefulWidget {
+/// 상대경로(videos/filename) 또는 절대경로를 받아 썸네일 표시 + 전체화면 재생.
+class VideoPlayerWidget extends ConsumerStatefulWidget {
   final String videoPath;
   final double? height;
 
@@ -15,17 +18,19 @@ class VideoPlayerWidget extends StatefulWidget {
   });
 
   @override
-  State<VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
+  ConsumerState<VideoPlayerWidget> createState() => _VideoPlayerWidgetState();
 }
 
-class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
+class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
   late final Future<Uint8List?> _thumbnailFuture;
 
   @override
   void initState() {
     super.initState();
+    final absPath = _resolve(widget.videoPath,
+        ref.read(settingsProvider).valueOrNull?.savePath ?? '');
     _thumbnailFuture = VideoThumbnail.thumbnailData(
-      video: widget.videoPath,
+      video: absPath,
       imageFormat: ImageFormat.JPEG,
       maxHeight: 300,
       quality: 75,
@@ -34,11 +39,13 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
 
   @override
   Widget build(BuildContext context) {
+    final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+    final absPath = _resolve(widget.videoPath, savePath);
     final h = widget.height ?? 120.0;
     return GestureDetector(
       onTap: () => Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => _VideoFullScreenPage(videoPath: widget.videoPath),
+          builder: (_) => _VideoFullScreenPage(videoPath: absPath),
         ),
       ),
       child: Stack(
@@ -67,7 +74,8 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
                 ),
                 child: snapshot.connectionState == ConnectionState.waiting
                     ? const Center(
-                        child: CircularProgressIndicator(color: Colors.white54, strokeWidth: 2))
+                        child: CircularProgressIndicator(
+                            color: Colors.white54, strokeWidth: 2))
                     : const Icon(Icons.videocam, color: Colors.white38, size: 40),
               );
             },
@@ -85,6 +93,15 @@ class _VideoPlayerWidgetState extends State<VideoPlayerWidget> {
       ),
     );
   }
+}
+
+/// videoPath가 상대경로(videos/...)면 savePath와 합쳐 절대경로로 반환.
+String _resolve(String videoPath, String savePath) {
+  if (videoPath.startsWith('/')) return videoPath;
+  if (savePath.isNotEmpty && !savePath.startsWith('content://')) {
+    return '$savePath/$videoPath';
+  }
+  return videoPath;
 }
 
 class _VideoFullScreenPage extends StatefulWidget {
@@ -167,7 +184,9 @@ class _VideoFullScreenPageState extends State<_VideoFullScreenPage> {
                     ),
                     IconButton(
                       icon: Icon(
-                        _controller.value.isPlaying ? Icons.pause : Icons.play_arrow,
+                        _controller.value.isPlaying
+                            ? Icons.pause
+                            : Icons.play_arrow,
                         color: Colors.white,
                         size: 40,
                       ),
