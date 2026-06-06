@@ -4,4 +4,5 @@
     android:accessibilityEventTypes="typeAllMask"
     android:accessibilityFlags="flagRequestFilterKeyEvents"
     android:canRequestFilterKeyEvents="true"
-    android:notificationTimeout="100" />
+    android:notificationTimeout="100"
+    android:isAccessibilityTool="true" />
