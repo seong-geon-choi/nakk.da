@@ -28,7 +28,7 @@ class MemoRepositoryImpl implements MemoRepository {
       }
     }
     if (content == null) return null;
-    final blocks = MdSerializer.parseBlocks(content);
+    final blocks = MdSerializer.parseBlocks(content, date);
     final trackPoints = MdSerializer.parseTrackPoints(content);
     return DayFile(date: date, filePath: '$savePath/$filename', blocks: blocks, trackPoints: trackPoints);
   }

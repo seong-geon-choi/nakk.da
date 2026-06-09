@@ -140,6 +140,7 @@ class AppSettings {
   final bool showAddressInMemoName;
   final String? khoaApiKey;
   final WatermarkSettings watermark;
+  final bool showTrackingButton;
   final bool locationTrackingEnabled;
   final int trackingIntervalMeters;
 
@@ -154,6 +155,7 @@ class AppSettings {
     this.showAddressInMemoName = true,
     this.khoaApiKey,
     WatermarkSettings? watermark,
+    this.showTrackingButton = true,
     this.locationTrackingEnabled = false,
     this.trackingIntervalMeters = 100,
   }) : watermark = watermark ?? WatermarkSettings();
@@ -173,6 +175,7 @@ class AppSettings {
     String? khoaApiKey,
     bool clearKhoaApiKey = false,
     WatermarkSettings? watermark,
+    bool? showTrackingButton,
     bool? locationTrackingEnabled,
     int? trackingIntervalMeters,
   }) {
@@ -185,6 +188,7 @@ class AppSettings {
       showAddressInMemoName: showAddressInMemoName ?? this.showAddressInMemoName,
       khoaApiKey: clearKhoaApiKey ? null : (khoaApiKey ?? this.khoaApiKey),
       watermark: watermark ?? this.watermark,
+      showTrackingButton: showTrackingButton ?? this.showTrackingButton,
       locationTrackingEnabled: locationTrackingEnabled ?? this.locationTrackingEnabled,
       trackingIntervalMeters: trackingIntervalMeters ?? this.trackingIntervalMeters,
     );

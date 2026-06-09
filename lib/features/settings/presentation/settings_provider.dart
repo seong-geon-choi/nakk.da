@@ -83,6 +83,14 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     state = AsyncData(updated);
   }
 
+  Future<void> updateShowTrackingButton(bool show) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(showTrackingButton: show);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
   Future<void> updateShowLocationButton(bool show) async {
     final current = state.valueOrNull;
     if (current == null) return;

@@ -114,7 +114,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final repo = ref.read(memoRepositoryProvider);
     final dayFile = await repo.loadDayFile(currentDate, settings.savePath);
     if (mounted) {
-      setState(() => _trackPoints = dayFile?.trackPoints ?? []);
+      final pts = dayFile?.trackPoints ?? [];
+      pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      setState(() => _trackPoints = pts);
     }
   }
 
@@ -161,7 +163,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final dayFile = await repo.loadDayFile(picked, settings.savePath);
     _applyBlocks(dayFile?.blocks ?? [], picked);
     if (mounted) {
-      setState(() => _trackPoints = dayFile?.trackPoints ?? []);
+      final pts = dayFile?.trackPoints ?? [];
+      pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+      setState(() => _trackPoints = pts);
     }
   }
 
@@ -256,65 +260,34 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final showTrackingButton =
+        ref.watch(settingsProvider).valueOrNull?.showTrackingButton ?? true;
     final placed = _spreadPoints();
     final placedSorted = List<_PlacedPoint>.from(placed)
       ..sort((a, b) => a.point.timestamp.compareTo(b.point.timestamp));
+    // 메모 타임스탬프를 파일명 날짜 + HH:mm 으로 재구성해 트래킹과 동일한 기준으로 비교
+    DateTime memoFullTs(_PlacedPoint p) => DateTime(
+          _loadedDate.year, _loadedDate.month, _loadedDate.day,
+          p.point.timestamp.hour, p.point.timestamp.minute);
+    final linePoints = () {
+      if (_showTrack && _trackPoints.isNotEmpty) {
+        final combined = <MapEntry<DateTime, LatLng>>[
+          for (final p in placedSorted)
+            MapEntry(memoFullTs(p), LatLng(p.point.lat, p.point.lng)),
+          for (final p in _trackPoints)
+            MapEntry(p.timestamp, LatLng(p.lat, p.lng)),
+        ]..sort((a, b) => a.key.compareTo(b.key));
+        return combined.map((e) => e.value).toList();
+      }
+      final memoOnly = [
+        for (final p in placedSorted)
+          MapEntry(memoFullTs(p), LatLng(p.point.lat, p.point.lng)),
+      ]..sort((a, b) => a.key.compareTo(b.key));
+      return memoOnly.map((e) => e.value).toList();
+    }();
     return Scaffold(
       appBar: AppBar(
         title: Text(DateFormatter.toDateString(_loadedDate)),
-        actions: [
-          if (placed.isNotEmpty)
-            IconButton(
-              icon: Icon(
-                Icons.schedule,
-                color: _showTimes
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
-              ),
-              tooltip: _showTimes ? '시간 숨기기' : '시간 표시',
-              onPressed: () => setState(() => _showTimes = !_showTimes),
-            ),
-          if (placed.length >= 2) ...[
-            IconButton(
-              icon: Icon(
-                Icons.straighten,
-                color: _showLines && _showDistances
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
-              ),
-              tooltip: '거리 표시',
-              onPressed: _showLines
-                  ? () => setState(() => _showDistances = !_showDistances)
-                  : null,
-            ),
-            IconButton(
-              icon: Icon(
-                _showLines ? Icons.timeline : Icons.timeline_outlined,
-                color: _showLines
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
-              ),
-              tooltip: _showLines ? '경로 숨기기' : '경로 연결',
-              onPressed: () => setState(() => _showLines = !_showLines),
-            ),
-          ],
-          if (_trackPoints.isNotEmpty)
-            IconButton(
-              icon: Icon(
-                Icons.route,
-                color: _showTrack
-                    ? Theme.of(context).colorScheme.primary
-                    : null,
-              ),
-              tooltip: _showTrack ? '이동경로 숨기기' : '이동경로 표시',
-              onPressed: () => setState(() => _showTrack = !_showTrack),
-            ),
-          IconButton(
-            icon: const Icon(Icons.calendar_today_outlined),
-            tooltip: '날짜 선택',
-            onPressed: _pickDate,
-          ),
-        ],
       ),
       body: Stack(
         children: [
@@ -350,14 +323,24 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     ),
                   ],
                 ),
-              if (_showLines && placed.length >= 2)
+              if (_showTrack && _trackPoints.isNotEmpty)
+                CircleLayer(
+                  circles: _trackPoints
+                      .map((p) => CircleMarker(
+                            point: LatLng(p.lat, p.lng),
+                            radius: 4,
+                            color: const Color(0xCCFF6D00),
+                            borderColor: Colors.white,
+                            borderStrokeWidth: 1,
+                          ))
+                      .toList(),
+                ),
+              if (_showLines && linePoints.length >= 2)
                 PolylineLayer(
                   polylines: [
                     Polyline(
-                      points: placedSorted
-                          .map((p) => LatLng(p.lat, p.lng))
-                          .toList(),
-                      color: Colors.blue.shade600,
+                      points: linePoints,
+                      color: const Color(0xCCFF6D00),
                       strokeWidth: 2.5,
                     ),
                   ],
@@ -528,10 +511,78 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 ],
               ),
             ),
+          // 우측 세로 툴바
+          Positioned(
+            top: 8,
+            right: 8,
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Material(
+                color: Theme.of(context).colorScheme.surfaceContainerHighest
+                    .withValues(alpha: 0.92),
+                elevation: 2,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    _toolBtn(Icons.calendar_today_outlined, null, _pickDate),
+                    if (placed.isNotEmpty) ...[
+                      _divider(),
+                      _toolBtn(
+                        Icons.schedule,
+                        _showTimes ? Theme.of(context).colorScheme.primary : null,
+                        () => setState(() => _showTimes = !_showTimes),
+                      ),
+                    ],
+                    if (placed.length >= 2) ...[
+                      _divider(),
+                      _toolBtn(
+                        _showLines ? Icons.timeline : Icons.timeline_outlined,
+                        _showLines ? Theme.of(context).colorScheme.primary : null,
+                        () => setState(() => _showLines = !_showLines),
+                      ),
+                      _toolBtn(
+                        Icons.straighten,
+                        _showLines && _showDistances
+                            ? Theme.of(context).colorScheme.primary
+                            : null,
+                        _showLines
+                            ? () => setState(() => _showDistances = !_showDistances)
+                            : null,
+                      ),
+                    ],
+                    if (showTrackingButton && _trackPoints.isNotEmpty) ...[
+                      _divider(),
+                      _toolBtn(
+                        Icons.route,
+                        _showTrack ? Theme.of(context).colorScheme.primary : null,
+                        () => setState(() => _showTrack = !_showTrack),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );
   }
+
+  Widget _toolBtn(IconData icon, Color? color, VoidCallback? onPressed) {
+    return SizedBox(
+      width: 40,
+      height: 40,
+      child: IconButton(
+        iconSize: 20,
+        padding: EdgeInsets.zero,
+        icon: Icon(icon, color: color),
+        onPressed: onPressed,
+      ),
+    );
+  }
+
+  Widget _divider() =>
+      const Divider(height: 1, thickness: 1, indent: 6, endIndent: 6);
 }
 
 // ── 분산 배치 포인트 모델 ──────────────────────────────────

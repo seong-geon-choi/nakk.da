@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'settings_provider.dart';
-import '../domain/models/app_settings.dart';
 import 'watermark_settings_screen.dart';
 import '../../permission/presentation/permission_provider.dart';
 import '../../file_list/presentation/file_list_provider.dart';
@@ -11,7 +10,6 @@ import '../../memo/presentation/memo_editor_screen.dart';
 import '../../../core/constants/api_keys.dart';
 import '../../../core/widgets/permission_status_chip.dart';
 import '../../../core/services/accessibility_service.dart';
-import '../../../core/services/tracking_service.dart';
 import '../../../core/utils/media_scanner.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -23,13 +21,10 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen>
     with WidgetsBindingObserver {
-  bool _trackingActive = false;
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _refreshTrackingStatus();
   }
 
   @override
@@ -40,73 +35,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // 시스템 설정에서 돌아올 때 권한 상태 재조회
     if (state == AppLifecycleState.resumed) {
       ref.invalidate(permissionStatusProvider);
-      _refreshTrackingStatus();
     }
-  }
-
-  Future<void> _refreshTrackingStatus() async {
-    final active = await TrackingService().isTracking();
-    if (!mounted) return;
-    setState(() => _trackingActive = active);
-    // 서비스가 자동 종료된 경우 설정값도 동기화
-    final settings = ref.read(settingsProvider).valueOrNull;
-    if (settings != null && settings.locationTrackingEnabled && !active) {
-      await ref.read(settingsProvider.notifier).updateLocationTrackingEnabled(false);
-    }
-  }
-
-  Future<void> _toggleTracking(bool enable, AppSettings settings) async {
-    if (!enable) {
-      await TrackingService().stopTracking();
-      await ref.read(settingsProvider.notifier).updateLocationTrackingEnabled(false);
-      if (mounted) setState(() => _trackingActive = false);
-      return;
-    }
-
-    // 위치 권한 확인
-    if (!await Permission.locationWhenInUse.isGranted) {
-      final status = await Permission.locationWhenInUse.request();
-      if (!status.isGranted) return;
-    }
-
-    // 백그라운드 위치 권한 확인
-    var bgStatus = await Permission.locationAlways.status;
-    if (!bgStatus.isGranted) {
-      bgStatus = await Permission.locationAlways.request();
-    }
-    if (!bgStatus.isGranted) {
-      if (!mounted) return;
-      final shouldOpen = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('백그라운드 위치 권한 필요'),
-          content: const Text(
-            '백그라운드에서 이동 경로를 기록하려면\n'
-            '위치 권한을 "항상 허용"으로 설정해야 합니다.\n\n'
-            '설정 → 권한 → 위치 → 항상 허용',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('취소'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('설정 열기'),
-            ),
-          ],
-        ),
-      );
-      if (shouldOpen == true) openAppSettings();
-      return;
-    }
-
-    await TrackingService().startTracking(settings.trackingIntervalMeters);
-    await ref.read(settingsProvider.notifier).updateLocationTrackingEnabled(true);
-    if (mounted) setState(() => _trackingActive = true);
   }
 
   @override
@@ -225,22 +156,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             // ── 위치 트래킹 섹션 ──────────────────────────
             const _SectionHeader(label: '위치 트래킹'),
             SwitchListTile(
-              secondary: Icon(
-                Icons.route,
-                color: _trackingActive ? Colors.green : null,
-              ),
-              title: const Text('이동 경로 기록'),
-              subtitle: Text(
-                _trackingActive
-                    ? '기록 중 — 12시간 후 자동 종료'
-                    : '비활성화됨',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: _trackingActive ? Colors.green : null,
-                ),
-              ),
-              value: _trackingActive,
-              onChanged: (v) => _toggleTracking(v, settings),
+              secondary: const Icon(Icons.route_outlined),
+              title: const Text('경로 기록 버튼 표시'),
+              subtitle: const Text('홈 화면 버튼 및 지도 메뉴의 이동경로 버튼을 표시합니다'),
+              value: settings.showTrackingButton,
+              onChanged: (v) =>
+                  ref.read(settingsProvider.notifier).updateShowTrackingButton(v),
             ),
             ListTile(
               leading: const Icon(Icons.straighten_outlined),

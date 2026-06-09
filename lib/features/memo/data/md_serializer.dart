@@ -52,7 +52,7 @@ class MdSerializer {
 
   // ── 읽기 ──────────────────────────────────────────────
 
-  static List<dynamic> parseBlocks(String content) {
+  static List<dynamic> parseBlocks(String content, DateTime date) {
     final result = <dynamic>[];
     // 현황 블록 먼저 파싱 (--- 구분자와 무관하게 ## 현황으로 시작)
     // 전체를 줄 단위로 처리
@@ -69,8 +69,7 @@ class MdSerializer {
           final timeMatch = RegExp(r'\((\d{2}:\d{2})').firstMatch(line);
           if (timeMatch != null) {
             final parts = timeMatch.group(1)!.split(':');
-            final now = DateTime.now();
-            timestamp = DateTime(now.year, now.month, now.day,
+            timestamp = DateTime(date.year, date.month, date.day,
                 int.parse(parts[0]), int.parse(parts[1]));
           }
         }
@@ -176,8 +175,7 @@ class MdSerializer {
         final lng = entryMatch.group(4) != null
             ? double.tryParse(entryMatch.group(4)!)
             : null;
-        final now = DateTime.now();
-        final ts = DateTime(now.year, now.month, now.day, hour, min);
+        final ts = DateTime(date.year, date.month, date.day, hour, min);
 
         // 본문 수집
         final bodyLines = <String>[];
@@ -298,8 +296,8 @@ class MdSerializer {
 
   // ── 트래킹 포인트 파싱/쓰기 ──────────────────────────────
 
-  static final _trackRe =
-      RegExp(r'^\[//\]: # \(track:(-?\d+\.\d+),(-?\d+\.\d+),(\d+)\)$');
+  static final _trackRe = RegExp(
+      r'^\[//\]: # \(track:(-?\d+\.\d+),(-?\d+\.\d+),(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\)$');
 
   static List<TrackPoint> parseTrackPoints(String content) {
     final points = <TrackPoint>[];
@@ -308,13 +306,9 @@ class MdSerializer {
       if (m == null) continue;
       final lat = double.tryParse(m.group(1)!);
       final lng = double.tryParse(m.group(2)!);
-      final ms = int.tryParse(m.group(3)!);
-      if (lat != null && lng != null && ms != null) {
-        points.add(TrackPoint(
-          lat: lat,
-          lng: lng,
-          timestamp: DateTime.fromMillisecondsSinceEpoch(ms),
-        ));
+      final dt = DateTime.tryParse(m.group(3)!);
+      if (lat != null && lng != null && dt != null) {
+        points.add(TrackPoint(lat: lat, lng: lng, timestamp: dt));
       }
     }
     return points;
@@ -324,9 +318,18 @@ class MdSerializer {
     if (points.isEmpty) return '';
     return points
             .map((p) =>
-                '[//]: # (track:${_fmt(p.lat)},${_fmt(p.lng)},${p.timestamp.millisecondsSinceEpoch})')
+                '[//]: # (track:${_fmt(p.lat)},${_fmt(p.lng)},${_fmtDt(p.timestamp)})')
             .join('\n') +
         '\n';
+  }
+
+  static String _fmtDt(DateTime dt) {
+    final mo = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final mi = dt.minute.toString().padLeft(2, '0');
+    final s = dt.second.toString().padLeft(2, '0');
+    return '${dt.year}-$mo-$d $h:$mi:$s';
   }
 
   // ── 헬퍼 ──────────────────────────────────────────────

@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import '../../core/router/app_router.dart';
 import '../../core/widgets/action_button.dart';
 import '../../core/services/accessibility_service.dart';
+import '../../core/services/tracking_service.dart';
 import '../../core/widgets/confirm_dialog.dart';
 import '../../core/widgets/empty_state_view.dart';
 import '../../core/widgets/memo_entry_card.dart';
@@ -228,6 +229,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                 ),
                 if (showLocationButton)
                   _LocationFab(onTap: _onLocationTap),
+                if (settingsAsync.valueOrNull?.showTrackingButton ?? true)
+                  const _TrackingFab(),
               ],
             ),
           ),
@@ -948,6 +951,160 @@ class _LocationFabState extends State<_LocationFab> {
   }
 }
 
+// ── 이동 경로 기록 토글 FAB ────────────────────────────────
+
+class _TrackingFab extends ConsumerStatefulWidget {
+  const _TrackingFab();
+
+  @override
+  ConsumerState<_TrackingFab> createState() => _TrackingFabState();
+}
+
+class _TrackingFabState extends ConsumerState<_TrackingFab>
+    with WidgetsBindingObserver {
+  bool _isActive = false;
+  double _right = 16;
+  double _bottom = 172;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshStatus();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refreshStatus();
+  }
+
+  Future<void> _refreshStatus() async {
+    final active = await TrackingService().isTracking();
+    if (mounted) setState(() => _isActive = active);
+  }
+
+  Future<void> _onTap() async {
+    if (_isActive) {
+      await TrackingService().stopTracking();
+      await ref.read(settingsProvider.notifier).updateLocationTrackingEnabled(false);
+      if (mounted) setState(() => _isActive = false);
+      return;
+    }
+
+    if (!await Permission.locationWhenInUse.isGranted) {
+      final status = await Permission.locationWhenInUse.request();
+      if (!status.isGranted) return;
+    }
+
+    var bgStatus = await Permission.locationAlways.status;
+    if (!bgStatus.isGranted) {
+      bgStatus = await Permission.locationAlways.request();
+    }
+    if (!bgStatus.isGranted) {
+      if (!mounted) return;
+      final shouldOpen = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: const Text('백그라운드 위치 권한 필요'),
+          content: const Text(
+            '백그라운드에서 이동 경로를 기록하려면\n'
+            '위치 권한을 "항상 허용"으로 설정해야 합니다.\n\n'
+            '설정 → 권한 → 위치 → 항상 허용',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('설정 열기'),
+            ),
+          ],
+        ),
+      );
+      if (shouldOpen == true) openAppSettings();
+      return;
+    }
+
+    final settings = ref.read(settingsProvider).valueOrNull;
+    final interval = settings?.trackingIntervalMeters ?? 100;
+    await TrackingService().startTracking(interval);
+    await ref.read(settingsProvider.notifier).updateLocationTrackingEnabled(true);
+    if (mounted) setState(() => _isActive = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    return Positioned(
+      right: _right.clamp(0.0, mq.size.width - 64.0),
+      bottom: _bottom.clamp(0.0, mq.size.height - 200.0),
+      child: GestureDetector(
+        onTap: _onTap,
+        onPanUpdate: (details) {
+          setState(() {
+            _right -= details.delta.dx;
+            _bottom -= details.delta.dy;
+          });
+        },
+        child: Container(
+          width: 60,
+          height: 60,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: _isActive
+                  ? [
+                      Color.alphaBlend(const Color(0x70FFFFFF), Colors.green.shade600),
+                      Color.alphaBlend(const Color(0x55000000), Colors.green.shade600),
+                    ]
+                  : [
+                      Color.alphaBlend(
+                          const Color(0x70FFFFFF),
+                          Theme.of(context).colorScheme.secondary),
+                      Color.alphaBlend(
+                          const Color(0x55000000),
+                          Theme.of(context).colorScheme.secondary),
+                    ],
+            ),
+            boxShadow: const [
+              BoxShadow(blurRadius: 2, offset: Offset(0, 4), color: Color(0x99000000)),
+              BoxShadow(blurRadius: 12, offset: Offset(0, 8), color: Color(0x44000000)),
+            ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              Icon(
+                _isActive ? Icons.route : Icons.route_outlined,
+                color: _isActive ? Colors.white : Theme.of(context).colorScheme.onSecondary,
+                size: 22,
+              ),
+              Text(
+                _isActive ? '기록 중' : '경로 기록',
+                style: TextStyle(
+                  color: _isActive ? Colors.white : Theme.of(context).colorScheme.onSecondary,
+                  fontSize: 9,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 // ── 파일 목록에서 특정 날짜 파일을 홈 화면처럼 편집하는 화면 ─────
 
 class DayMemoScreen extends ConsumerStatefulWidget {
@@ -997,6 +1154,8 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
           ),
           if (showLocationButton)
             _LocationFab(onTap: _onLocationTap),
+          if (ref.watch(settingsProvider).valueOrNull?.showTrackingButton ?? true)
+            const _TrackingFab(),
         ],
       ),
       bottomNavigationBar: _ActionBar(

@@ -8,6 +8,8 @@ import android.location.*
 import android.os.*
 import androidx.core.app.NotificationCompat
 import org.json.JSONArray
+import java.text.SimpleDateFormat
+import java.util.Locale
 
 class LocationTrackingService : Service() {
 
@@ -38,9 +40,14 @@ class LocationTrackingService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var locationManager: LocationManager? = null
+    private var minDistanceMeters: Float = 100f
+    private var lastSavedLocation: Location? = null
 
     private val locationListener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
+            val last = lastSavedLocation
+            if (last != null && last.distanceTo(location) < minDistanceMeters) return
+            lastSavedLocation = location
             savePoint(location.latitude, location.longitude, location.time)
         }
 
@@ -89,6 +96,7 @@ class LocationTrackingService : Service() {
             return START_NOT_STICKY
         }
         val intervalMeters = (intent?.getIntExtra(EXTRA_INTERVAL, 100) ?: 100).toFloat()
+        minDistanceMeters = intervalMeters
 
         handler.removeCallbacks(autoStopRunnable)
         handler.postDelayed(autoStopRunnable, AUTO_STOP_MS)
@@ -115,6 +123,8 @@ class LocationTrackingService : Service() {
 
     override fun onBind(intent: Intent?) = null
 
+    private val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+
     private fun savePoint(lat: Double, lng: Double, timeMs: Long) {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val arr = try {
@@ -122,7 +132,7 @@ class LocationTrackingService : Service() {
         } catch (_: Exception) {
             JSONArray()
         }
-        arr.put("$lat,$lng,$timeMs")
+        arr.put("$lat,$lng,${timeFmt.format(java.util.Date(timeMs))}")
         prefs.edit().putString(PREFS_PENDING_KEY, arr.toString()).apply()
     }
 

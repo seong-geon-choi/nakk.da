@@ -6,6 +6,7 @@ import '../../../features/location/domain/models/location_status.dart';
 import '../../../core/widgets/location_status_card.dart';
 import '../../../core/widgets/saf_image.dart';
 import '../../../core/services/saf_service.dart';
+import '../../../core/utils/file_name_parser.dart';
 
 class FileViewerScreen extends StatefulWidget {
   final String filePath;
@@ -51,7 +52,9 @@ class _FileViewerScreenState extends State<FileViewerScreen> {
       content = await file.readAsString();
     }
     if (content == null) return [];
-    return MdSerializer.parseBlocks(content);
+    final filename = widget.filePath.split('/').last.split('\\').last;
+    final date = FileNameParser.parseDate(filename) ?? DateTime.now();
+    return MdSerializer.parseBlocks(content, date);
   }
 
   @override

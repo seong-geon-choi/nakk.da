@@ -15,13 +15,9 @@ class TrackPoint {
     if (parts.length != 3) return null;
     final lat = double.tryParse(parts[0]);
     final lng = double.tryParse(parts[1]);
-    final ms = int.tryParse(parts[2]);
-    if (lat == null || lng == null || ms == null) return null;
-    return TrackPoint(
-      lat: lat,
-      lng: lng,
-      timestamp: DateTime.fromMillisecondsSinceEpoch(ms),
-    );
+    final dt = DateTime.tryParse(parts[2]);
+    if (lat == null || lng == null || dt == null) return null;
+    return TrackPoint(lat: lat, lng: lng, timestamp: dt);
   }
 }
 
