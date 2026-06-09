@@ -23,6 +23,7 @@ import '../../core/widgets/memo_date_picker_dialog.dart';
 import '../../core/services/saf_service.dart';
 import 'dart:io';
 import 'package:geolocator/geolocator.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -50,6 +51,57 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (settings == null || !settings.needsFolderSetup) return;
     if (!mounted) return;
     await ref.read(settingsProvider.notifier).pickSaveFolder();
+  }
+
+  Future<bool> _requirePermission(Permission perm, String label) async {
+    if (await perm.status.isGranted) return true;
+    final result = await perm.request();
+    if (result.isGranted) return true;
+    if (result.isPermanentlyDenied && mounted) {
+      final goSettings = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: Text('$label 권한 필요'),
+          content: Text('$label 권한이 거부되었습니다.\n설정에서 권한을 허용한 후 다시 시도해주세요.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('설정 열기'),
+            ),
+          ],
+        ),
+      );
+      if (goSettings == true) openAppSettings();
+    }
+    return false;
+  }
+
+  Future<bool> _requireFolderSetup() async {
+    if (ref.read(settingsProvider).valueOrNull?.needsFolderSetup != true) return true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('저장 폴더 설정 필요'),
+        content: const Text('이 기능을 사용하려면 메모 저장 폴더를 먼저 설정해야 합니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('폴더 설정'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    await ref.read(settingsProvider.notifier).pickSaveFolder();
+    return ref.read(settingsProvider).valueOrNull?.needsFolderSetup == false;
   }
 
   @override
@@ -141,7 +193,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           IconButton(
             icon: const Icon(Icons.folder_outlined),
             tooltip: '파일 목록',
-            onPressed: () => context.push(AppRoutes.fileList),
+            onPressed: _onFileListTap,
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),
@@ -186,13 +238,26 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       bottomNavigationBar: _ActionBar(
         onVoiceTap: () => _openMemoSheet(voiceMode: true),
         onPhotoTap: _onPhotoTap,
-        onMapTap: () => context.push(AppRoutes.map),
+        onMapTap: _onMapTap,
       ),
     );
   }
 
-  void _openMemoSheet({bool voiceMode = false}) {
-    MemoInputSheet.show(context, voiceMode: voiceMode);
+  Future<void> _openMemoSheet({bool voiceMode = false}) async {
+    if (!await _requireFolderSetup()) return;
+    if (voiceMode && !await _requirePermission(Permission.microphone, '마이크')) return;
+    if (mounted) MemoInputSheet.show(context, voiceMode: voiceMode);
+  }
+
+  Future<void> _onFileListTap() async {
+    if (!await _requireFolderSetup()) return;
+    if (mounted) context.push(AppRoutes.fileList);
+  }
+
+  Future<void> _onMapTap() async {
+    if (!await _requireFolderSetup()) return;
+    if (!await _requirePermission(Permission.locationWhenInUse, '위치')) return;
+    if (mounted) context.push(AppRoutes.map);
   }
 
   Future<Set<DateTime>> _loadMarkedDates(String savePath) async {
@@ -218,6 +283,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Future<void> _importDayPhotos() async {
+    if (!await _requireFolderSetup()) return;
+    if (!await _requirePermission(Permission.photos, '사진')) return;
     final settings = ref.read(settingsProvider).valueOrNull;
     if (settings == null) return;
     final markedDates = await _loadMarkedDates(settings.savePath);
@@ -345,6 +412,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Future<void> _onPhotoTap() async {
+    if (!await _requireFolderSetup()) return;
+    if (!await _requirePermission(Permission.camera, '카메라')) return;
+    if (!await _requirePermission(Permission.photos, '사진')) return;
     final result = await MemoInputSheet.pickMedia(context, ref);
     if (result == null || !mounted) return;
 
@@ -398,6 +468,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
   }
 
   Future<void> _onLocationTap() async {
+    if (!await _requirePermission(Permission.locationWhenInUse, '위치')) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Row(

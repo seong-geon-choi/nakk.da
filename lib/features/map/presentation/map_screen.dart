@@ -27,6 +27,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   List<_GpsPoint> _points = [];
   _GpsPoint? _selected;
   bool _showLines = false;
+  bool _dismissedNoGpsCard = false;
   DateTime _loadedDate = DateTime.now();
   MapController _mapController = MapController();
   double _zoom = 14;
@@ -66,6 +67,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       _points = pts;
       _selected = null;
       _showLines = false;
+      _dismissedNoGpsCard = false;
       _loadedDate = date;
       _mapController = MapController();
       _zoom = 14;
@@ -145,15 +147,20 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       ? LatLng(_points.first.lat, _points.first.lng)
       : const LatLng(37.5665, 126.9780);
 
-  // 줌 레벨에 따른 클러스터 묶음 거리 (도 단위)
-  // zoom 15 → ~0.0003° (~33m), zoom 12 → ~0.0024° (~267m)
+  // zoom 레벨 기준 겹침 판정 거리 (도 단위)
   double _thresholdDeg() => 0.0003 * math.pow(2.0, 15.0 - _zoom);
 
-  List<_Cluster> _buildClusters() {
+  // 화면 픽셀 → 위경도 변환
+  double _pixelsToDeg(double pixels) =>
+      pixels * 360.0 / (256.0 * math.pow(2.0, _zoom));
+
+  // 겹치는 포인트를 중심점 주변에 원형으로 분산 배치
+  List<_PlacedPoint> _spreadPoints() {
     if (_points.isEmpty) return [];
     final threshold = _thresholdDeg();
     final remaining = List<_GpsPoint>.from(_points);
-    final clusters = <_Cluster>[];
+    final result = <_PlacedPoint>[];
+
     while (remaining.isNotEmpty) {
       final pivot = remaining.removeAt(0);
       final group = <_GpsPoint>[pivot];
@@ -165,55 +172,38 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         }
         return false;
       });
-      clusters.add(_Cluster(group));
-    }
-    return clusters;
-  }
 
-  void _zoomToCluster(_Cluster cluster) {
-    setState(() => _selected = null);
-    // zoom 18 기준 임계값(~4m) 이내면 지도 확대 대신 목록 시트 표시
-    if (cluster.spread < 0.0000375) {
-      _showClusterSheet(cluster);
-      return;
+      if (group.length == 1) {
+        result.add(_PlacedPoint(group.first, group.first.lat, group.first.lng));
+      } else {
+        final centerLat =
+            group.map((p) => p.lat).reduce((a, b) => a + b) / group.length;
+        final centerLng =
+            group.map((p) => p.lng).reduce((a, b) => a + b) / group.length;
+        final radius = _pixelsToDeg(9.8 / math.sin(math.pi / group.length));
+        for (int i = 0; i < group.length; i++) {
+          final angle = (2 * math.pi * i) / group.length - math.pi / 2;
+          result.add(_PlacedPoint(
+            group[i],
+            centerLat + radius * math.sin(angle),
+            centerLng + radius * math.cos(angle),
+          ));
+        }
+      }
     }
-    _mapController.fitCamera(
-      CameraFit.bounds(
-        bounds: LatLngBounds.fromPoints(
-          cluster.points.map((p) => LatLng(p.lat, p.lng)).toList(),
-        ),
-        padding: const EdgeInsets.all(100),
-        maxZoom: 18,
-      ),
-    );
-  }
-
-  void _showClusterSheet(_Cluster cluster) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
-      ),
-      builder: (_) => _ClusterSheet(
-        cluster: cluster,
-        allPoints: _points,
-        savePath: _savePath,
-        onSelect: (point) {
-          Navigator.of(context).pop();
-          setState(() => _selected = point);
-        },
-      ),
-    );
+    return result;
   }
 
   @override
   Widget build(BuildContext context) {
+    final placed = _spreadPoints();
+    final placedSorted = List<_PlacedPoint>.from(placed)
+      ..sort((a, b) => a.point.timestamp.compareTo(b.point.timestamp));
     return Scaffold(
       appBar: AppBar(
         title: Text(DateFormatter.toDateString(_loadedDate)),
         actions: [
-          if (_points.length >= 2)
+          if (placed.length >= 2)
             IconButton(
               icon: Icon(
                 _showLines ? Icons.timeline : Icons.timeline_outlined,
@@ -253,11 +243,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.nakkda.nakkda',
               ),
-              if (_showLines && _points.length >= 2)
+              if (_showLines && placed.length >= 2)
                 PolylineLayer(
                   polylines: [
                     Polyline(
-                      points: _points
+                      points: placedSorted
                           .map((p) => LatLng(p.lat, p.lng))
                           .toList(),
                       color: Colors.blue.shade600,
@@ -266,75 +256,43 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                   ],
                 ),
               MarkerLayer(
-                markers: _buildClusters().map((cluster) {
-                  if (cluster.isSingle) {
-                    final pt = cluster.point;
-                    final idx = _points.indexOf(pt);
-                    final isSelected = _selected == pt;
-                    return Marker(
-                      point: LatLng(pt.lat, pt.lng),
-                      width: isSelected ? 46 : 34,
-                      height: isSelected ? 46 : 34,
-                      child: GestureDetector(
-                        onTap: () => setState(() => _selected = pt),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: pt.isMemo
-                                ? Colors.blue.shade700
-                                : Colors.teal.shade600,
-                            border: Border.all(
-                              color: isSelected ? Colors.orange : Colors.white,
-                              width: isSelected ? 3 : 2,
-                            ),
-                            boxShadow: const [
-                              BoxShadow(blurRadius: 4, color: Color(0x55000000)),
-                            ],
+                markers: placed.map((placed) {
+                  final pt = placed.point;
+                  final idx = _points.indexOf(pt);
+                  final isSelected = _selected == pt;
+                  return Marker(
+                    point: LatLng(placed.lat, placed.lng),
+                    width: isSelected ? 34 : 24,
+                    height: isSelected ? 34 : 24,
+                    child: GestureDetector(
+                      onTap: () => setState(() => _selected = pt),
+                      child: Container(
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: pt.isMemo
+                              ? Colors.blue.shade700
+                              : Colors.teal.shade600,
+                          border: Border.all(
+                            color: isSelected ? Colors.orange : Colors.white,
+                            width: isSelected ? 3 : 2,
                           ),
-                          child: Center(
-                            child: Text(
-                              '${idx + 1}',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: isSelected ? 14 : 11,
-                                fontWeight: FontWeight.bold,
-                              ),
+                          boxShadow: const [
+                            BoxShadow(blurRadius: 4, color: Color(0x55000000)),
+                          ],
+                        ),
+                        child: Center(
+                          child: Text(
+                            '${idx + 1}',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: isSelected ? 11 : 9,
+                              fontWeight: FontWeight.bold,
                             ),
                           ),
                         ),
                       ),
-                    );
-                  } else {
-                    // 클러스터 마커
-                    return Marker(
-                      point: cluster.center,
-                      width: 48,
-                      height: 48,
-                      child: GestureDetector(
-                        onTap: () => _zoomToCluster(cluster),
-                        child: Container(
-                          decoration: BoxDecoration(
-                            shape: BoxShape.circle,
-                            color: Colors.orange.shade700,
-                            border: Border.all(color: Colors.white, width: 2),
-                            boxShadow: const [
-                              BoxShadow(blurRadius: 4, color: Color(0x55000000)),
-                            ],
-                          ),
-                          child: Center(
-                            child: Text(
-                              '${cluster.points.length}',
-                              style: const TextStyle(
-                                color: Colors.white,
-                                fontSize: 14,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    );
-                  }
+                    ),
+                  );
                 }).toList(),
               ),
             ],
@@ -352,26 +310,51 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               ),
             ),
           // GPS 없음 안내
-          if (_points.isEmpty)
+          if (_points.isEmpty && !_dismissedNoGpsCard)
             Center(
-              child: Card(
-                margin: const EdgeInsets.all(24),
-                child: Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.location_off_outlined, size: 40),
-                      const SizedBox(height: 8),
-                      const Text('GPS 정보가 있는 메모가 없습니다'),
-                      const SizedBox(height: 8),
-                      TextButton(
-                        onPressed: _pickDate,
-                        child: const Text('다른 날짜 불러오기'),
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Card(
+                    margin: const EdgeInsets.all(24),
+                    child: Padding(
+                      padding: const EdgeInsets.fromLTRB(20, 20, 20, 8),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.location_off_outlined, size: 22),
+                              const SizedBox(width: 8),
+                              const Text('GPS 정보가 있는 메모가 없습니다'),
+                            ],
+                          ),
+                          TextButton(
+                            onPressed: _pickDate,
+                            child: const Text('다른 날짜 불러오기'),
+                          ),
+                        ],
                       ),
-                    ],
+                    ),
                   ),
-                ),
+                  Positioned(
+                    top: 12,
+                    right: 12,
+                    child: GestureDetector(
+                      onTap: () => setState(() => _dismissedNoGpsCard = true),
+                      child: Container(
+                        width: 24,
+                        height: 24,
+                        decoration: const BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: Color(0xFF9E9E9E),
+                        ),
+                        child: const Icon(Icons.close, size: 14, color: Colors.white),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
         ],
@@ -380,30 +363,13 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 }
 
-// ── 클러스터 모델 ──────────────────────────────────────────
+// ── 분산 배치 포인트 모델 ──────────────────────────────────
 
-class _Cluster {
-  final List<_GpsPoint> points;
-  _Cluster(this.points);
-
-  bool get isSingle => points.length == 1;
-  _GpsPoint get point => points.first;
-
-  LatLng get center {
-    final lat = points.map((p) => p.lat).reduce((a, b) => a + b) / points.length;
-    final lng = points.map((p) => p.lng).reduce((a, b) => a + b) / points.length;
-    return LatLng(lat, lng);
-  }
-
-  // 클러스터 내 최대 좌표 편차 (도 단위)
-  double get spread {
-    if (points.length <= 1) return 0;
-    final lats = points.map((p) => p.lat);
-    final lngs = points.map((p) => p.lng);
-    final latSpread = lats.reduce(math.max) - lats.reduce(math.min);
-    final lngSpread = lngs.reduce(math.max) - lngs.reduce(math.min);
-    return math.max(latSpread, lngSpread);
-  }
+class _PlacedPoint {
+  final _GpsPoint point;
+  final double lat;
+  final double lng;
+  const _PlacedPoint(this.point, this.lat, this.lng);
 }
 
 // ── GPS 포인트 모델 ─────────────────────────────────────────
@@ -550,155 +516,3 @@ class _PointPopup extends StatelessWidget {
   }
 }
 
-// ── 클러스터 목록 시트 ─────────────────────────────────────────
-
-class _ClusterSheet extends StatelessWidget {
-  final _Cluster cluster;
-  final List<_GpsPoint> allPoints;
-  final String savePath;
-  final void Function(_GpsPoint) onSelect;
-
-  const _ClusterSheet({
-    required this.cluster,
-    required this.allPoints,
-    required this.savePath,
-    required this.onSelect,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final points = cluster.points;
-    final bottomPad = MediaQuery.of(context).padding.bottom;
-
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Container(
-          margin: const EdgeInsets.symmetric(vertical: 10),
-          width: 32,
-          height: 4,
-          decoration: BoxDecoration(
-            color: Colors.grey.shade400,
-            borderRadius: BorderRadius.circular(2),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
-          child: Row(
-            children: [
-              const Icon(Icons.location_on, size: 18),
-              const SizedBox(width: 6),
-              Text(
-                '이 위치의 기록 ${points.length}개',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-              ),
-            ],
-          ),
-        ),
-        const Divider(height: 1),
-        ConstrainedBox(
-          constraints: BoxConstraints(
-            maxHeight: MediaQuery.of(context).size.height * 0.55,
-          ),
-          child: ListView.separated(
-            shrinkWrap: true,
-            itemCount: points.length,
-            separatorBuilder: (_, __) =>
-                const Divider(height: 1, indent: 16, endIndent: 16),
-            itemBuilder: (context, i) {
-              final pt = points[i];
-              final mapIdx = allPoints.indexOf(pt) + 1;
-              return InkWell(
-                onTap: () => onSelect(pt),
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-                  child: Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      // 지도 인덱스 번호
-                      CircleAvatar(
-                        radius: 16,
-                        backgroundColor: pt.isMemo
-                            ? Colors.blue.shade700
-                            : Colors.teal.shade600,
-                        child: Text(
-                          '$mapIdx',
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 11),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      // 내용 영역
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            // 시간 + 어획
-                            Row(
-                              children: [
-                                Text(pt.timeLabel,
-                                    style: const TextStyle(
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 14)),
-                                if (pt.fishLength != null) ...[
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    '📏 ${pt.fishLength!.toStringAsFixed(1)}cm',
-                                    style: TextStyle(
-                                        fontSize: 12,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .primary),
-                                  ),
-                                ],
-                              ],
-                            ),
-                            // 주소
-                            if (pt.address != null) ...[
-                              const SizedBox(height: 3),
-                              Text('📍 ${pt.address}',
-                                  style: const TextStyle(fontSize: 12),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis),
-                            ],
-                            // 텍스트
-                            if (pt.text != null && pt.text!.isNotEmpty) ...[
-                              const SizedBox(height: 3),
-                              Text(pt.text!,
-                                  style: const TextStyle(fontSize: 13),
-                                  maxLines: 3,
-                                  overflow: TextOverflow.ellipsis),
-                            ],
-                            // 사진
-                            if (pt.photoPath != null) ...[
-                              const SizedBox(height: 6),
-                              SafImage(
-                                photoPath: pt.photoPath!,
-                                savePath: savePath,
-                                height: 100,
-                                fit: BoxFit.cover,
-                              ),
-                            ],
-                            // 동영상
-                            if (pt.videoPath != null) ...[
-                              const SizedBox(height: 6),
-                              VideoPlayerWidget(
-                                videoPath: pt.videoPath!,
-                                height: 100,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              );
-            },
-          ),
-        ),
-        SizedBox(height: bottomPad + 8),
-      ],
-    );
-  }
-}
