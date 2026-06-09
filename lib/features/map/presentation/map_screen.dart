@@ -11,6 +11,7 @@ import '../../settings/presentation/settings_provider.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/utils/file_name_parser.dart';
 import '../../../core/services/saf_service.dart';
+import '../../../core/services/tracking_service.dart';
 import '../../../core/widgets/memo_date_picker_dialog.dart';
 import '../../../core/widgets/saf_image.dart';
 import '../../../core/widgets/video_player_widget.dart';
@@ -25,8 +26,12 @@ class MapScreen extends ConsumerStatefulWidget {
 
 class _MapScreenState extends ConsumerState<MapScreen> {
   List<_GpsPoint> _points = [];
+  List<TrackPoint> _trackPoints = [];
   _GpsPoint? _selected;
   bool _showLines = false;
+  bool _showTimes = false;
+  bool _showDistances = false;
+  bool _showTrack = false;
   bool _dismissedNoGpsCard = false;
   DateTime _loadedDate = DateTime.now();
   MapController _mapController = MapController();
@@ -37,6 +42,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   void initState() {
     super.initState();
     _loadFromToday();
+    _loadTrackPoints();
     ref.read(settingsProvider.future).then((s) {
       if (mounted) setState(() => _savePath = s.savePath);
     });
@@ -65,13 +71,51 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     setState(() {
       _points = pts;
+      _trackPoints = [];
       _selected = null;
       _showLines = false;
+      _showTimes = false;
+      _showDistances = false;
+      _showTrack = false;
       _dismissedNoGpsCard = false;
       _loadedDate = date;
       _mapController = MapController();
       _zoom = 14;
     });
+  }
+
+  Future<void> _loadTrackPoints() async {
+    final settings = await ref.read(settingsProvider.future);
+    if (settings.savePath.isEmpty) return;
+
+    final fp = widget.filePath;
+    final currentDate = fp != null
+        ? (FileNameParser.parseDate(fp.split('/').last.split('\\').last) ??
+            DateTime.now())
+        : DateTime.now();
+
+    // 대기 중인 트래킹 포인트를 MD 파일에 플러시
+    final pending = await TrackingService().getAndClearTrackPoints();
+    if (pending.isNotEmpty) {
+      final repo = ref.read(memoRepositoryProvider);
+      final byDate = <DateTime, List<TrackPoint>>{};
+      for (final p in pending) {
+        final d = DateTime(p.timestamp.year, p.timestamp.month, p.timestamp.day);
+        byDate.putIfAbsent(d, () => []).add(p);
+      }
+      for (final entry in byDate.entries) {
+        await repo.appendTrackPoints(entry.key, entry.value, settings.savePath);
+      }
+    }
+
+    if (!mounted) return;
+
+    // 현재 날짜의 트래킹 포인트 로드
+    final repo = ref.read(memoRepositoryProvider);
+    final dayFile = await repo.loadDayFile(currentDate, settings.savePath);
+    if (mounted) {
+      setState(() => _trackPoints = dayFile?.trackPoints ?? []);
+    }
   }
 
   Future<Set<DateTime>> _loadExistingDates(String savePath) async {
@@ -116,6 +160,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final repo = ref.read(memoRepositoryProvider);
     final dayFile = await repo.loadDayFile(picked, settings.savePath);
     _applyBlocks(dayFile?.blocks ?? [], picked);
+    if (mounted) {
+      setState(() => _trackPoints = dayFile?.trackPoints ?? []);
+    }
   }
 
   CameraFit? _cameraFit() {
@@ -149,6 +196,19 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
   // zoom 레벨 기준 겹침 판정 거리 (도 단위)
   double _thresholdDeg() => 0.0003 * math.pow(2.0, 15.0 - _zoom);
+
+  // 두 GPS 좌표 간 거리 (km, Haversine)
+  double _haversineKm(double lat1, double lng1, double lat2, double lng2) {
+    const r = 6371.0;
+    final dLat = (lat2 - lat1) * math.pi / 180;
+    final dLng = (lng2 - lng1) * math.pi / 180;
+    final a = math.sin(dLat / 2) * math.sin(dLat / 2) +
+        math.cos(lat1 * math.pi / 180) *
+            math.cos(lat2 * math.pi / 180) *
+            math.sin(dLng / 2) *
+            math.sin(dLng / 2);
+    return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
+  }
 
   // 화면 픽셀 → 위경도 변환
   double _pixelsToDeg(double pixels) =>
@@ -203,7 +263,30 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       appBar: AppBar(
         title: Text(DateFormatter.toDateString(_loadedDate)),
         actions: [
-          if (placed.length >= 2)
+          if (placed.isNotEmpty)
+            IconButton(
+              icon: Icon(
+                Icons.schedule,
+                color: _showTimes
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+              ),
+              tooltip: _showTimes ? '시간 숨기기' : '시간 표시',
+              onPressed: () => setState(() => _showTimes = !_showTimes),
+            ),
+          if (placed.length >= 2) ...[
+            IconButton(
+              icon: Icon(
+                Icons.straighten,
+                color: _showLines && _showDistances
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+              ),
+              tooltip: '거리 표시',
+              onPressed: _showLines
+                  ? () => setState(() => _showDistances = !_showDistances)
+                  : null,
+            ),
             IconButton(
               icon: Icon(
                 _showLines ? Icons.timeline : Icons.timeline_outlined,
@@ -213,6 +296,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               ),
               tooltip: _showLines ? '경로 숨기기' : '경로 연결',
               onPressed: () => setState(() => _showLines = !_showLines),
+            ),
+          ],
+          if (_trackPoints.isNotEmpty)
+            IconButton(
+              icon: Icon(
+                Icons.route,
+                color: _showTrack
+                    ? Theme.of(context).colorScheme.primary
+                    : null,
+              ),
+              tooltip: _showTrack ? '이동경로 숨기기' : '이동경로 표시',
+              onPressed: () => setState(() => _showTrack = !_showTrack),
             ),
           IconButton(
             icon: const Icon(Icons.calendar_today_outlined),
@@ -243,6 +338,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.nakkda.nakkda',
               ),
+              if (_showTrack && _trackPoints.length >= 2)
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: _trackPoints
+                          .map((p) => LatLng(p.lat, p.lng))
+                          .toList(),
+                      color: const Color(0xCCFF6D00),
+                      strokeWidth: 2.0,
+                    ),
+                  ],
+                ),
               if (_showLines && placed.length >= 2)
                 PolylineLayer(
                   polylines: [
@@ -254,6 +361,45 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                       strokeWidth: 2.5,
                     ),
                   ],
+                ),
+              if (_showLines && _showDistances && placedSorted.length >= 2)
+                MarkerLayer(
+                  markers: () {
+                    final markers = <Marker>[];
+                    for (int i = 0; i < placedSorted.length - 1; i++) {
+                      final a = placedSorted[i];
+                      final b = placedSorted[i + 1];
+                      final km = _haversineKm(
+                          a.point.lat, a.point.lng, b.point.lat, b.point.lng);
+                      final t = _thresholdDeg();
+                      if (km < 0.001 ||
+                          ((a.point.lat - b.point.lat).abs() < t &&
+                           (a.point.lng - b.point.lng).abs() < t)) continue;
+                      final label = km < 1
+                          ? '${(km * 1000).round()}m'
+                          : '${km.toStringAsFixed(2)}km';
+                      markers.add(Marker(
+                        point: LatLng((a.lat + b.lat) / 2, (a.lng + b.lng) / 2),
+                        width: 64,
+                        height: 20,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 4, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: const Color(0xCC1565C0),
+                            borderRadius: BorderRadius.circular(4),
+                          ),
+                          child: Text(
+                            label,
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 10),
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ));
+                    }
+                    return markers;
+                  }(),
                 ),
               MarkerLayer(
                 markers: placed.map((placed) {
@@ -295,6 +441,31 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                   );
                 }).toList(),
               ),
+              if (_showTimes)
+                MarkerLayer(
+                  markers: placed.map((p) => Marker(
+                    point: LatLng(p.lat, p.lng),
+                    width: 56,
+                    height: 36,
+                    alignment: Alignment.bottomCenter,
+                    child: Align(
+                      alignment: Alignment.topCenter,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 3, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: const Color(0xCC000000),
+                          borderRadius: BorderRadius.circular(3),
+                        ),
+                        child: Text(
+                          p.point.timeLabel,
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 10),
+                        ),
+                      ),
+                    ),
+                  )).toList(),
+                ),
             ],
           ),
           // 선택된 마커 팝업

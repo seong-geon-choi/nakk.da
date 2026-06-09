@@ -180,20 +180,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          DateFormatter.toDateString(today),
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        title: GestureDetector(
+          onTap: _onFileListTap,
+          child: Text(
+            DateFormatter.toDateString(today),
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
         ),
         actions: [
           IconButton(
             icon: const Icon(Icons.add_photo_alternate_outlined),
             tooltip: '날짜별 사진 일괄 추가',
             onPressed: _importDayPhotos,
-          ),
-          IconButton(
-            icon: const Icon(Icons.folder_outlined),
-            tooltip: '파일 목록',
-            onPressed: _onFileListTap,
           ),
           IconButton(
             icon: const Icon(Icons.settings_outlined),

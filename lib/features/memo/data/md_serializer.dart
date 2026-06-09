@@ -1,5 +1,6 @@
 import '../domain/models/memo_entry.dart';
 import '../../location/domain/models/location_status.dart';
+import '../../../core/services/tracking_service.dart';
 
 class MdSerializer {
   // ── 쓰기 ──────────────────────────────────────────────
@@ -293,6 +294,39 @@ class MdSerializer {
     final end = index + 1 < starts.length ? starts[index + 1] : lines.length;
     final result = [...lines.sublist(0, start), ...lines.sublist(end)];
     return result.join('\n');
+  }
+
+  // ── 트래킹 포인트 파싱/쓰기 ──────────────────────────────
+
+  static final _trackRe =
+      RegExp(r'^\[//\]: # \(track:(-?\d+\.\d+),(-?\d+\.\d+),(\d+)\)$');
+
+  static List<TrackPoint> parseTrackPoints(String content) {
+    final points = <TrackPoint>[];
+    for (final line in content.split('\n')) {
+      final m = _trackRe.firstMatch(line.trim());
+      if (m == null) continue;
+      final lat = double.tryParse(m.group(1)!);
+      final lng = double.tryParse(m.group(2)!);
+      final ms = int.tryParse(m.group(3)!);
+      if (lat != null && lng != null && ms != null) {
+        points.add(TrackPoint(
+          lat: lat,
+          lng: lng,
+          timestamp: DateTime.fromMillisecondsSinceEpoch(ms),
+        ));
+      }
+    }
+    return points;
+  }
+
+  static String trackCommentsFor(List<TrackPoint> points) {
+    if (points.isEmpty) return '';
+    return points
+            .map((p) =>
+                '[//]: # (track:${_fmt(p.lat)},${_fmt(p.lng)},${p.timestamp.millisecondsSinceEpoch})')
+            .join('\n') +
+        '\n';
   }
 
   // ── 헬퍼 ──────────────────────────────────────────────

@@ -18,6 +18,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import org.json.JSONArray
 
 class MainActivity : FlutterActivity() {
 
@@ -411,6 +412,43 @@ class MainActivity : FlutterActivity() {
                             android.util.Log.e("ExifGps", "exception: ${e.message}", e)
                             result.success(null)
                         }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
+        // ── 위치 트래킹 채널 ─────────────────────────────────────
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.nakkda.nakkda/tracking")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "startTracking" -> {
+                        val intervalMeters = call.argument<Int>("intervalMeters") ?: 100
+                        if (checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION)
+                                == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                            LocationTrackingService.start(this, intervalMeters)
+                        }
+                        result.success(null)
+                    }
+                    "stopTracking" -> {
+                        LocationTrackingService.stop(this)
+                        result.success(null)
+                    }
+                    "isTracking" -> {
+                        val active = getSharedPreferences(
+                            LocationTrackingService.PREFS_NAME, Context.MODE_PRIVATE
+                        ).getBoolean(LocationTrackingService.PREFS_ACTIVE_KEY, false)
+                        result.success(active)
+                    }
+                    "getAndClearTrackPoints" -> {
+                        val prefs = getSharedPreferences(
+                            LocationTrackingService.PREFS_NAME, Context.MODE_PRIVATE
+                        )
+                        val json = prefs.getString(LocationTrackingService.PREFS_PENDING_KEY, "[]") ?: "[]"
+                        val arr = try { JSONArray(json) } catch (_: Exception) { JSONArray() }
+                        val list = mutableListOf<String>()
+                        for (i in 0 until arr.length()) list.add(arr.getString(i))
+                        prefs.edit().remove(LocationTrackingService.PREFS_PENDING_KEY).apply()
+                        result.success(list)
                     }
                     else -> result.notImplemented()
                 }

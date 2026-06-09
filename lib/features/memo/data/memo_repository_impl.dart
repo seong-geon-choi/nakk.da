@@ -4,6 +4,7 @@ import '../domain/models/day_file.dart';
 import '../domain/models/memo_entry.dart';
 import '../../location/domain/models/location_status.dart';
 import '../../../core/services/saf_service.dart';
+import '../../../core/services/tracking_service.dart';
 import 'md_serializer.dart';
 
 class MemoRepositoryImpl implements MemoRepository {
@@ -28,7 +29,8 @@ class MemoRepositoryImpl implements MemoRepository {
     }
     if (content == null) return null;
     final blocks = MdSerializer.parseBlocks(content);
-    return DayFile(date: date, filePath: '$savePath/$filename', blocks: blocks);
+    final trackPoints = MdSerializer.parseTrackPoints(content);
+    return DayFile(date: date, filePath: '$savePath/$filename', blocks: blocks, trackPoints: trackPoints);
   }
 
   @override
@@ -50,6 +52,21 @@ class MemoRepositoryImpl implements MemoRepository {
     if (entries.isEmpty) return;
     final filename = _filenameFor(date);
     final toAppend = entries.map(MdSerializer.serializeEntry).join();
+    if (SafService.isSafUri(savePath)) {
+      await _safEnsureHeader(savePath, filename, date);
+      await _saf.appendFile(savePath, filename, toAppend);
+    } else {
+      final file = File('$savePath/$filename');
+      await _ensureHeader(file, date);
+      await file.writeAsString(toAppend, mode: FileMode.append);
+    }
+  }
+
+  @override
+  Future<void> appendTrackPoints(DateTime date, List<TrackPoint> points, String savePath) async {
+    if (points.isEmpty) return;
+    final filename = _filenameFor(date);
+    final toAppend = MdSerializer.trackCommentsFor(points);
     if (SafService.isSafUri(savePath)) {
       await _safEnsureHeader(savePath, filename, date);
       await _saf.appendFile(savePath, filename, toAppend);

@@ -13,6 +13,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _showAddressInMemoNameKey = 'show_address_in_memo_name';
   static const _khoaApiKeyKey = 'khoa_api_key';
   static const _watermarkKey = 'watermark_settings';
+  static const _locationTrackingEnabledKey = 'location_tracking_enabled';
+  static const _trackingIntervalMetersKey = 'tracking_interval_meters';
 
   static const defaultMemoDisplayPath = '/storage/emulated/0/Documents/nakkda';
 
@@ -33,6 +35,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final watermark = wmJson != null
         ? WatermarkSettings.fromJson(jsonDecode(wmJson) as Map<String, dynamic>)
         : WatermarkSettings();
+    final locationTrackingEnabled = prefs.getBool(_locationTrackingEnabledKey) ?? false;
+    final trackingIntervalMeters = prefs.getInt(_trackingIntervalMetersKey) ?? 100;
     return AppSettings(
       savePath: saveUri,
       saveDisplayPath: saveDisplayPath,
@@ -42,6 +46,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
       showAddressInMemoName: showAddressInMemoName,
       khoaApiKey: khoaApiKey,
       watermark: watermark,
+      locationTrackingEnabled: locationTrackingEnabled,
+      trackingIntervalMeters: trackingIntervalMeters,
     );
   }
 
@@ -60,6 +66,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
       await prefs.remove(_khoaApiKeyKey);
     }
     await prefs.setString(_watermarkKey, jsonEncode(settings.watermark.toJson()));
+    await prefs.setBool(_locationTrackingEnabledKey, settings.locationTrackingEnabled);
+    await prefs.setInt(_trackingIntervalMetersKey, settings.trackingIntervalMeters);
   }
 
   Future<String> _defaultPhotoSavePath() async {

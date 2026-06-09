@@ -107,6 +107,22 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     state = AsyncData(updated);
   }
 
+  Future<void> updateLocationTrackingEnabled(bool value) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(locationTrackingEnabled: value);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  Future<void> updateTrackingIntervalMeters(int value) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(trackingIntervalMeters: value.clamp(30, 1000));
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
   Future<void> updateKhoaApiKey(String? key) async {
     final current = state.valueOrNull;
     if (current == null) return;

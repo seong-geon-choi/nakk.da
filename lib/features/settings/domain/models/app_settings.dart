@@ -140,6 +140,8 @@ class AppSettings {
   final bool showAddressInMemoName;
   final String? khoaApiKey;
   final WatermarkSettings watermark;
+  final bool locationTrackingEnabled;
+  final int trackingIntervalMeters;
 
   bool get needsFolderSetup => savePath.isEmpty;
 
@@ -152,6 +154,8 @@ class AppSettings {
     this.showAddressInMemoName = true,
     this.khoaApiKey,
     WatermarkSettings? watermark,
+    this.locationTrackingEnabled = false,
+    this.trackingIntervalMeters = 100,
   }) : watermark = watermark ?? WatermarkSettings();
 
   String get effectiveKhoaApiKey {
@@ -169,6 +173,8 @@ class AppSettings {
     String? khoaApiKey,
     bool clearKhoaApiKey = false,
     WatermarkSettings? watermark,
+    bool? locationTrackingEnabled,
+    int? trackingIntervalMeters,
   }) {
     return AppSettings(
       savePath: savePath ?? this.savePath,
@@ -179,6 +185,8 @@ class AppSettings {
       showAddressInMemoName: showAddressInMemoName ?? this.showAddressInMemoName,
       khoaApiKey: clearKhoaApiKey ? null : (khoaApiKey ?? this.khoaApiKey),
       watermark: watermark ?? this.watermark,
+      locationTrackingEnabled: locationTrackingEnabled ?? this.locationTrackingEnabled,
+      trackingIntervalMeters: trackingIntervalMeters ?? this.trackingIntervalMeters,
     );
   }
 }
