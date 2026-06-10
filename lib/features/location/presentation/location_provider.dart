@@ -55,12 +55,12 @@ class LocationNotifier extends AsyncNotifier<LocationStatus?> {
 
     final results = await Future.wait([
       reverseGeocode(lat, lng),
-      ref.read(_weatherServiceProvider).getTemperature(lat, lng),
+      ref.read(_weatherServiceProvider).getWeather(lat, lng),
       ref.read(_tideServiceProvider).getTideResult(lat, lng, apiKey),
     ]);
 
     final address = results[0] as String?;
-    final temperature = results[1] as double?;
+    final weather = results[1] as WeatherResult;
     final tideResult = results[2] as TideResult?;
 
     return LocationStatus(
@@ -68,7 +68,7 @@ class LocationNotifier extends AsyncNotifier<LocationStatus?> {
       latitude: lat,
       longitude: lng,
       address: address,
-      temperature: temperature,
+      temperature: weather.temperature,
       tideName: tideResult != null ? '${tideResult.mulTae}물' : null,
       tideTime: tideResult?.nextTideTime != null
           ? '${tideResult!.nextTideType} ${tideResult.nextTideTime}'
@@ -79,6 +79,9 @@ class LocationNotifier extends AsyncNotifier<LocationStatus?> {
           ? double.parse(tideResult.distanceKm.toStringAsFixed(1))
           : null,
       isMove: isMove,
+      windSpeed: weather.windSpeed,
+      windDeg: weather.windDeg,
+      weatherCode: weather.weatherCode,
     );
   }
 }

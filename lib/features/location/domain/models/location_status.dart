@@ -11,6 +11,9 @@ class LocationStatus {
   final String? stationName;
   final double? stationDistance;
   final bool isMove; // 이동으로 추가된 현황 블록 여부
+  final double? windSpeed;
+  final int? windDeg;
+  final int? weatherCode;
 
   const LocationStatus({
     required this.timestamp,
@@ -24,5 +27,8 @@ class LocationStatus {
     this.stationName,
     this.stationDistance,
     this.isMove = false,
+    this.windSpeed,
+    this.windDeg,
+    this.weatherCode,
   });
 }

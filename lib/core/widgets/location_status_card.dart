@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../features/location/domain/models/location_status.dart';
+import '../../features/weather/data/weather_service.dart';
 
 class LocationStatusCard extends StatelessWidget {
   final LocationStatus status;
@@ -46,6 +47,13 @@ class LocationStatusCard extends StatelessWidget {
             '관측소: $_station | 🌊 $_tide',
             style: TextStyle(fontSize: 12, color: colorScheme.onSurface.withValues(alpha: 0.6)),
           ),
+          if (_weather != null) ...[
+            const SizedBox(height: 2),
+            Text(
+              _weather!,
+              style: TextStyle(fontSize: 12, color: colorScheme.onSurface.withValues(alpha: 0.6)),
+            ),
+          ],
         ],
       ),
     );
@@ -72,6 +80,21 @@ class LocationStatusCard extends StatelessWidget {
       (status.stationName != null && status.stationDistance != null)
           ? '${status.stationName} (${status.stationDistance!.toStringAsFixed(1)}km)'
           : '- (-.--km)';
+
+  String? get _weather {
+    final wind = status.windSpeed;
+    final deg = status.windDeg;
+    final code = status.weatherCode;
+    if (wind == null && code == null) return null;
+    final parts = <String>[];
+    if (wind != null && deg != null) {
+      parts.add('🌬 ${windDegToDirection(deg)} ${wind.toStringAsFixed(1)}m/s');
+    }
+    if (code != null) {
+      parts.add('⛅ ${weatherCodeToDesc(code)}');
+    }
+    return parts.join(' | ');
+  }
 
   String _time(DateTime dt) {
     final h = dt.hour.toString().padLeft(2, '0');

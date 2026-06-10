@@ -1,5 +1,6 @@
 import '../domain/models/memo_entry.dart';
 import '../../location/domain/models/location_status.dart';
+import '../../weather/data/weather_service.dart';
 import '../../../core/services/tracking_service.dart';
 
 class MdSerializer {
@@ -7,8 +8,8 @@ class MdSerializer {
 
   static String serializeEntry(MemoEntry entry) {
     final header = entry.hasGps
-        ? '### ${entry.timeLabel} | 🛰 ${_fmt(entry.latitude!)}, ${_fmt(entry.longitude!)}'
-        : '### ${entry.timeLabel}';
+        ? '### ${_fmtDt(entry.timestamp)} | 🛰 ${_fmt(entry.latitude!)}, ${_fmt(entry.longitude!)}'
+        : '### ${_fmtDt(entry.timestamp)}';
     final parts = <String>[];
     if (entry.photoPath != null) parts.add('![](${entry.photoPath})');
     if (entry.videoPath != null) parts.add('[video](${entry.videoPath})');
@@ -37,10 +38,18 @@ class MdSerializer {
         ? '${loc.stationName} (${loc.stationDistance!.toStringAsFixed(1)}km)'
         : '- (-.--km)';
 
+    final windPart = (loc.windSpeed != null && loc.windDeg != null)
+        ? '🌬 ${windDegToDirection(loc.windDeg!)} ${loc.windSpeed!.toStringAsFixed(1)}m/s'
+        : null;
+    final weatherPart =
+        loc.weatherCode != null ? '⛅ ${weatherCodeToDesc(loc.weatherCode!)}' : null;
+    final weatherLine = [windPart, weatherPart].whereType<String>().join(' | ');
+
     return '\n$timeLabel\n'
         '- 📍 $address\n'
         '- 🌡 기온: $temp | 💧 수온 $water\n'
-        '- 관측소: $station | 🌊 $tide\n';
+        '- 관측소: $station | 🌊 $tide\n'
+        '${weatherLine.isNotEmpty ? '- $weatherLine\n' : ''}';
   }
 
   static String fileHeader(DateTime date) {
@@ -80,11 +89,15 @@ class MdSerializer {
         double? waterTemp;
         String? stationName;
         double? stationDistance;
+        double? windSpeed;
+        int? windDeg;
+        int? weatherCode;
         i++;
         while (i < lines.length &&
             !lines[i].trim().startsWith('---') &&
             !lines[i].trim().startsWith('## ') &&
-            !lines[i].trim().startsWith('# ')) {
+            !lines[i].trim().startsWith('# ') &&
+            !lines[i].trim().startsWith('[//]: # (')) {
           final l = lines[i].trim();
           if (l.startsWith('- 📍 ')) {
             final raw = l.substring('- 📍 '.length);
@@ -120,6 +133,19 @@ class MdSerializer {
               // 신 포맷 — 두 번째 파트가 수온
               final m = RegExp(r'수온 (-?\d+\.?\d*)°C').firstMatch(parts[1]);
               if (m != null) waterTemp = double.tryParse(m.group(1)!);
+            }
+          } else if (l.startsWith('- 🌬 ') || (l.startsWith('- ') && l.contains('🌬'))) {
+            // 바람/날씨 줄: "- 🌬 남서 3.2m/s | ⛅ 맑음"
+            final raw = l.replaceFirst(RegExp(r'^- '), '');
+            final parts = raw.split(' | ');
+            for (final part in parts) {
+              if (part.contains('🌬')) {
+                final m = RegExp(r'🌬 \S+ (-?\d+\.?\d*)m/s').firstMatch(part);
+                if (m != null) windSpeed = double.tryParse(m.group(1)!);
+              }
+              if (part.contains('⛅')) {
+                // weatherCode는 저장 안 함 — 텍스트만 표시용
+              }
             }
           } else if (l.startsWith('- 관측소: ')) {
             // 신 포맷: "- 관측소: 인천 (50.3km) | 🌊 5물 (만조 18:03)"
@@ -158,24 +184,43 @@ class MdSerializer {
           stationName: stationName,
           stationDistance: stationDistance,
           isMove: isMove,
+          windSpeed: windSpeed,
+          windDeg: windDeg,
+          weatherCode: weatherCode,
         ));
         continue;
       }
 
-      // 메모 엔트리 헤더: ### HH:mm | 🛰 lat, lng  또는  ### HH:mm
-      final entryMatch = RegExp(
-              r'^### (\d{2}):(\d{2})(?:\s*\|\s*🛰\s*(-?\d+\.\d+),\s*(-?\d+\.\d+))?$')
+      // 메모 엔트리 헤더 — 신 형식: ### YYYY-MM-DD HH:mm:ss [| 🛰 lat, lng]
+      //                    구 형식: ### HH:mm [| 🛰 lat, lng]  (하위 호환)
+      final newEntryMatch = RegExp(
+              r'^### (\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})(?:\s*\|\s*🛰\s*(-?\d+\.\d+),\s*(-?\d+\.\d+))?$')
           .firstMatch(line);
-      if (entryMatch != null) {
-        final hour = int.parse(entryMatch.group(1)!);
-        final min = int.parse(entryMatch.group(2)!);
-        final lat = entryMatch.group(3) != null
-            ? double.tryParse(entryMatch.group(3)!)
-            : null;
-        final lng = entryMatch.group(4) != null
-            ? double.tryParse(entryMatch.group(4)!)
-            : null;
-        final ts = DateTime(date.year, date.month, date.day, hour, min);
+      final oldEntryMatch = newEntryMatch == null
+          ? RegExp(r'^### (\d{2}):(\d{2})(?:\s*\|\s*🛰\s*(-?\d+\.\d+),\s*(-?\d+\.\d+))?$')
+              .firstMatch(line)
+          : null;
+      if (newEntryMatch != null || oldEntryMatch != null) {
+        final DateTime ts;
+        final double? lat;
+        final double? lng;
+        if (newEntryMatch != null) {
+          ts = DateTime(
+            int.parse(newEntryMatch.group(1)!),
+            int.parse(newEntryMatch.group(2)!),
+            int.parse(newEntryMatch.group(3)!),
+            int.parse(newEntryMatch.group(4)!),
+            int.parse(newEntryMatch.group(5)!),
+            int.parse(newEntryMatch.group(6)!),
+          );
+          lat = newEntryMatch.group(7) != null ? double.tryParse(newEntryMatch.group(7)!) : null;
+          lng = newEntryMatch.group(8) != null ? double.tryParse(newEntryMatch.group(8)!) : null;
+        } else {
+          ts = DateTime(date.year, date.month, date.day,
+              int.parse(oldEntryMatch!.group(1)!), int.parse(oldEntryMatch.group(2)!));
+          lat = oldEntryMatch.group(3) != null ? double.tryParse(oldEntryMatch.group(3)!) : null;
+          lng = oldEntryMatch.group(4) != null ? double.tryParse(oldEntryMatch.group(4)!) : null;
+        }
 
         // 본문 수집
         final bodyLines = <String>[];
@@ -184,7 +229,8 @@ class MdSerializer {
         while (i < lines.length &&
             !lines[i].trim().startsWith('---') &&
             !lines[i].trim().startsWith('## ') &&
-            !lines[i].trim().startsWith('### ')) {
+            !lines[i].trim().startsWith('### ') &&
+            !lines[i].trim().startsWith('[//]: # (')) {
           final l = lines[i].trim();
           if (l.isNotEmpty) {
             final lm = RegExp(r'^- 📏 (\d+\.?\d*)cm$').firstMatch(l);
@@ -231,7 +277,8 @@ class MdSerializer {
 
   // ── 전체 재빌드 ────────────────────────────────────────
 
-  static String buildFullContent(DateTime date, List<dynamic> blocks) {
+  static String buildFullContent(DateTime date, List<dynamic> blocks,
+      [List<TrackPoint> trackPoints = const []]) {
     final sb = StringBuffer(fileHeader(date));
     for (final block in blocks) {
       if (block is LocationStatus) {
@@ -239,6 +286,9 @@ class MdSerializer {
       } else if (block is MemoEntry) {
         sb.write(serializeEntry(block));
       }
+    }
+    if (trackPoints.isNotEmpty) {
+      sb.write(trackCommentsFor(trackPoints));
     }
     return sb.toString();
   }
@@ -266,7 +316,7 @@ class MdSerializer {
         continue;
       }
 
-      if (RegExp(r'^### \d{2}:\d{2}').hasMatch(line)) {
+      if (RegExp(r'^### (?:\d{2}:\d{2}|\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})').hasMatch(line)) {
         int rawStart = i;
         if (i >= 1 && lines[i - 1].trim().isEmpty &&
             i >= 2 && lines[i - 2].trim() == '---') {
