@@ -238,7 +238,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         ],
       ),
       bottomNavigationBar: _ActionBar(
-        onVoiceTap: () => _openMemoSheet(voiceMode: true),
+        onVoiceTap: () => _openMemoSheet(),
         onPhotoTap: _onPhotoTap,
         onMapTap: _onMapTap,
       ),
@@ -1233,7 +1233,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
         ],
       ),
       bottomNavigationBar: _ActionBar(
-        onVoiceTap: () => _openMemoSheet(voiceMode: true),
+        onVoiceTap: () => _openMemoSheet(),
         onPhotoTap: _onPhotoTap,
         onMapTap: () => context.push(AppRoutes.map, extra: widget.filePath),
       ),

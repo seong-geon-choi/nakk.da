@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'settings_provider.dart';
 import '../domain/models/app_settings.dart';
 import 'watermark_settings_screen.dart';
@@ -53,7 +54,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
       body: settingsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('오류: $e')),
-        data: (settings) => ListView(
+        data: (settings) => ListTileTheme(
+          data: _subtitleTheme(context),
+          child: ListView(
           children: [
             // ── 저장 섹션 ─────────────────────────────
             const _SectionHeader(label: '저장'),
@@ -64,12 +67,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 settings.needsFolderSetup
                     ? '폴더를 선택해 주세요'
                     : '메모 저장 경로와 사진 저장 경로를 변경합니다',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: settings.needsFolderSetup
-                      ? Theme.of(context).colorScheme.error
-                      : null,
-                ),
+                style: settings.needsFolderSetup
+                    ? TextStyle(color: Theme.of(context).colorScheme.error)
+                    : null,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -117,7 +117,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 settings.khoaApiKey?.isNotEmpty == true
                     ? '사용자 키 적용 중'
                     : '기본 키 사용 중',
-                style: const TextStyle(fontSize: 12),
               ),
               onTap: () => _showApiKeyDialog(context, ref, settings.khoaApiKey),
             ),
@@ -221,7 +220,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             const _SectionHeader(label: 'About'),
             _AboutTile(),
             const SizedBox(height: 16),
+            const _SectionHeader(label: '개발자 후원'),
+            ListTile(
+              leading: const Icon(Icons.volunteer_activism_outlined),
+              title: const Text('개발자 후원하기'),
+              subtitle: const Text('카카오페이로 소액 후원할 수 있습니다'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => _showSupportSheet(context),
+            ),
+            const SizedBox(height: 16),
           ],
+          ),
         ),
       ),
     );
@@ -297,7 +306,9 @@ class _SaveLocationSubScreen extends ConsumerWidget {
       body: settingsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('오류: $e')),
-        data: (settings) => ListView(
+        data: (settings) => ListTileTheme(
+          data: _subtitleTheme(context),
+          child: ListView(
           children: [
             ListTile(
               leading: const Icon(Icons.folder_outlined),
@@ -308,12 +319,9 @@ class _SaveLocationSubScreen extends ConsumerWidget {
                     : settings.needsFolderSetup
                         ? '폴더를 선택해 주세요'
                         : settings.savePath,
-                style: TextStyle(
-                  fontSize: 12,
-                  color: settings.needsFolderSetup
-                      ? Theme.of(context).colorScheme.error
-                      : null,
-                ),
+                style: settings.needsFolderSetup
+                    ? TextStyle(color: Theme.of(context).colorScheme.error)
+                    : null,
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -327,7 +335,6 @@ class _SaveLocationSubScreen extends ConsumerWidget {
               title: const Text('카메라 사진 저장 위치'),
               subtitle: Text(
                 settings.photoSavePath,
-                style: const TextStyle(fontSize: 12),
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
               ),
@@ -335,6 +342,7 @@ class _SaveLocationSubScreen extends ConsumerWidget {
                   ref.read(settingsProvider.notifier).pickPhotoSaveFolder(),
             ),
           ],
+          ),
         ),
       ),
     );
@@ -406,7 +414,7 @@ class _TrackingIntervalSubScreenState
                   '메모 작성 화면에서 경로 기록 버튼을 활성화한 경우에만 이동 경로가 기록됩니다.\n\n'
                   '경로 기록은 활성화 후 12시간이 경과하거나 자정(0시)이 되면 자동으로 중단됩니다.',
                   style: TextStyle(
-                    fontSize: 12,
+                    fontSize: 13,
                     color: Theme.of(context)
                         .colorScheme
                         .onSurface
@@ -469,17 +477,20 @@ class _PermissionSubScreenState extends ConsumerState<_PermissionSubScreen>
             (Permission.photos, '사진', '갤러리 사진 선택'),
             (Permission.notification, '알림', '음성 메모 상태 표시'),
           ];
-          return ListView(
-            children: items.map((item) {
-              final (perm, label, desc) = item;
-              final isGranted = statuses[perm]?.isGranted ?? false;
-              return ListTile(
-                title: Text(label),
-                subtitle: Text(desc, style: const TextStyle(fontSize: 12)),
-                trailing: PermissionStatusChip(isGranted: isGranted),
-                onTap: () async => await openAppSettings(),
-              );
-            }).toList(),
+          return ListTileTheme(
+            data: _subtitleTheme(context),
+            child: ListView(
+              children: items.map((item) {
+                final (perm, label, desc) = item;
+                final isGranted = statuses[perm]?.isGranted ?? false;
+                return ListTile(
+                  title: Text(label),
+                  subtitle: Text(desc),
+                  trailing: PermissionStatusChip(isGranted: isGranted),
+                  onTap: () async => await openAppSettings(),
+                );
+              }).toList(),
+            ),
           );
         },
       ),
@@ -514,7 +525,9 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
             if (v == null) return;
             ref.read(settingsProvider.notifier).updateQuickLaunchMode(v);
           }
-          return ListView(
+          return ListTileTheme(
+            data: _subtitleTheme(context),
+            child: ListView(
             children: [
               RadioListTile<QuickLaunchMode>(
                 secondary: const Icon(Icons.vibration),
@@ -535,6 +548,7 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
               if (mode == QuickLaunchMode.volume)
                 const _AccessibilityTile(),
             ],
+            ),
           );
         },
       ),
@@ -591,10 +605,7 @@ class _AccessibilityTileState extends State<_AccessibilityTile>
             _enabled
                 ? '활성화됨 — 화면 꺼짐·잠금 상태에서도 동작합니다'
                 : '화면 켜진 상태에서만 동작합니다',
-            style: TextStyle(
-              fontSize: 12,
-              color: _enabled ? Colors.green : null,
-            ),
+            style: _enabled ? const TextStyle(color: Colors.green) : null,
           ),
           value: _enabled,
           onChanged: (_) async => await openAccessibilitySettings(),
@@ -607,8 +618,8 @@ class _AccessibilityTileState extends State<_AccessibilityTile>
               '잠금화면·화면 꺼짐 상태에서도 사용하려면 접근성 서비스를 활성화하세요.\n'
               '활성화 → 접근성 → 설치된 서비스 → 낚.다 음성 메모 → 켜기',
               style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+                fontSize: 13,
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
               ),
             ),
           ),
@@ -731,19 +742,21 @@ class _MemoFilePicker extends StatelessWidget {
             constraints: BoxConstraints(
               maxHeight: mq.size.height * 0.5,
             ),
-            child: ListView.builder(
-              shrinkWrap: true,
-              itemCount: files.length,
-              itemBuilder: (_, i) {
-                final file = files[i];
-                return ListTile(
-                  leading: const Icon(Icons.description_outlined),
-                  title: Text(file.displayName),
-                  subtitle: Text('메모 ${file.entryCount}개',
-                      style: const TextStyle(fontSize: 12)),
-                  onTap: () => onSelect(file),
-                );
-              },
+            child: ListTileTheme(
+              data: _subtitleTheme(context),
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: files.length,
+                itemBuilder: (_, i) {
+                  final file = files[i];
+                  return ListTile(
+                    leading: const Icon(Icons.description_outlined),
+                    title: Text(file.displayName),
+                    subtitle: Text('메모 ${file.entryCount}개'),
+                    onTap: () => onSelect(file),
+                  );
+                },
+              ),
             ),
           ),
         ],
@@ -783,6 +796,85 @@ class _AboutTileState extends State<_AboutTile> {
     );
   }
 }
+
+Future<void> _showSupportSheet(BuildContext context) async {
+  await showModalBottomSheet(
+    context: context,
+    builder: (_) => SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
+            child: Text('개발자 후원하기',
+                style: Theme.of(context).textTheme.titleMedium),
+          ),
+          const Divider(height: 1),
+          _SupportItem(
+            icon: Icons.coffee_outlined,
+            label: '커피 한 잔 후원하기',
+            amount: '3,000원',
+            url: 'https://qr.kakaopay.com/FLGjWrHDR5dc08966',
+          ),
+          _SupportItem(
+            icon: Icons.set_meal_outlined,
+            label: '낚시 미끼 한 봉지 후원하기',
+            amount: '5,000원',
+            url: 'https://qr.kakaopay.com/FLGjWrHDR9c404708',
+          ),
+          _SupportItem(
+            icon: Icons.edit_outlined,
+            label: '후원금 직접 입력하기',
+            amount: '직접 입력',
+            url: 'https://qr.kakaopay.com/FLGjWrHDR',
+          ),
+          const SizedBox(height: 8),
+        ],
+      ),
+    ),
+  );
+}
+
+class _SupportItem extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String amount;
+  final String url;
+
+  const _SupportItem({
+    required this.icon,
+    required this.label,
+    required this.amount,
+    required this.url,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: Icon(icon),
+      title: Text(label),
+      subtitle: Text(amount, style: _subtitleTheme(context).subtitleTextStyle),
+      onTap: () async {
+        Navigator.of(context).pop();
+        final uri = Uri.parse(url);
+        if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+          if (context.mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('카카오페이를 열 수 없습니다')),
+            );
+          }
+        }
+      },
+    );
+  }
+}
+
+ListTileThemeData _subtitleTheme(BuildContext ctx) => ListTileThemeData(
+  subtitleTextStyle: TextStyle(
+    fontSize: 13,
+    color: Theme.of(ctx).colorScheme.onSurface.withValues(alpha: 0.6),
+  ),
+);
 
 class _SectionHeader extends StatelessWidget {
   final String label;

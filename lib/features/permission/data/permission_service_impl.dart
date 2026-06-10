@@ -21,7 +21,8 @@ class PermissionServiceImpl implements PermissionService {
 
   @override
   Future<Map<Permission, PermissionStatus>> requestAll() async {
-    return await _required.request();
+    final result = await _required.request();
+    return Map.fromEntries(result.entries.where((e) => _required.contains(e.key)));
   }
 
   @override

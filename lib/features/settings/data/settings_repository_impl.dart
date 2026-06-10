@@ -16,6 +16,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _showTrackingButtonKey = 'show_tracking_button';
   static const _locationTrackingEnabledKey = 'location_tracking_enabled';
   static const _trackingIntervalMetersKey = 'tracking_interval_meters';
+  static const _quickLaunchModeKey = 'quick_launch_mode';
 
   static const defaultMemoDisplayPath = '/storage/emulated/0/Documents/nakkda';
 
@@ -29,7 +30,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
         ? await _defaultPhotoSavePath()
         : storedPhotoPath;
     final showLocationButton = prefs.getBool(_showLocationButtonKey) ?? true;
-    final autoSaveVoice = prefs.getBool(_autoSaveVoiceKey) ?? false;
+    final autoSaveVoice = prefs.getBool(_autoSaveVoiceKey) ?? true;
     final showAddressInMemoName = prefs.getBool(_showAddressInMemoNameKey) ?? true;
     final khoaApiKey = prefs.getString(_khoaApiKeyKey);
     final wmJson = prefs.getString(_watermarkKey);
@@ -39,6 +40,11 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final showTrackingButton = prefs.getBool(_showTrackingButtonKey) ?? true;
     final locationTrackingEnabled = prefs.getBool(_locationTrackingEnabledKey) ?? false;
     final trackingIntervalMeters = prefs.getInt(_trackingIntervalMetersKey) ?? 100;
+    final quickLaunchModeStr = prefs.getString(_quickLaunchModeKey) ?? 'shake';
+    final quickLaunchMode = QuickLaunchMode.values.firstWhere(
+      (e) => e.name == quickLaunchModeStr,
+      orElse: () => QuickLaunchMode.shake,
+    );
     return AppSettings(
       savePath: saveUri,
       saveDisplayPath: saveDisplayPath,
@@ -51,6 +57,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       showTrackingButton: showTrackingButton,
       locationTrackingEnabled: locationTrackingEnabled,
       trackingIntervalMeters: trackingIntervalMeters,
+      quickLaunchMode: quickLaunchMode,
     );
   }
 
@@ -72,6 +79,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setBool(_showTrackingButtonKey, settings.showTrackingButton);
     await prefs.setBool(_locationTrackingEnabledKey, settings.locationTrackingEnabled);
     await prefs.setInt(_trackingIntervalMetersKey, settings.trackingIntervalMeters);
+    await prefs.setString(_quickLaunchModeKey, settings.quickLaunchMode.name);
   }
 
   Future<String> _defaultPhotoSavePath() async {

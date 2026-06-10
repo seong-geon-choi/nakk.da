@@ -129,6 +129,10 @@ class WatermarkSettings {
   }
 }
 
+// ── 빠른 메모 실행 모드 ────────────────────────────────────────
+
+enum QuickLaunchMode { none, shake, volume }
+
 // ── 앱 전체 설정 ───────────────────────────────────────────────
 
 class AppSettings {
@@ -143,6 +147,7 @@ class AppSettings {
   final bool showTrackingButton;
   final bool locationTrackingEnabled;
   final int trackingIntervalMeters;
+  final QuickLaunchMode quickLaunchMode;
 
   bool get needsFolderSetup => savePath.isEmpty;
 
@@ -151,13 +156,14 @@ class AppSettings {
     this.saveDisplayPath = '',
     required this.photoSavePath,
     this.showLocationButton = true,
-    this.autoSaveVoice = false,
+    this.autoSaveVoice = true,
     this.showAddressInMemoName = true,
     this.khoaApiKey,
     WatermarkSettings? watermark,
     this.showTrackingButton = true,
     this.locationTrackingEnabled = false,
     this.trackingIntervalMeters = 100,
+    this.quickLaunchMode = QuickLaunchMode.shake,
   }) : watermark = watermark ?? WatermarkSettings();
 
   String get effectiveKhoaApiKey {
@@ -178,6 +184,7 @@ class AppSettings {
     bool? showTrackingButton,
     bool? locationTrackingEnabled,
     int? trackingIntervalMeters,
+    QuickLaunchMode? quickLaunchMode,
   }) {
     return AppSettings(
       savePath: savePath ?? this.savePath,
@@ -191,6 +198,7 @@ class AppSettings {
       showTrackingButton: showTrackingButton ?? this.showTrackingButton,
       locationTrackingEnabled: locationTrackingEnabled ?? this.locationTrackingEnabled,
       trackingIntervalMeters: trackingIntervalMeters ?? this.trackingIntervalMeters,
+      quickLaunchMode: quickLaunchMode ?? this.quickLaunchMode,
     );
   }
 }
