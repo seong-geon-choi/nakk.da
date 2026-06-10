@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'settings_provider.dart';
+import '../domain/models/app_settings.dart';
 import 'watermark_settings_screen.dart';
 import '../../permission/presentation/permission_provider.dart';
 import '../../file_list/presentation/file_list_provider.dart';
@@ -58,11 +59,11 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             const _SectionHeader(label: '저장'),
             ListTile(
               leading: const Icon(Icons.folder_outlined),
-              title: const Text('메모 저장 위치'),
+              title: const Text('저장 위치 변경'),
               subtitle: Text(
-                settings.saveDisplayPath.isNotEmpty
-                    ? settings.saveDisplayPath
-                    : settings.needsFolderSetup ? '폴더를 선택해 주세요' : settings.savePath,
+                settings.needsFolderSetup
+                    ? '폴더를 선택해 주세요'
+                    : '메모 저장 경로와 사진 저장 경로를 변경합니다',
                 style: TextStyle(
                   fontSize: 12,
                   color: settings.needsFolderSetup
@@ -74,19 +75,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               ),
               trailing: settings.needsFolderSetup
                   ? const Icon(Icons.warning_amber, color: Colors.orange)
-                  : null,
-              onTap: () => ref.read(settingsProvider.notifier).pickSaveFolder(),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('카메라 사진 저장 위치'),
-              subtitle: Text(
-                settings.photoSavePath,
-                style: const TextStyle(fontSize: 12),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
+                  : const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const _SaveLocationSubScreen()),
               ),
-              onTap: () => ref.read(settingsProvider.notifier).pickPhotoSaveFolder(),
             ),
 
             // ── 표시 섹션 ─────────────────────────────
@@ -149,37 +141,66 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               ),
             ),
 
-            // ── 볼륨 버튼 음성 입력 섹션 ─────────────────
-            const _SectionHeader(label: '볼륨 버튼 음성 메모'),
-            const _AccessibilityTile(),
+            // ── 빠른 메모 실행 섹션 ──────────────────────
+            const _SectionHeader(label: '빠른 메모 실행'),
+            ListTile(
+              leading: const Icon(Icons.flash_on_outlined),
+              title: const Text('실행 방법'),
+              subtitle: Text(_quickLaunchModeLabel(settings.quickLaunchMode)),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const _QuickLaunchSubScreen()),
+              ),
+            ),
 
             // ── 위치 트래킹 섹션 ──────────────────────────
             const _SectionHeader(label: '위치 트래킹'),
-            SwitchListTile(
-              secondary: const Icon(Icons.route_outlined),
-              title: const Text('경로 기록 버튼 표시'),
-              subtitle: const Text('홈 화면 버튼 및 지도 메뉴의 이동경로 버튼을 표시합니다'),
-              value: settings.showTrackingButton,
-              onChanged: (v) =>
-                  ref.read(settingsProvider.notifier).updateShowTrackingButton(v),
-            ),
             ListTile(
-              leading: const Icon(Icons.straighten_outlined),
-              title: const Text('기록 간격'),
-              subtitle: Text(
-                '최소 이동 거리: ${settings.trackingIntervalMeters}m '
-                '(30m ~ 1000m)',
-                style: const TextStyle(fontSize: 12),
+              leading: const Icon(Icons.route_outlined),
+              title: const Text('경로 기록'),
+              subtitle: Text('기록 간격: ${settings.trackingIntervalMeters}m'),
+              trailing: Switch(
+                value: settings.showTrackingButton,
+                onChanged: (v) => ref
+                    .read(settingsProvider.notifier)
+                    .updateShowTrackingButton(v),
               ),
-              onTap: () => _showIntervalDialog(context, ref, settings.trackingIntervalMeters),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const _TrackingIntervalSubScreen()),
+              ),
             ),
 
             // ── 권한 섹션 ─────────────────────────────
             const _SectionHeader(label: '권한'),
-            ...permAsync.when(
-              loading: () => [const ListTile(title: Text('권한 확인 중...'))],
-              error: (e, _) => [const ListTile(title: Text('권한 확인 실패'))],
-              data: (statuses) => _permissionItems(context, statuses),
+            permAsync.when(
+              loading: () => const ListTile(
+                leading: Icon(Icons.security_outlined),
+                title: Text('권한 설정'),
+                subtitle: Text('확인 중...'),
+              ),
+              error: (_, __) => const ListTile(
+                leading: Icon(Icons.security_outlined),
+                title: Text('권한 설정'),
+              ),
+              data: (statuses) {
+                final granted =
+                    statuses.values.where((s) => s.isGranted).length;
+                final total = statuses.length;
+                final allGranted = granted == total;
+                return ListTile(
+                  leading: Icon(
+                    Icons.security_outlined,
+                    color: allGranted ? null : Colors.orange,
+                  ),
+                  title: const Text('권한 설정'),
+                  subtitle: Text('$granted / $total 허용됨'),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => Navigator.of(context).push(
+                    MaterialPageRoute(
+                        builder: (_) => const _PermissionSubScreen()),
+                  ),
+                );
+              },
             ),
 
             // ── 고급 섹션 ─────────────────────────────
@@ -204,32 +225,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         ),
       ),
     );
-  }
-
-  List<Widget> _permissionItems(
-    BuildContext context,
-    Map<Permission, PermissionStatus> statuses,
-  ) {
-    final items = [
-      (Permission.microphone, '마이크', '음성 메모 녹음'),
-      (Permission.locationWhenInUse, '위치', 'GPS 좌표 기록'),
-      (Permission.camera, '카메라', '사진 촬영'),
-      (Permission.photos, '사진', '갤러리 사진 선택'),
-      (Permission.notification, '알림', '음성 메모 상태 표시'),
-    ];
-
-    return items.map((item) {
-      final (perm, label, desc) = item;
-      final isGranted = statuses[perm]?.isGranted ?? false;
-      return ListTile(
-        title: Text(label),
-        subtitle: Text(desc, style: const TextStyle(fontSize: 12)),
-        trailing: PermissionStatusChip(isGranted: isGranted),
-        onTap: () async {
-          await openAppSettings();
-        },
-      );
-    }).toList();
   }
 
   Future<void> _showApiKeyDialog(
@@ -287,48 +282,342 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     }
     controller.dispose();
   }
-
 }
 
-Future<void> _showIntervalDialog(
-  BuildContext context,
-  WidgetRef ref,
-  int currentInterval,
-) async {
-  final controller = TextEditingController(text: currentInterval.toString());
-  final confirmed = await showDialog<bool>(
-    context: context,
-    builder: (_) => AlertDialog(
-      title: const Text('기록 간격 설정'),
-      content: TextField(
-        controller: controller,
-        keyboardType: TextInputType.number,
-        decoration: const InputDecoration(
-          labelText: '이동 거리 (m)',
-          border: OutlineInputBorder(),
-          helperText: '30m ~ 1000m',
+// ── 저장 위치 변경 하위 화면 ──────────────────────────────────────
+
+class _SaveLocationSubScreen extends ConsumerWidget {
+  const _SaveLocationSubScreen();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final settingsAsync = ref.watch(settingsProvider);
+    return Scaffold(
+      appBar: AppBar(title: const Text('저장 위치 변경')),
+      body: settingsAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('오류: $e')),
+        data: (settings) => ListView(
+          children: [
+            ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('메모 저장 위치'),
+              subtitle: Text(
+                settings.saveDisplayPath.isNotEmpty
+                    ? settings.saveDisplayPath
+                    : settings.needsFolderSetup
+                        ? '폴더를 선택해 주세요'
+                        : settings.savePath,
+                style: TextStyle(
+                  fontSize: 12,
+                  color: settings.needsFolderSetup
+                      ? Theme.of(context).colorScheme.error
+                      : null,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: settings.needsFolderSetup
+                  ? const Icon(Icons.warning_amber, color: Colors.orange)
+                  : null,
+              onTap: () => ref.read(settingsProvider.notifier).pickSaveFolder(),
+            ),
+            ListTile(
+              leading: const Icon(Icons.photo_library_outlined),
+              title: const Text('카메라 사진 저장 위치'),
+              subtitle: Text(
+                settings.photoSavePath,
+                style: const TextStyle(fontSize: 12),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              onTap: () =>
+                  ref.read(settingsProvider.notifier).pickPhotoSaveFolder(),
+            ),
+          ],
         ),
       ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: const Text('취소'),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.pop(context, true),
-          child: const Text('저장'),
-        ),
-      ],
-    ),
-  );
-  if (confirmed == true && context.mounted) {
-    final val = int.tryParse(controller.text.trim());
-    if (val != null) {
-      await ref.read(settingsProvider.notifier).updateTrackingIntervalMeters(val);
+    );
+  }
+}
+
+// ── 기록 간격 하위 화면 ───────────────────────────────────────────
+
+class _TrackingIntervalSubScreen extends ConsumerStatefulWidget {
+  const _TrackingIntervalSubScreen();
+
+  @override
+  ConsumerState<_TrackingIntervalSubScreen> createState() =>
+      _TrackingIntervalSubScreenState();
+}
+
+class _TrackingIntervalSubScreenState
+    extends ConsumerState<_TrackingIntervalSubScreen> {
+  double? _sliderValue;
+
+  @override
+  Widget build(BuildContext context) {
+    final settingsAsync = ref.watch(settingsProvider);
+    return Scaffold(
+      appBar: AppBar(title: const Text('기록 간격')),
+      body: settingsAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('오류: $e')),
+        data: (settings) {
+          final current =
+              _sliderValue ?? settings.trackingIntervalMeters.toDouble();
+          return Padding(
+            padding: const EdgeInsets.all(24),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  '최소 이동 거리: ${current.round()}m',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                const SizedBox(height: 16),
+                Slider(
+                  value: current,
+                  min: 30,
+                  max: 1000,
+                  divisions: 97,
+                  label: '${current.round()}m',
+                  onChanged: (v) => setState(() => _sliderValue = v),
+                  onChangeEnd: (v) => ref
+                      .read(settingsProvider.notifier)
+                      .updateTrackingIntervalMeters(v.round()),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('30m',
+                          style: Theme.of(context).textTheme.bodySmall),
+                      Text('1000m',
+                          style: Theme.of(context).textTheme.bodySmall),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 24),
+                Text(
+                  '이동 경로 기록 시 최소 이동 거리를 설정합니다.\n'
+                  '거리가 짧을수록 더 상세한 경로가 기록됩니다.\n\n'
+                  '메모 작성 화면에서 경로 기록 버튼을 활성화한 경우에만 이동 경로가 기록됩니다.\n\n'
+                  '경로 기록은 활성화 후 12시간이 경과하거나 자정(0시)이 되면 자동으로 중단됩니다.',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context)
+                        .colorScheme
+                        .onSurface
+                        .withValues(alpha: 0.6),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
+
+// ── 권한 설정 하위 화면 ───────────────────────────────────────────
+
+class _PermissionSubScreen extends ConsumerStatefulWidget {
+  const _PermissionSubScreen();
+
+  @override
+  ConsumerState<_PermissionSubScreen> createState() =>
+      _PermissionSubScreenState();
+}
+
+class _PermissionSubScreenState extends ConsumerState<_PermissionSubScreen>
+    with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      ref.invalidate(permissionStatusProvider);
     }
   }
-  controller.dispose();
+
+  @override
+  Widget build(BuildContext context) {
+    final permAsync = ref.watch(permissionStatusProvider);
+    return Scaffold(
+      appBar: AppBar(title: const Text('권한 설정')),
+      body: permAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (_, __) => const Center(child: Text('권한 확인 실패')),
+        data: (statuses) {
+          const items = [
+            (Permission.microphone, '마이크', '음성 메모 녹음'),
+            (Permission.locationWhenInUse, '위치', 'GPS 좌표 기록'),
+            (Permission.camera, '카메라', '사진 촬영'),
+            (Permission.photos, '사진', '갤러리 사진 선택'),
+            (Permission.notification, '알림', '음성 메모 상태 표시'),
+          ];
+          return ListView(
+            children: items.map((item) {
+              final (perm, label, desc) = item;
+              final isGranted = statuses[perm]?.isGranted ?? false;
+              return ListTile(
+                title: Text(label),
+                subtitle: Text(desc, style: const TextStyle(fontSize: 12)),
+                trailing: PermissionStatusChip(isGranted: isGranted),
+                onTap: () async => await openAppSettings(),
+              );
+            }).toList(),
+          );
+        },
+      ),
+    );
+  }
 }
+
+// ── 빠른 메모 실행 하위 화면 ─────────────────────────────────────
+
+String _quickLaunchModeLabel(QuickLaunchMode mode) {
+  switch (mode) {
+    case QuickLaunchMode.shake:  return '화면 흔들기';
+    case QuickLaunchMode.volume: return '볼륨 버튼';
+    case QuickLaunchMode.none:   return '사용 안 함';
+  }
+}
+
+class _QuickLaunchSubScreen extends ConsumerWidget {
+  const _QuickLaunchSubScreen();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final settingsAsync = ref.watch(settingsProvider);
+    return Scaffold(
+      appBar: AppBar(title: const Text('빠른 메모 실행')),
+      body: settingsAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('오류: $e')),
+        data: (settings) {
+          final mode = settings.quickLaunchMode;
+          void setMode(QuickLaunchMode? v) {
+            if (v == null) return;
+            ref.read(settingsProvider.notifier).updateQuickLaunchMode(v);
+          }
+          return ListView(
+            children: [
+              RadioListTile<QuickLaunchMode>(
+                secondary: const Icon(Icons.vibration),
+                title: const Text('화면 흔들기'),
+                subtitle: const Text('1.5초 내 3회 흔들면 음성 메모 시작'),
+                value: QuickLaunchMode.shake,
+                groupValue: mode,
+                onChanged: setMode,
+              ),
+              RadioListTile<QuickLaunchMode>(
+                secondary: const Icon(Icons.volume_up_outlined),
+                title: const Text('볼륨 버튼'),
+                subtitle: const Text('볼륨 ↑ 2회 연속으로 음성 메모 시작'),
+                value: QuickLaunchMode.volume,
+                groupValue: mode,
+                onChanged: setMode,
+              ),
+              if (mode == QuickLaunchMode.volume)
+                const _AccessibilityTile(),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _AccessibilityTile extends StatefulWidget {
+  const _AccessibilityTile();
+
+  @override
+  State<_AccessibilityTile> createState() => _AccessibilityTileState();
+}
+
+class _AccessibilityTileState extends State<_AccessibilityTile>
+    with WidgetsBindingObserver {
+  bool _enabled = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refresh();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _refresh();
+  }
+
+  Future<void> _refresh() async {
+    final enabled = await isAccessibilityServiceEnabled();
+    if (mounted) setState(() => _enabled = enabled);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        SwitchListTile(
+          secondary: Icon(
+            _enabled ? Icons.lock_open : Icons.lock_outline,
+            color: _enabled ? Colors.green : null,
+          ),
+          title: const Text('잠금화면 · 화면 꺼짐 상태 지원'),
+          subtitle: Text(
+            _enabled
+                ? '활성화됨 — 화면 꺼짐·잠금 상태에서도 동작합니다'
+                : '화면 켜진 상태에서만 동작합니다',
+            style: TextStyle(
+              fontSize: 12,
+              color: _enabled ? Colors.green : null,
+            ),
+          ),
+          value: _enabled,
+          onChanged: (_) async => await openAccessibilitySettings(),
+        ),
+        if (!_enabled)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text(
+              '볼륨 ↑ 두 번으로 음성 메모를 입력할 수 있습니다.\n'
+              '잠금화면·화면 꺼짐 상태에서도 사용하려면 접근성 서비스를 활성화하세요.\n'
+              '활성화 → 접근성 → 설치된 서비스 → 낚.다 음성 메모 → 켜기',
+              style: TextStyle(
+                fontSize: 12,
+                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+// ── 유틸리티 ─────────────────────────────────────────────────────
 
 Future<void> _cleanUnusedPhotos(BuildContext context, WidgetRef ref) async {
   final confirmed = await showDialog<bool>(
@@ -463,81 +752,6 @@ class _MemoFilePicker extends StatelessWidget {
   }
 }
 
-class _AccessibilityTile extends StatefulWidget {
-  const _AccessibilityTile();
-
-  @override
-  State<_AccessibilityTile> createState() => _AccessibilityTileState();
-}
-
-class _AccessibilityTileState extends State<_AccessibilityTile>
-    with WidgetsBindingObserver {
-  bool _enabled = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _refresh();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refresh();
-  }
-
-  Future<void> _refresh() async {
-    final enabled = await isAccessibilityServiceEnabled();
-    if (mounted) setState(() => _enabled = enabled);
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SwitchListTile(
-          secondary: Icon(
-            _enabled ? Icons.lock_open : Icons.lock_outline,
-            color: _enabled ? Colors.green : null,
-          ),
-          title: const Text('잠금화면 · 화면 꺼짐 상태 지원'),
-          subtitle: Text(
-            _enabled
-                ? '활성화됨 — 화면 꺼짐·잠금 상태에서도 동작합니다'
-                : '화면 켜진 상태에서만 동작합니다',
-            style: TextStyle(
-              fontSize: 12,
-              color: _enabled ? Colors.green : null,
-            ),
-          ),
-          value: _enabled,
-          onChanged: (_) async => await openAccessibilitySettings(),
-        ),
-        if (!_enabled)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Text(
-              '볼륨 ↑ 두 번으로 음성 메모를 입력할 수 있습니다.\n'
-              '잠금화면·화면 꺼짐 상태에서도 사용하려면 접근성 서비스를 활성화하세요.\n'
-              '활성화 → 접근성 → 설치된 서비스 → 낚.다 음성 메모 → 켜기',
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.5),
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-}
-
 class _AboutTile extends StatefulWidget {
   @override
   State<_AboutTile> createState() => _AboutTileState();
@@ -590,4 +804,3 @@ class _SectionHeader extends StatelessWidget {
     );
   }
 }
-

@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import '../../memo/domain/models/memo_entry.dart';
 import '../../memo/presentation/memo_provider.dart';
@@ -32,11 +34,22 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   bool _showTimes = false;
   bool _showDistances = false;
   bool _showTrack = false;
+  bool _showToast = false;
+  String _toastMsg = '';
+  Timer? _toastTimer;
+  Timer? _noGpsTimer;
   bool _dismissedNoGpsCard = false;
   DateTime _loadedDate = DateTime.now();
   MapController _mapController = MapController();
   double _zoom = 14;
   String _savePath = '';
+
+  @override
+  void dispose() {
+    _toastTimer?.cancel();
+    _noGpsTimer?.cancel();
+    super.dispose();
+  }
 
   @override
   void initState() {
@@ -69,6 +82,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       }
     }
     pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    _noGpsTimer?.cancel();
     setState(() {
       _points = pts;
       _trackPoints = [];
@@ -82,6 +96,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       _mapController = MapController();
       _zoom = 14;
     });
+    if (pts.isEmpty) {
+      _noGpsTimer = Timer(const Duration(seconds: 4), () {
+        if (mounted) setState(() => _dismissedNoGpsCard = true);
+      });
+    }
   }
 
   Future<void> _loadTrackPoints() async {
@@ -117,6 +136,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       final pts = dayFile?.trackPoints ?? [];
       pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
       setState(() => _trackPoints = pts);
+      _fitAllPoints();
     }
   }
 
@@ -192,6 +212,90 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       padding: const EdgeInsets.all(52),
       maxZoom: 18,
     );
+  }
+
+  // 모든 포인트(메모+트래킹)가 한 화면에 보이도록 fit; 없으면 현재 위치
+  void _fitAllPoints() {
+    final allLats = [
+      ..._points.map((p) => p.lat),
+      ..._trackPoints.map((p) => p.lat),
+    ];
+    final allLngs = [
+      ..._points.map((p) => p.lng),
+      ..._trackPoints.map((p) => p.lng),
+    ];
+    if (allLats.isEmpty) {
+      _moveToCurrentLocation();
+      return;
+    }
+    if (allLats.length == 1) {
+      _mapController.move(LatLng(allLats[0], allLngs[0]), 15);
+      return;
+    }
+    final minLat = allLats.reduce(math.min);
+    final maxLat = allLats.reduce(math.max);
+    final minLng = allLngs.reduce(math.min);
+    final maxLng = allLngs.reduce(math.max);
+    if (!minLat.isFinite || !minLng.isFinite ||
+        !maxLat.isFinite || !maxLng.isFinite) return;
+    if (minLat == maxLat && minLng == maxLng) {
+      _mapController.move(LatLng(minLat, minLng), 15);
+      return;
+    }
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds(LatLng(minLat, minLng), LatLng(maxLat, maxLng)),
+        padding: const EdgeInsets.all(52),
+        maxZoom: 18,
+      ),
+    );
+  }
+
+  Future<void> _moveToCurrentLocation() async {
+    try {
+      Position? pos = await Geolocator.getLastKnownPosition();
+      pos ??= await Geolocator.getCurrentPosition(
+          locationSettings:
+              const LocationSettings(accuracy: LocationAccuracy.low));
+      if (mounted) _mapController.move(LatLng(pos.latitude, pos.longitude), 15);
+    } catch (_) {
+      if (mounted) _showToastMessage('현재 위치를 가져올 수 없습니다');
+    }
+  }
+
+  void _fitTrackPoints() {
+    if (_trackPoints.isEmpty) return;
+    final lats = _trackPoints.map((p) => p.lat).toList();
+    final lngs = _trackPoints.map((p) => p.lng).toList();
+    final minLat = lats.reduce(math.min);
+    final maxLat = lats.reduce(math.max);
+    final minLng = lngs.reduce(math.min);
+    final maxLng = lngs.reduce(math.max);
+    if (minLat == maxLat && minLng == maxLng) {
+      _mapController.move(LatLng(minLat, minLng), 15);
+      return;
+    }
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds(
+          LatLng(minLat, minLng),
+          LatLng(maxLat, maxLng),
+        ),
+        padding: const EdgeInsets.all(52),
+        maxZoom: 18,
+      ),
+    );
+  }
+
+  void _showToastMessage(String msg) {
+    _toastTimer?.cancel();
+    setState(() {
+      _toastMsg = msg;
+      _showToast = true;
+    });
+    _toastTimer = Timer(const Duration(milliseconds: 1800), () {
+      if (mounted) setState(() => _showToast = false);
+    });
   }
 
   LatLng get _initialCenter => _points.isNotEmpty
@@ -323,7 +427,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     ),
                   ],
                 ),
-              if (_showTrack && _trackPoints.isNotEmpty)
+              if ((_showTrack || _showTimes) && _trackPoints.isNotEmpty)
                 CircleLayer(
                   circles: _trackPoints
                       .map((p) => CircleMarker(
@@ -449,6 +553,35 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     ),
                   )).toList(),
                 ),
+              if (_showTimes && _trackPoints.isNotEmpty)
+                MarkerLayer(
+                  markers: _trackPoints.map((tp) {
+                    final h = tp.timestamp.hour.toString().padLeft(2, '0');
+                    final m = tp.timestamp.minute.toString().padLeft(2, '0');
+                    return Marker(
+                      point: LatLng(tp.lat, tp.lng),
+                      width: 56,
+                      height: 36,
+                      alignment: Alignment.bottomCenter,
+                      child: Align(
+                        alignment: Alignment.topCenter,
+                        child: Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 3, vertical: 1),
+                          decoration: BoxDecoration(
+                            color: const Color(0xCCFF6D00),
+                            borderRadius: BorderRadius.circular(3),
+                          ),
+                          child: Text(
+                            '$h:$m',
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 10),
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
             ],
           ),
           // 선택된 마커 팝업
@@ -463,8 +596,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 onClose: () => setState(() => _selected = null),
               ),
             ),
-          // GPS 없음 안내
-          if (_points.isEmpty && !_dismissedNoGpsCard)
+          // GPS 없음 안내 (메모 GPS + 트래킹 포인트 모두 없을 때만 표시)
+          if (_points.isEmpty && _trackPoints.isEmpty && !_dismissedNoGpsCard)
             Center(
               child: Stack(
                 clipBehavior: Clip.none,
@@ -525,40 +658,104 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _toolBtn(Icons.calendar_today_outlined, null, _pickDate),
-                    if (placed.isNotEmpty) ...[
-                      _divider(),
-                      _toolBtn(
-                        Icons.schedule,
-                        _showTimes ? Theme.of(context).colorScheme.primary : null,
-                        () => setState(() => _showTimes = !_showTimes),
-                      ),
-                    ],
-                    if (placed.length >= 2) ...[
-                      _divider(),
-                      _toolBtn(
-                        _showLines ? Icons.timeline : Icons.timeline_outlined,
-                        _showLines ? Theme.of(context).colorScheme.primary : null,
-                        () => setState(() => _showLines = !_showLines),
-                      ),
-                      _toolBtn(
-                        Icons.straighten,
-                        _showLines && _showDistances
-                            ? Theme.of(context).colorScheme.primary
-                            : null,
-                        _showLines
-                            ? () => setState(() => _showDistances = !_showDistances)
-                            : null,
-                      ),
-                    ],
-                    if (showTrackingButton && _trackPoints.isNotEmpty) ...[
+                    _divider(),
+                    _toolBtn(Icons.my_location, null, _moveToCurrentLocation),
+                    _divider(),
+                    _toolBtn(
+                      Icons.schedule,
+                      (placed.isNotEmpty || _trackPoints.isNotEmpty)
+                          ? (_showTimes
+                              ? Theme.of(context).colorScheme.primary
+                              : null)
+                          : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+                      (placed.isNotEmpty || _trackPoints.isNotEmpty)
+                          ? () {
+                              setState(() => _showTimes = !_showTimes);
+                              _showToastMessage(
+                                  _showTimes ? '시간 표시 켜짐' : '시간 표시 꺼짐');
+                            }
+                          : () => _showToastMessage('표시할 위치 정보가 없습니다'),
+                    ),
+                    _divider(),
+                    _toolBtn(
+                      _showLines ? Icons.timeline : Icons.timeline_outlined,
+                      placed.length >= 2
+                          ? (_showLines
+                              ? Theme.of(context).colorScheme.primary
+                              : null)
+                          : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+                      placed.length >= 2
+                          ? () {
+                              setState(() => _showLines = !_showLines);
+                              _showToastMessage(
+                                  _showLines ? '경로 연결선 켜짐' : '경로 연결선 꺼짐');
+                            }
+                          : () => _showToastMessage('GPS 메모가 2개 이상 필요합니다'),
+                    ),
+                    _toolBtn(
+                      Icons.straighten,
+                      placed.length >= 2 && _showLines && _showDistances
+                          ? Theme.of(context).colorScheme.primary
+                          : (placed.length < 2 || !_showLines)
+                              ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3)
+                              : null,
+                      placed.length < 2
+                          ? () => _showToastMessage('GPS 메모가 2개 이상 필요합니다')
+                          : !_showLines
+                              ? () => _showToastMessage('경로 연결선을 먼저 켜세요')
+                              : () {
+                                  setState(() => _showDistances = !_showDistances);
+                                  _showToastMessage(
+                                      _showDistances ? '거리 표시 켜짐' : '거리 표시 꺼짐');
+                                },
+                    ),
+                    if (showTrackingButton) ...[
                       _divider(),
                       _toolBtn(
                         Icons.route,
-                        _showTrack ? Theme.of(context).colorScheme.primary : null,
-                        () => setState(() => _showTrack = !_showTrack),
+                        _trackPoints.isNotEmpty
+                            ? (_showTrack
+                                ? Theme.of(context).colorScheme.primary
+                                : null)
+                            : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+                        _trackPoints.isNotEmpty
+                            ? () {
+                                final nowOn = !_showTrack;
+                                setState(() => _showTrack = nowOn);
+                                if (nowOn) _fitTrackPoints();
+                                _showToastMessage(nowOn ? '경로기록 표시중' : '경로기록 숨김');
+                              }
+                            : () => _showToastMessage('트래킹 기록이 없습니다'),
                       ),
                     ],
                   ],
+                ),
+              ),
+            ),
+          ),
+          // 버튼 상태 토스트
+          Positioned(
+            top: 16,
+            left: 0,
+            right: 0,
+            child: IgnorePointer(
+              child: AnimatedOpacity(
+                opacity: _showToast ? 1.0 : 0.0,
+                duration: const Duration(milliseconds: 300),
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: const Color(0xCC000000),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      _toastMsg,
+                      style: const TextStyle(
+                          color: Colors.white, fontSize: 13),
+                    ),
+                  ),
                 ),
               ),
             ),

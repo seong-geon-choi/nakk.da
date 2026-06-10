@@ -25,8 +25,10 @@ class TideResult {
 class TideService {
   static const _tideApiBase =
       'https://apis.data.go.kr/1192136/tideFcstHghLw/GetTideFcstHghLwApiService';
-  static const _waterTempApiBase =
-      'https://apis.data.go.kr/1192136/surveyWaterTemp/GetSurveyWaterTempApiService';
+  static const _marineApiBase = 'https://marine-api.open-meteo.com/v1/marine';
+
+  // 조석 예보 캐시: 키 = "stationCode-yyyyMMdd"
+  static final Map<String, List<Map<String, dynamic>>?> _tideCache = {};
 
   Future<TideResult?> getTideResult(
     double lat,
@@ -39,7 +41,8 @@ class TideService {
 
     final dateStr = _dateStr(DateTime.now());
     final tideData = await _fetchTidePrediction(station.code, dateStr, apiKey);
-    final waterTemp = await _fetchWaterTemp(station.code, dateStr, apiKey);
+    // 사용자 위치가 내륙일 수 있으므로 해안 관측소 좌표로 수온 조회
+    final waterTemp = await _fetchWaterTemp(station.latitude, station.longitude);
 
     String? nextType;
     String? nextTime;
@@ -103,8 +106,11 @@ class TideService {
     String dateStr,
     String apiKey,
   ) async {
+    final cacheKey = '$stationCode-$dateStr';
+    if (_tideCache.containsKey(cacheKey)) return _tideCache[cacheKey];
+
     try {
-      final uri = Uri.parse('$_tideApiBase').replace(queryParameters: {
+      final uri = Uri.parse(_tideApiBase).replace(queryParameters: {
         'serviceKey': apiKey,
         'obsCode': stationCode,
         'date': dateStr,
@@ -113,40 +119,52 @@ class TideService {
         'type': 'json',
       });
       final resp = await http.get(uri).timeout(const Duration(seconds: 10));
-      if (resp.statusCode != 200) return null;
-      return _parseItems(resp.body);
+      if (resp.statusCode != 200) {
+        _tideCache[cacheKey] = null;
+        return null;
+      }
+      final result = _parseItems(resp.body);
+      _tideCache[cacheKey] = result;
+      return result;
     } catch (_) {
+      _tideCache[cacheKey] = null;
+      return null;
     }
-    return null;
   }
 
-  Future<double?> _fetchWaterTemp(
-    String stationCode,
-    String dateStr,
-    String apiKey,
-  ) async {
+  // Open-Meteo Marine API로 현재 시간 수온 조회 (무료·무제한)
+  Future<double?> _fetchWaterTemp(double lat, double lng) async {
     try {
-      final uri =
-          Uri.parse('$_waterTempApiBase').replace(queryParameters: {
-        'serviceKey': apiKey,
-        'obsCode': stationCode,
-        'reqDate': dateStr,
-        'numOfRows': '10',
-        'pageNo': '1',
-        'type': 'json',
+      final uri = Uri.parse(_marineApiBase).replace(queryParameters: {
+        'latitude': lat.toStringAsFixed(4),
+        'longitude': lng.toStringAsFixed(4),
+        'hourly': 'sea_surface_temperature',
+        'forecast_days': '1',
+        'timezone': 'auto',
       });
       final resp = await http.get(uri).timeout(const Duration(seconds: 10));
       if (resp.statusCode != 200) return null;
-      final items = _parseItems(resp.body);
-      if (items == null || items.isEmpty) return null;
-      final last = items.last;
-      for (final key in ['wtem', 'waterTemp', 'water_temp', 'wt', 'wtl']) {
-        final val = last[key];
-        if (val != null) return double.tryParse(val.toString());
+      final json = jsonDecode(resp.body);
+      final times =
+          (json['hourly']?['time'] as List?)?.cast<String>();
+      final temps =
+          (json['hourly']?['sea_surface_temperature'] as List?)?.cast<num>();
+      if (times == null || temps == null || times.isEmpty) return null;
+
+      // 현재 시간 이후의 첫 번째 값 사용
+      final now = DateTime.now();
+      final nowHour = DateTime(now.year, now.month, now.day, now.hour);
+      for (int i = 0; i < times.length; i++) {
+        final t = DateTime.tryParse(times[i]);
+        if (t != null && !t.isBefore(nowHour)) {
+          final v = temps[i];
+          return v == double.nan ? null : v.toDouble();
+        }
       }
+      return temps.last.toDouble();
     } catch (_) {
+      return null;
     }
-    return null;
   }
 
   // data.go.kr KHOA 응답 파싱: {header:{}, body:{items:{item:[...]}}}

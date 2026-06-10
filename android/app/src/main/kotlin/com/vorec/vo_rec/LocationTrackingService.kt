@@ -20,8 +20,13 @@ class LocationTrackingService : Service() {
         const val PREFS_NAME = "nakkda_track_prefs"
         const val PREFS_PENDING_KEY = "pending_points"
         const val PREFS_ACTIVE_KEY = "tracking_active"
+        const val PREFS_QUICK_LAUNCH_MODE_KEY = "quick_launch_mode"
         private const val EXTRA_INTERVAL = "intervalMeters"
         private const val AUTO_STOP_MS = 12L * 60 * 60 * 1000
+
+        fun getQuickLaunchMode(context: Context): String =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(PREFS_QUICK_LAUNCH_MODE_KEY, "volume") ?: "volume"
 
         fun start(context: Context, intervalMeters: Int) {
             val intent = Intent(context, LocationTrackingService::class.java)
@@ -150,18 +155,16 @@ class LocationTrackingService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val stopIntent = Intent(this, LocationTrackingService::class.java)
-            .apply { action = ACTION_STOP }
         val stopPi = PendingIntent.getService(
-            this, 1, stopIntent,
+            this, 1,
+            Intent(this, LocationTrackingService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("이동 경로 기록 중")
             .setContentText("위치 정보를 기록하고 있습니다")
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
-            .setOngoing(true)
-            .setSilent(true)
+            .setOngoing(true).setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .addAction(android.R.drawable.ic_delete, "중지", stopPi)
             .build()

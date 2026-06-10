@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -360,10 +361,29 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       builder: (_) => _ImportProgressDialog(progress: progress, total: photos.length),
     );
 
+    // 기존 사진 타임스탬프 수집 (중복 방지) — 초 단위 비교, 구 HH:mm 형식 하위 호환
+    DateTime _toSecond(DateTime dt) =>
+        DateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
+
+    final existing = await ref.read(memoRepositoryProvider).loadDayFile(date, savePath);
+    final existingPhotoSeconds = existing?.entries
+        .where((e) => e.isPhoto)
+        .map((e) => _toSecond(e.timestamp))
+        .toSet() ?? <DateTime>{};
+
     // 사진 처리
     final entries = <MemoEntry>[];
+    int skipped = 0;
     for (int i = 0; i < photos.length; i++) {
       final photo = photos[i];
+      final photoSec = _toSecond(photo.timestamp);
+      final photoMin = DateTime(photo.timestamp.year, photo.timestamp.month,
+          photo.timestamp.day, photo.timestamp.hour, photo.timestamp.minute);
+      if (existingPhotoSeconds.contains(photoSec) || existingPhotoSeconds.contains(photoMin)) {
+        skipped++;
+        progress.value = i + 1;
+        continue;
+      }
       final ts = photo.timestamp.millisecondsSinceEpoch;
       final cachePath = await copyContentUriToCache(photo.contentUri);
       if (cachePath != null) {
@@ -397,7 +417,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     Navigator.of(context).pop(); // 진행률 다이얼로그 닫기
 
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${entries.length}개 사진을 메모에 추가했습니다')),
+      SnackBar(
+        content: Text(skipped > 0
+            ? '${entries.length}개 사진 추가, ${skipped}개 중복 건너뜀'
+            : '${entries.length}개 사진을 메모에 추가했습니다'),
+      ),
     );
 
     // 오늘이 아닌 날짜면 해당 메모로 이동
@@ -963,6 +987,8 @@ class _TrackingFab extends ConsumerStatefulWidget {
 class _TrackingFabState extends ConsumerState<_TrackingFab>
     with WidgetsBindingObserver {
   bool _isActive = false;
+  int _trackCount = 0;
+  Timer? _flushTimer;
   double _right = 16;
   double _bottom = 172;
 
@@ -971,10 +997,13 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _refreshStatus();
+    // 메모 저장 등으로 todayFileProvider가 갱신될 때 트래킹 카운트도 재조회
+    ref.listenManual(todayFileProvider, (_, __) => _refreshCount());
   }
 
   @override
   void dispose() {
+    _flushTimer?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
@@ -986,14 +1015,50 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
 
   Future<void> _refreshStatus() async {
     final active = await TrackingService().isTracking();
-    if (mounted) setState(() => _isActive = active);
+    if (!mounted) return;
+    setState(() => _isActive = active);
+    final settingsActive =
+        ref.read(settingsProvider).valueOrNull?.locationTrackingEnabled ?? false;
+    if (settingsActive != active) {
+      await ref.read(settingsProvider.notifier).updateLocationTrackingEnabled(active);
+    }
+    await _refreshCount();
+    if (active && _flushTimer == null) _startFlushTimer();
+  }
+
+  Future<void> _refreshCount() async {
+    final settings = ref.read(settingsProvider).valueOrNull;
+    if (settings == null || settings.savePath.isEmpty) return;
+    final today = DateTime.now();
+    final repo = ref.read(memoRepositoryProvider);
+    final pending = await TrackingService().getAndClearTrackPoints();
+    if (pending.isNotEmpty) {
+      final byDate = <DateTime, List<TrackPoint>>{};
+      for (final p in pending) {
+        final d = DateTime(p.timestamp.year, p.timestamp.month, p.timestamp.day);
+        byDate.putIfAbsent(d, () => []).add(p);
+      }
+      for (final entry in byDate.entries) {
+        await repo.appendTrackPoints(entry.key, entry.value, settings.savePath);
+      }
+    }
+    final dayFile = await repo.loadDayFile(today, settings.savePath);
+    if (mounted) setState(() => _trackCount = dayFile?.trackPoints.length ?? 0);
+  }
+
+  void _startFlushTimer() {
+    _flushTimer?.cancel();
+    _flushTimer = Timer.periodic(const Duration(seconds: 30), (_) => _refreshCount());
   }
 
   Future<void> _onTap() async {
     if (_isActive) {
+      _flushTimer?.cancel();
+      _flushTimer = null;
       await TrackingService().stopTracking();
       await ref.read(settingsProvider.notifier).updateLocationTrackingEnabled(false);
       if (mounted) setState(() => _isActive = false);
+      await _refreshCount();
       return;
     }
 
@@ -1038,6 +1103,7 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     await TrackingService().startTracking(interval);
     await ref.read(settingsProvider.notifier).updateLocationTrackingEnabled(true);
     if (mounted) setState(() => _isActive = true);
+    _startFlushTimer();
   }
 
   @override
@@ -1097,6 +1163,14 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
                   fontWeight: FontWeight.w600,
                 ),
               ),
+              if (_trackCount > 0)
+                Text(
+                  '$_trackCount',
+                  style: TextStyle(
+                    color: _isActive ? Colors.white70 : Theme.of(context).colorScheme.onSecondary.withValues(alpha: 0.7),
+                    fontSize: 8,
+                  ),
+                ),
             ],
           ),
         ),

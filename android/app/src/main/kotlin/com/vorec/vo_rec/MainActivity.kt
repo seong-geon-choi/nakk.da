@@ -106,7 +106,7 @@ class MainActivity : FlutterActivity() {
                                 )
                             }
                         }
-                        if (filePath == null) {
+                        if (filePath.isNullOrEmpty()) {
                             val base = Environment.getExternalStorageDirectory().absolutePath
                             filePath = "$base/$relativePath/$displayName"
                         }
@@ -450,6 +450,13 @@ class MainActivity : FlutterActivity() {
                         prefs.edit().remove(LocationTrackingService.PREFS_PENDING_KEY).apply()
                         result.success(list)
                     }
+                    "setQuickLaunchMode" -> {
+                        val mode = call.argument<String>("mode") ?: "volume"
+                        getSharedPreferences(LocationTrackingService.PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().putString(LocationTrackingService.PREFS_QUICK_LAUNCH_MODE_KEY, mode).apply()
+                        VoiceRecordForegroundService.start(this, mode)
+                        result.success(null)
+                    }
                     else -> result.notImplemented()
                 }
             }
@@ -722,10 +729,10 @@ class MainActivity : FlutterActivity() {
 
     override fun onResume() {
         super.onResume()
-        // RECORD_AUDIO가 허가된 경우에만 시작 (API 34+ SecurityException 방지)
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                 == android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            VoiceRecordForegroundService.start(this)
+            val mode = LocationTrackingService.getQuickLaunchMode(this)
+            VoiceRecordForegroundService.start(this, mode)
         }
         val filter = IntentFilter(VoiceRecordAccessibilityService.BROADCAST_ACTION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
