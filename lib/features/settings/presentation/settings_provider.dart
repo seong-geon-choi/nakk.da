@@ -27,7 +27,10 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
   @override
   Future<AppSettings> build() async {
     final repo = ref.read(settingsRepositoryProvider);
-    return repo.load();
+    final settings = await repo.load();
+    // 앱 시작 시 저장된 모드를 Android 서비스에 동기화
+    await TrackingService().setQuickLaunchMode(settings.quickLaunchMode.name);
+    return settings;
   }
 
   final _saf = SafService();
