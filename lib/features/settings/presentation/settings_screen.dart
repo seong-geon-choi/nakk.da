@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'settings_provider.dart';
+import '../../backup/presentation/backup_provider.dart';
 import '../domain/models/app_settings.dart';
 import 'watermark_settings_screen.dart';
 import '../../permission/presentation/permission_provider.dart';
@@ -200,6 +201,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   ),
                 );
               },
+            ),
+
+            // ── 백업 섹션 ─────────────────────────────
+            const _SectionHeader(label: '백업 및 동기화'),
+            ListTile(
+              leading: const Icon(Icons.backup_outlined),
+              title: const Text('구글 드라이브 동기화'),
+              subtitle: const Text('Wi-Fi 연결 시 메모를 드라이브에 자동 백업합니다'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const _BackupSubScreen()),
+              ),
             ),
 
             // ── 고급 섹션 ─────────────────────────────
@@ -875,6 +888,223 @@ ListTileThemeData _subtitleTheme(BuildContext ctx) => ListTileThemeData(
     color: Theme.of(ctx).colorScheme.onSurface.withValues(alpha: 0.6),
   ),
 );
+
+// ── 백업 하위 화면 ───────────────────────────────────────────────
+
+class _BackupSubScreen extends ConsumerWidget {
+  const _BackupSubScreen();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final backupAsync = ref.watch(backupProvider);
+    final settingsAsync = ref.watch(settingsProvider);
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('백업 및 동기화')),
+      body: backupAsync.when(
+        loading: () => const Center(child: CircularProgressIndicator()),
+        error: (e, _) => Center(child: Text('오류: $e')),
+        data: (backup) {
+          final settings = settingsAsync.valueOrNull;
+          return ListTileTheme(
+            data: _subtitleTheme(context),
+            child: ListView(
+              children: [
+                SwitchListTile(
+                  secondary: const Icon(Icons.cloud_outlined),
+                  title: const Text('구글 드라이브 동기화'),
+                  subtitle: Text(
+                    backup.enabled && backup.accountEmail != null
+                        ? backup.accountEmail!
+                        : '비활성화됨 — Wi-Fi 연결 시에만 동기화',
+                  ),
+                  value: backup.enabled,
+                  onChanged: (v) async {
+                    if (v) {
+                      final ok = await ref.read(backupProvider.notifier).enableBackup();
+                      if (!ok && context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('구글 로그인에 실패했습니다')),
+                        );
+                      }
+                    } else {
+                      await ref.read(backupProvider.notifier).disableBackup();
+                    }
+                  },
+                ),
+                if (backup.enabled) ...[
+                  const Divider(indent: 16, endIndent: 16),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+                    child: Text('동기화 범위',
+                        style: Theme.of(context).textTheme.labelMedium),
+                  ),
+                  RadioListTile<bool>(
+                    title: const Text('메모 파일만'),
+                    subtitle: const Text('.md 파일만 동기화 (빠름)'),
+                    value: false,
+                    groupValue: backup.includeMedia,
+                    onChanged: (v) =>
+                        ref.read(backupProvider.notifier).setIncludeMedia(false),
+                  ),
+                  RadioListTile<bool>(
+                    title: const Text('이미지·동영상 포함'),
+                    subtitle: const Text('사진과 동영상도 함께 동기화'),
+                    value: true,
+                    groupValue: backup.includeMedia,
+                    onChanged: (v) =>
+                        ref.read(backupProvider.notifier).setIncludeMedia(true),
+                  ),
+                  const Divider(indent: 16, endIndent: 16),
+                  ListTile(
+                    leading: Icon(
+                      backup.lastSyncSuccess == false
+                          ? Icons.sync_problem_outlined
+                          : Icons.check_circle_outline,
+                      color: backup.lastSyncSuccess == false ? Colors.orange : null,
+                    ),
+                    title: const Text('마지막 동기화'),
+                    subtitle: Text(backup.lastSyncAt != null
+                        ? _fmtDateTime(backup.lastSyncAt!)
+                            + (backup.lastSyncSuccess == false ? ' (실패)' : ' ✓')
+                        : '없음'),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.cloud_upload_outlined),
+                    title: const Text('지금 전체 백업'),
+                    subtitle: const Text('모든 메모 파일을 드라이브에 올립니다'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _showBackupAllDialog(context, ref, settings?.savePath ?? ''),
+                  ),
+                  ListTile(
+                    leading: const Icon(Icons.restore_outlined),
+                    title: const Text('지금 복원하기'),
+                    subtitle: const Text('드라이브 데이터를 로컬과 병합합니다'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => _showRestoreDialog(context, ref, settings?.savePath ?? ''),
+                  ),
+                ],
+              ],
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  Future<void> _showBackupAllDialog(BuildContext context, WidgetRef ref, String savePath) async {
+    if (savePath.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('먼저 메모 저장 위치를 설정해 주세요')),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('전체 백업'),
+        content: const Text('모든 메모 파일을 구글 드라이브에 업로드합니다.\nWi-Fi 연결이 필요합니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('백업'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('백업 중...'), duration: Duration(minutes: 5)),
+    );
+
+    try {
+      final result = await ref.read(backupProvider.notifier).backupAll(savePath);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        if (result.skippedNoWifi) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Wi-Fi에 연결되지 않아 백업을 건너뜁니다')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${result.succeeded}/${result.total}개 파일 백업 완료')),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('백업 실패: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _showRestoreDialog(BuildContext context, WidgetRef ref, String savePath) async {
+    if (savePath.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('먼저 메모 저장 위치를 설정해 주세요')),
+      );
+      return;
+    }
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('복원'),
+        content: const Text(
+          '드라이브 데이터를 로컬과 날짜 기준으로 병합합니다.\n'
+          '로컬에만 있는 데이터는 유지됩니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('복원'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('복원 중...'), duration: Duration(minutes: 2)),
+    );
+
+    try {
+      final result = await ref.read(backupProvider.notifier).restore(savePath);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('${result.filesRestored}개 파일 복원 완료')),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('복원 실패: $e')),
+        );
+      }
+    }
+  }
+
+  String _fmtDateTime(DateTime dt) {
+    final m = dt.month.toString().padLeft(2, '0');
+    final d = dt.day.toString().padLeft(2, '0');
+    final h = dt.hour.toString().padLeft(2, '0');
+    final mi = dt.minute.toString().padLeft(2, '0');
+    return '${dt.year}-$m-$d $h:$mi';
+  }
+}
 
 class _SectionHeader extends StatelessWidget {
   final String label;

@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/memo_repository_impl.dart';
 import '../domain/memo_repository.dart';
@@ -5,6 +6,7 @@ import '../domain/models/day_file.dart';
 import '../domain/models/memo_entry.dart';
 import '../../location/domain/models/location_status.dart';
 import '../../settings/presentation/settings_provider.dart';
+import '../../backup/presentation/backup_provider.dart';
 import '../../../core/utils/file_name_parser.dart';
 
 final memoRepositoryProvider = Provider<MemoRepository>(
@@ -26,34 +28,52 @@ class TodayFileNotifier extends AsyncNotifier<DayFile?> {
 
   Future<void> addEntry(MemoEntry entry) async {
     final settings = await ref.read(settingsProvider.future);
-    await ref
-        .read(memoRepositoryProvider)
-        .appendEntry(DateTime.now(), entry, settings.savePath);
+    final date = DateTime.now();
+    await ref.read(memoRepositoryProvider).appendEntry(date, entry, settings.savePath);
     ref.invalidateSelf();
+    unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
+    if (entry.photoPath != null) {
+      unawaited(ref.read(backupProvider.notifier).syncMediaFile(entry.photoPath!));
+    }
+    if (entry.videoPath != null) {
+      unawaited(ref.read(backupProvider.notifier).syncMediaFile(entry.videoPath!));
+    }
   }
 
   Future<void> addLocationBlock(LocationStatus loc) async {
     final settings = await ref.read(settingsProvider.future);
-    await ref
-        .read(memoRepositoryProvider)
-        .appendLocationBlock(DateTime.now(), loc, settings.savePath);
+    final date = DateTime.now();
+    await ref.read(memoRepositoryProvider).appendLocationBlock(date, loc, settings.savePath);
     ref.invalidateSelf();
+    unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
   }
 
   Future<void> editBlock(int blockIndex, dynamic newBlock) async {
     final settings = await ref.read(settingsProvider.future);
-    await ref
-        .read(memoRepositoryProvider)
-        .replaceBlock(DateTime.now(), blockIndex, newBlock, settings.savePath);
+    final date = DateTime.now();
+    await ref.read(memoRepositoryProvider).replaceBlock(date, blockIndex, newBlock, settings.savePath);
     ref.invalidateSelf();
+    unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
   }
 
   Future<void> removeBlock(int blockIndex) async {
     final settings = await ref.read(settingsProvider.future);
-    await ref
-        .read(memoRepositoryProvider)
-        .removeBlock(DateTime.now(), blockIndex, settings.savePath);
+    final date = DateTime.now();
+    final dayFile = state.valueOrNull;
+    final block = (dayFile != null && blockIndex < dayFile.blocks.length)
+        ? dayFile.blocks[blockIndex]
+        : null;
+    await ref.read(memoRepositoryProvider).removeBlock(date, blockIndex, settings.savePath);
     ref.invalidateSelf();
+    unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
+    if (block is MemoEntry) {
+      if (block.photoPath != null) {
+        unawaited(ref.read(backupProvider.notifier).deleteMediaFile(block.photoPath!));
+      }
+      if (block.videoPath != null) {
+        unawaited(ref.read(backupProvider.notifier).deleteMediaFile(block.videoPath!));
+      }
+    }
   }
 }
 
@@ -84,32 +104,48 @@ class DayFileNotifier extends FamilyAsyncNotifier<DayFile?, String> {
     if (savePath == null) return;
     await ref.read(memoRepositoryProvider).appendEntry(_date, entry, savePath);
     ref.invalidateSelf();
+    unawaited(ref.read(backupProvider.notifier).syncMdFile(_date, savePath));
+    if (entry.photoPath != null) {
+      unawaited(ref.read(backupProvider.notifier).syncMediaFile(entry.photoPath!));
+    }
+    if (entry.videoPath != null) {
+      unawaited(ref.read(backupProvider.notifier).syncMediaFile(entry.videoPath!));
+    }
   }
 
   Future<void> addLocationBlock(LocationStatus loc) async {
     final savePath = _savePath;
     if (savePath == null) return;
-    await ref
-        .read(memoRepositoryProvider)
-        .appendLocationBlock(_date, loc, savePath);
+    await ref.read(memoRepositoryProvider).appendLocationBlock(_date, loc, savePath);
     ref.invalidateSelf();
+    unawaited(ref.read(backupProvider.notifier).syncMdFile(_date, savePath));
   }
 
   Future<void> editBlock(int blockIndex, dynamic newBlock) async {
     final savePath = _savePath;
     if (savePath == null) return;
-    await ref
-        .read(memoRepositoryProvider)
-        .replaceBlock(_date, blockIndex, newBlock, savePath);
+    await ref.read(memoRepositoryProvider).replaceBlock(_date, blockIndex, newBlock, savePath);
     ref.invalidateSelf();
+    unawaited(ref.read(backupProvider.notifier).syncMdFile(_date, savePath));
   }
 
   Future<void> removeBlock(int blockIndex) async {
     final savePath = _savePath;
     if (savePath == null) return;
-    await ref
-        .read(memoRepositoryProvider)
-        .removeBlock(_date, blockIndex, savePath);
+    final dayFile = state.valueOrNull;
+    final block = (dayFile != null && blockIndex < dayFile.blocks.length)
+        ? dayFile.blocks[blockIndex]
+        : null;
+    await ref.read(memoRepositoryProvider).removeBlock(_date, blockIndex, savePath);
     ref.invalidateSelf();
+    unawaited(ref.read(backupProvider.notifier).syncMdFile(_date, savePath));
+    if (block is MemoEntry) {
+      if (block.photoPath != null) {
+        unawaited(ref.read(backupProvider.notifier).deleteMediaFile(block.photoPath!));
+      }
+      if (block.videoPath != null) {
+        unawaited(ref.read(backupProvider.notifier).deleteMediaFile(block.videoPath!));
+      }
+    }
   }
 }

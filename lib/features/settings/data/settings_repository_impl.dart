@@ -17,6 +17,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _locationTrackingEnabledKey = 'location_tracking_enabled';
   static const _trackingIntervalMetersKey = 'tracking_interval_meters';
   static const _quickLaunchModeKey = 'quick_launch_mode';
+  static const _driveBackupEnabledKey = 'drive_backup_enabled';
+  static const _driveBackupIncludeMediaKey = 'drive_backup_include_media';
+  static const _lastSyncAtKey = 'last_sync_at';
+  static const _lastSyncSuccessKey = 'last_sync_success';
 
   static const defaultMemoDisplayPath = '/storage/emulated/0/Documents/nakkda';
 
@@ -45,6 +49,14 @@ class SettingsRepositoryImpl implements SettingsRepository {
       (e) => e.name == quickLaunchModeStr,
       orElse: () => QuickLaunchMode.shake,
     );
+    final driveBackupEnabled = prefs.getBool(_driveBackupEnabledKey) ?? false;
+    final driveBackupIncludeMedia = prefs.getBool(_driveBackupIncludeMediaKey) ?? false;
+    final lastSyncAtMs = prefs.getInt(_lastSyncAtKey);
+    final lastSyncAt = lastSyncAtMs != null
+        ? DateTime.fromMillisecondsSinceEpoch(lastSyncAtMs)
+        : null;
+    final lastSyncSuccessRaw = prefs.getBool(_lastSyncSuccessKey);
+
     return AppSettings(
       savePath: saveUri,
       saveDisplayPath: saveDisplayPath,
@@ -58,6 +70,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
       locationTrackingEnabled: locationTrackingEnabled,
       trackingIntervalMeters: trackingIntervalMeters,
       quickLaunchMode: quickLaunchMode,
+      driveBackupEnabled: driveBackupEnabled,
+      driveBackupIncludeMedia: driveBackupIncludeMedia,
+      lastSyncAt: lastSyncAt,
+      lastSyncSuccess: lastSyncSuccessRaw,
     );
   }
 
@@ -80,6 +96,18 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setBool(_locationTrackingEnabledKey, settings.locationTrackingEnabled);
     await prefs.setInt(_trackingIntervalMetersKey, settings.trackingIntervalMeters);
     await prefs.setString(_quickLaunchModeKey, settings.quickLaunchMode.name);
+    await prefs.setBool(_driveBackupEnabledKey, settings.driveBackupEnabled);
+    await prefs.setBool(_driveBackupIncludeMediaKey, settings.driveBackupIncludeMedia);
+    if (settings.lastSyncAt != null) {
+      await prefs.setInt(_lastSyncAtKey, settings.lastSyncAt!.millisecondsSinceEpoch);
+    } else {
+      await prefs.remove(_lastSyncAtKey);
+    }
+    if (settings.lastSyncSuccess != null) {
+      await prefs.setBool(_lastSyncSuccessKey, settings.lastSyncSuccess!);
+    } else {
+      await prefs.remove(_lastSyncSuccessKey);
+    }
   }
 
   Future<String> _defaultPhotoSavePath() async {

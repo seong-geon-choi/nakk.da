@@ -148,6 +148,10 @@ class AppSettings {
   final bool locationTrackingEnabled;
   final int trackingIntervalMeters;
   final QuickLaunchMode quickLaunchMode;
+  final bool driveBackupEnabled;
+  final bool driveBackupIncludeMedia;
+  final DateTime? lastSyncAt;
+  final bool? lastSyncSuccess;
 
   bool get needsFolderSetup => savePath.isEmpty;
 
@@ -164,6 +168,10 @@ class AppSettings {
     this.locationTrackingEnabled = false,
     this.trackingIntervalMeters = 100,
     this.quickLaunchMode = QuickLaunchMode.shake,
+    this.driveBackupEnabled = false,
+    this.driveBackupIncludeMedia = false,
+    this.lastSyncAt,
+    this.lastSyncSuccess,
   }) : watermark = watermark ?? WatermarkSettings();
 
   String get effectiveKhoaApiKey {
@@ -185,6 +193,11 @@ class AppSettings {
     bool? locationTrackingEnabled,
     int? trackingIntervalMeters,
     QuickLaunchMode? quickLaunchMode,
+    bool? driveBackupEnabled,
+    bool? driveBackupIncludeMedia,
+    DateTime? lastSyncAt,
+    bool? lastSyncSuccess,
+    bool clearLastSync = false,
   }) {
     return AppSettings(
       savePath: savePath ?? this.savePath,
@@ -199,6 +212,10 @@ class AppSettings {
       locationTrackingEnabled: locationTrackingEnabled ?? this.locationTrackingEnabled,
       trackingIntervalMeters: trackingIntervalMeters ?? this.trackingIntervalMeters,
       quickLaunchMode: quickLaunchMode ?? this.quickLaunchMode,
+      driveBackupEnabled: driveBackupEnabled ?? this.driveBackupEnabled,
+      driveBackupIncludeMedia: driveBackupIncludeMedia ?? this.driveBackupIncludeMedia,
+      lastSyncAt: clearLastSync ? null : (lastSyncAt ?? this.lastSyncAt),
+      lastSyncSuccess: clearLastSync ? null : (lastSyncSuccess ?? this.lastSyncSuccess),
     );
   }
 }

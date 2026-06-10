@@ -3,6 +3,7 @@ import '../data/settings_repository_impl.dart';
 import '../domain/models/app_settings.dart';
 import '../domain/settings_repository.dart';
 import '../../../core/services/saf_service.dart';
+import '../../../core/services/tracking_service.dart';
 
 export '../domain/models/app_settings.dart'
     show
@@ -11,7 +12,8 @@ export '../domain/models/app_settings.dart'
         WatermarkLineType,
         WatermarkPosition,
         WatermarkAlign,
-        WatermarkFont;
+        WatermarkFont,
+        QuickLaunchMode;
 
 final settingsRepositoryProvider = Provider<SettingsRepository>(
   (ref) => SettingsRepositoryImpl(),
@@ -123,10 +125,39 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     state = AsyncData(updated);
   }
 
+  Future<void> updateQuickLaunchMode(QuickLaunchMode mode) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(quickLaunchMode: mode);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+    await TrackingService().setQuickLaunchMode(mode.name);
+  }
+
   Future<void> updateTrackingIntervalMeters(int value) async {
     final current = state.valueOrNull;
     if (current == null) return;
     final updated = current.copyWith(trackingIntervalMeters: value.clamp(30, 1000));
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  Future<void> updateDriveBackup({
+    bool? enabled,
+    bool? includeMedia,
+    DateTime? lastSyncAt,
+    bool? lastSyncSuccess,
+    bool clearLastSync = false,
+  }) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(
+      driveBackupEnabled: enabled,
+      driveBackupIncludeMedia: includeMedia,
+      lastSyncAt: lastSyncAt,
+      lastSyncSuccess: lastSyncSuccess,
+      clearLastSync: clearLastSync,
+    );
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
   }
