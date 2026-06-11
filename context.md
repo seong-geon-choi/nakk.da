@@ -1,6 +1,6 @@
 # context.md — vo-rec 개발 이력
 
-**최종 업데이트:** 2026-06-11
+**최종 업데이트:** 2026-06-11 (세션 C)
 
 ---
 
@@ -72,6 +72,39 @@ Android 13+ 에서 `photo_manager`가 `authorized` 상태가 되려면 `READ_MED
 
 ---
 
+### 세션 C (2026-06-11): 갤러리 대폭 개선 + v1.2.7
+
+#### 1. 갤러리 권한 루트 원인 수정
+
+`AndroidManifest.xml`에서 `READ_MEDIA_VISUAL_USER_SELECTED` 제거.
+- 이 권한이 선언되어 있으면 Android 14+에서 사진 선택 다이얼로그에 "선택한 사진만 허용" (partial/limited) 옵션이 추가됨
+- 사용자가 partial 허용 시 `PermissionState.limited` → 최초 선택 사진 외 최근 촬영 사진 미표시
+- 제거 후 "모두 허용" / "거부" 2가지만 표시 → 루트 원인 제거
+
+#### 2. 갤러리 정렬 수정
+
+`FilterOptionGroup(orders: [OrderOption(createDate, asc: false)])` 명시 추가.
+- Samsung One UI에서 기본 정렬이 날짜 오름차순으로 동작하여 오래된 사진만 표시되던 문제 해결
+- `size: 500` 고정에서 무한 스크롤로 변경
+
+#### 3. 갤러리 기능 추가
+
+`gallery_picker_screen.dart` 전면 개편:
+
+| 기능 | 구현 |
+|------|------|
+| 날짜별 그룹 헤더 | `_buildGroups()` — 오늘/어제/YYYY년 M월 D일 |
+| 무한 스크롤 | `_onScroll()` — 하단 400px 전 다음 80개 로드 |
+| 우측 드래그 스크롤바 | `Scrollbar(interactive: true, thumbVisibility: true)` |
+| 탭 미디어 수량 표시 | `_loadCounts()` — 각 탭 비동기 카운트 로드 |
+| 다중 선택 + 삭제 | 길게 누르기 → 선택 모드 → AppBar 삭제 버튼 → 확인 다이얼로그 → `PhotoManager.editor.deleteWithIds` |
+
+#### 4. 버전 업
+
+`pubspec.yaml`: `1.2.6+2012` → `1.2.7+2013`
+
+---
+
 ## 현재 상태
 
 ### 구현 완료 기능
@@ -87,7 +120,7 @@ Android 13+ 에서 `photo_manager`가 `authorized` 상태가 되려면 `READ_MED
 | AR 길이 측정 | ✅ |
 | 이동 경로 기록 (LocationTrackingService) | ✅ |
 | Google Drive 백업/복원 | ✅ |
-| 갤러리 (커스텀, photo_manager) | ✅ |
+| 갤러리 (날짜 그룹, 무한 스크롤, 삭제) | ✅ |
 | 날짜별 사진 일괄 추가 | ✅ |
 
 ### 주요 파일 경로
