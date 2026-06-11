@@ -2,6 +2,7 @@ import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:photo_manager/photo_manager.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import '../../features/settings/presentation/settings_provider.dart';
@@ -29,12 +30,7 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
     super.initState();
     final absPath = _resolve(widget.videoPath,
         ref.read(settingsProvider).valueOrNull?.savePath ?? '');
-    _thumbnailFuture = VideoThumbnail.thumbnailData(
-      video: absPath,
-      imageFormat: ImageFormat.JPEG,
-      maxHeight: 300,
-      quality: 75,
-    );
+    _thumbnailFuture = _getThumbnail(absPath);
   }
 
   @override
@@ -103,6 +99,25 @@ String _resolve(String videoPath, String savePath) {
     return '$savePath/$videoPath';
   }
   return videoPath;
+}
+
+/// content:// URI는 photo_manager로 썸네일 생성, 그 외는 VideoThumbnail 사용.
+Future<Uint8List?> _getThumbnail(String videoPath) async {
+  if (videoPath.startsWith('content://')) {
+    try {
+      final id = videoPath.split('/').last;
+      final asset = AssetEntity(id: id, typeInt: 2, width: 0, height: 0, duration: 0);
+      return await asset.thumbnailDataWithSize(const ThumbnailSize(300, 300));
+    } catch (_) {
+      return null;
+    }
+  }
+  return VideoThumbnail.thumbnailData(
+    video: videoPath,
+    imageFormat: ImageFormat.JPEG,
+    maxHeight: 300,
+    quality: 75,
+  );
 }
 
 class _VideoFullScreenPage extends StatefulWidget {

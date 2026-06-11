@@ -185,8 +185,7 @@ class MemoInputSheet extends ConsumerStatefulWidget {
         path = savedPath;
       } else {
         exifSourcePath = picked.path;
-        final savePath = settings?.savePath ?? '';
-        path = await MemoInputSheet.copyGalleryPhoto(picked.path, savePath);
+        path = picked.path; // 원본 경로 직접 참조 (복사 없음)
       }
     }
 
@@ -217,9 +216,9 @@ class MemoInputSheet extends ConsumerStatefulWidget {
 
   /// 갤러리 사진을 savePath의 photos/ 서브폴더에 복사, 상대 경로 반환
   static Future<String?> copyGalleryPhoto(String cachePath, String savePath, {String? filenameOverride}) async {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    final ext = cachePath.contains('.') ? cachePath.split('.').last.toLowerCase() : 'jpg';
-    final filename = filenameOverride ?? 'gallery_$ts.$ext';
+    // 소스 파일명을 그대로 사용 → 같은 사진은 항상 같은 경로 (중복 복사 방지)
+    final srcName = cachePath.split('/').last;
+    final filename = filenameOverride ?? srcName;
     if (SafService.isSafUri(savePath)) {
       try {
         await SafService().copyFileToSafFolder(cachePath, savePath, filename);
@@ -229,15 +228,21 @@ class MemoInputSheet extends ConsumerStatefulWidget {
       try {
         final photosDir = Directory('$savePath/photos');
         await photosDir.create(recursive: true);
-        await File(cachePath).copy('${photosDir.path}/$filename');
+        final destFile = File('${photosDir.path}/$filename');
+        if (!await destFile.exists()) {
+          await File(cachePath).copy(destFile.path);
+        }
         return 'photos/$filename';
       } catch (_) { return null; }
     }
     return null;
   }
 
-  static Future<String?> copyGalleryVideo(String tempPath, String savePath) =>
-      saveToGallery(tempPath, relativePath: 'DCIM/nakkda');
+  static Future<String?> copyGalleryVideo(String tempPath, String savePath) {
+    // 갤러리에서 가져온 동영상(content URI)은 복사 없이 원본 참조
+    if (tempPath.startsWith('content://')) return Future.value(tempPath);
+    return saveToGallery(tempPath, relativePath: 'DCIM/nakkda');
+  }
 
   static String _mediaRelPath(String photoSavePath) {
     final lower = photoSavePath.toLowerCase();

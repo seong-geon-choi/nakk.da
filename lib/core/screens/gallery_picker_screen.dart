@@ -181,10 +181,19 @@ class _GalleryPickerScreenState extends State<GalleryPickerScreen>
       });
       return;
     }
+    if (asset.type == AssetType.video) {
+      // 갤러리 동영상은 content URI 반환 — 복사 없이 원본 참조
+      final uri = await asset.getMediaUrl();
+      if (uri == null || !mounted) return;
+      Navigator.of(context).pop<({String path, bool isVideo})>(
+        (path: uri, isVideo: true),
+      );
+      return;
+    }
     final file = await asset.file;
     if (file == null || !mounted) return;
     Navigator.of(context).pop<({String path, bool isVideo})>(
-      (path: file.path, isVideo: asset.type == AssetType.video),
+      (path: file.path, isVideo: false),
     );
   }
 
