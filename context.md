@@ -1,6 +1,6 @@
 # context.md — vo-rec 개발 이력
 
-**최종 업데이트:** 2026-06-11 (세션 C)
+**최종 업데이트:** 2026-06-11 (세션 D)
 
 ---
 
@@ -69,6 +69,45 @@ Android 13+ 에서 `photo_manager`가 `authorized` 상태가 되려면 `READ_MED
 
 #### 4. 빌드 플래그
 - `--no-tree-shake-icons` 필수 (`photo_manager` 제거 후 재추가 과정에서 아이콘 99% 제거 현상 발견)
+
+---
+
+### 세션 D (2026-06-11): 패키지명 변경 + 동영상 저장 통일
+
+#### 1. 패키지명 변경
+
+`com.nakkda.nakkda` → `com.sgchoisg.nakkda`
+
+변경 파일 (20개):
+- `android/app/build.gradle.kts`: `namespace`, `applicationId`
+- Kotlin 11개 파일: `package` 선언, MethodChannel명, BroadcastAction 상수
+- Dart 7개 파일: MethodChannel명
+- `README.md`, `docs/architecture.md`: 경로 예시
+
+Play Console: 비공개 테스트 중이었으므로 새 앱으로 재등록 필요.
+Google Cloud Console OAuth 클라이언트도 패키지명 업데이트 필요.
+
+#### 2. 동영상 저장 경로 통일 (사진과 동일하게)
+
+**문제**: 동영상이 앱 전용 외부 저장소(`Android/data/패키지명/files/videos/`)에 저장됨
+→ 앱 삭제 시 파일 소멸, 패키지명 변경 시 경로 깨짐
+
+**수정**:
+- `MainActivity.kt` `saveToGallery`: 동영상(mp4/mov/3gp/mkv) 감지 시 `MediaStore.Video.Media`로 분기
+  - 동영상은 `content://media/external/video/media/ID` URI 반환 (파일 경로 대신)
+  - 이유: ExoPlayer가 `file://` 경로로 MediaStore 동영상에 직접 접근 불가 (`Source error`)
+- `camera_ruler_screen.dart` `_saveVideo`: 앱 전용 복사 로직 제거 → `saveToGallery` 단일 호출
+- `memo_input_sheet.dart` `copyGalleryVideo`: `saveToGallery` 래퍼로 교체
+
+**결과**: 카메라/갤러리 동영상 모두 `DCIM/nakkda/`에 저장, `.md`에 `content://` URI 기록
+
+#### 3. 동영상 플레이어 수정
+
+**버그**: `VideoPlayerController.file(File(path))`로 MediaStore 동영상 재생 시 로딩에서 멈춤
+
+**수정** (`video_player_widget.dart`):
+- `content://`로 시작하는 경로 → `VideoPlayerController.contentUri(Uri.parse(path))`
+- `_resolve`: `content://` URI는 savePath와 합치지 않고 그대로 반환
 
 ---
 
@@ -150,3 +189,5 @@ Android 13+ 에서 `photo_manager`가 `authorized` 상태가 되려면 `READ_MED
 | 아이콘 트리쉐이킹 | `--no-tree-shake-icons` 비활성화 | 패키지 변동 시 아이콘 대규모 누락 현상 |
 | 트래킹 SharedPrefs 동기화 | `synchronized` + `commit()` | `apply()` 비동기 간 경쟁 조건 방지 |
 | 사진/동영상 권한 | `Permission.photos` + `Permission.videos` | Android 13+ photo_manager authorized 조건 |
+| 패키지명 | `com.sgchoisg.nakkda` | `com.nakkda.nakkda`는 중복, 개발자 식별자로 통일 |
+| 동영상 저장/재생 | `MediaStore.Video.Media` + content URI | ExoPlayer가 file:// 경로로 MediaStore 파일 접근 불가 |

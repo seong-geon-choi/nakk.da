@@ -96,8 +96,9 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
 }
 
 /// videoPath가 상대경로(videos/...)면 savePath와 합쳐 절대경로로 반환.
+/// content:// URI는 그대로 반환.
 String _resolve(String videoPath, String savePath) {
-  if (videoPath.startsWith('/')) return videoPath;
+  if (videoPath.startsWith('/') || videoPath.startsWith('content://')) return videoPath;
   if (savePath.isNotEmpty && !savePath.startsWith('content://')) {
     return '$savePath/$videoPath';
   }
@@ -119,7 +120,9 @@ class _VideoFullScreenPageState extends State<_VideoFullScreenPage> {
   @override
   void initState() {
     super.initState();
-    _controller = VideoPlayerController.file(File(widget.videoPath));
+    _controller = widget.videoPath.startsWith('content://')
+        ? VideoPlayerController.contentUri(Uri.parse(widget.videoPath))
+        : VideoPlayerController.file(File(widget.videoPath));
     _controller.initialize().then((_) {
       if (mounted) {
         setState(() => _initialized = true);

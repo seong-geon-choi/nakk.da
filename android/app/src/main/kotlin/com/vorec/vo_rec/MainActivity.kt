@@ -122,26 +122,30 @@ class MainActivity : FlutterActivity() {
                         values.put(isPendingKey, 0)
                         contentResolver.update(uri, values, null, null)
 
-                        var filePath: String? = null
-                        contentResolver.query(
-                            uri, arrayOf(dataKey), null, null, null
-                        )?.use { cursor ->
-                            if (cursor.moveToFirst()) {
-                                filePath = cursor.getString(cursor.getColumnIndexOrThrow(dataKey))
+                        if (isVideo) {
+                            // 동영상은 content URI 반환 (ExoPlayer가 file:// 경로로 접근 불가)
+                            result.success(uri.toString())
+                        } else {
+                            var filePath: String? = null
+                            contentResolver.query(
+                                uri, arrayOf(dataKey), null, null, null
+                            )?.use { cursor ->
+                                if (cursor.moveToFirst()) {
+                                    filePath = cursor.getString(cursor.getColumnIndexOrThrow(dataKey))
+                                }
                             }
+                            if (filePath.isNullOrEmpty()) {
+                                val base = Environment.getExternalStorageDirectory().absolutePath
+                                filePath = "$base/$relativePath/$displayName"
+                            }
+                            val finalPath = filePath
+                            if (finalPath != null) {
+                                MediaScannerConnection.scanFile(
+                                    applicationContext, arrayOf(finalPath), arrayOf(mimeType), null
+                                )
+                            }
+                            result.success(filePath)
                         }
-                        if (filePath.isNullOrEmpty()) {
-                            val base = Environment.getExternalStorageDirectory().absolutePath
-                            filePath = "$base/$relativePath/$displayName"
-                        }
-
-                        val finalPath = filePath
-                        if (finalPath != null) {
-                            MediaScannerConnection.scanFile(
-                                applicationContext, arrayOf(finalPath), arrayOf(mimeType), null
-                            )
-                        }
-                        result.success(filePath)
                     } catch (e: Exception) {
                         result.error("SAVE_ERROR", e.message, null)
                     }

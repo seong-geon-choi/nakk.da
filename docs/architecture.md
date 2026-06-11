@@ -217,9 +217,8 @@ class AppSettings {
 ├── NAKKDA_20260603_143000.jpg
 └── ...
 
-Android/data/com.sgchoisg.nakkda/files/videos/   # 동영상 전용 (앱 전용 외부 저장소)
-├── video_1717394400000.mp4
-├── gallery_video_1717394500000.mp4
+DCIM/nakkda/                        # 동영상도 사진과 동일 경로 (MediaStore.Video.Media)
+├── NAKKDA_20260611_150000.mp4
 └── ...
 ```
 
@@ -247,22 +246,21 @@ Android/data/com.sgchoisg.nakkda/files/videos/   # 동영상 전용 (앱 전용 
 ---
 
 ### 15:10 | 🛰 34.8540, 128.4330
-[video](/storage/emulated/0/Android/data/com.sgchoisg.nakkda/files/videos/video_1717395000000.mp4)
+[video](content://media/external/video/media/1234)
 ```
 
 **미디어 경로 규칙:**
 - 사진: `![](절대경로)` → DCIM/nakkda 또는 savePath/photos/
-- 동영상: `[video](절대경로)` → 앱 전용 외부 저장소 videos/ 폴더
+- 동영상: `[video](content://media/external/video/media/ID)` → MediaStore content URI
 
-### 사진 저장 흐름 (Android 10+)
+### 미디어 저장 흐름 (Android 10+)
 
 ```
-image_picker → 임시 파일 경로
+카메라/갤러리 → 임시 파일 경로
     └─→ saveToGallery(tempPath, relativePath) [Kotlin 메서드 채널]
-            └─→ MediaStore.Images.Media.insert()
-                    └─→ ContentValues(RELATIVE_PATH = "DCIM/vo_rec")
-                            └─→ 갤러리 즉시 반영
-                                    └─→ 절대 경로 반환 → MemoEntry.photoPath
+            ├─→ 이미지: MediaStore.Images.Media.insert() → 절대 경로 반환
+            └─→ 동영상: MediaStore.Video.Media.insert() → content URI 반환
+                            └─→ VideoPlayerController.contentUri() 로 재생
 ```
 
 `MANAGE_EXTERNAL_STORAGE` 권한 불필요. MediaStore API가 직접 공용 DCIM에 쓴다.
