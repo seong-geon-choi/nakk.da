@@ -18,8 +18,12 @@ class DriveBackupService {
   String? get accountEmail => _signIn.currentUser?.email;
 
   Future<String?> signIn() async {
-    final account = await _signIn.signIn();
-    return account?.email;
+    try {
+      final account = await _signIn.signIn();
+      return account?.email;
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> signOut() async {

@@ -45,12 +45,16 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
   }
 
   Future<bool> enableBackup() async {
-    final svc = ref.read(driveBackupServiceProvider);
-    final email = await svc.signIn();
-    if (email == null) return false;
-    await ref.read(settingsProvider.notifier).updateDriveBackup(enabled: true);
-    ref.invalidateSelf();
-    return true;
+    try {
+      final svc = ref.read(driveBackupServiceProvider);
+      final email = await svc.signIn();
+      if (email == null) return false;
+      // settingsProvider 변경 시 backupProvider가 watch로 자동 rebuild 됨
+      await ref.read(settingsProvider.notifier).updateDriveBackup(enabled: true);
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
 
   Future<void> disableBackup() async {
@@ -60,12 +64,10 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
       enabled: false,
       clearLastSync: true,
     );
-    ref.invalidateSelf();
   }
 
   Future<void> setIncludeMedia(bool value) async {
     await ref.read(settingsProvider.notifier).updateDriveBackup(includeMedia: value);
-    ref.invalidateSelf();
   }
 
   /// 메모 저장/삭제 후 호출 — Wi-Fi 확인 후 md 파일 업로드
