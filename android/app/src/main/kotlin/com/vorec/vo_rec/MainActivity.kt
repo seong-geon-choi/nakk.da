@@ -65,21 +65,47 @@ class MainActivity : FlutterActivity() {
                     }
                     try {
                         val sourceFile = File(sourcePath)
-                        val isPng = sourceFile.name.lowercase().endsWith(".png")
-                        val mimeType = if (isPng) "image/png" else "image/jpeg"
-                        val ext = if (isPng) ".png" else ".jpg"
+                        val lowerName = sourceFile.name.lowercase()
+                        val isVideo = lowerName.endsWith(".mp4") || lowerName.endsWith(".mov") ||
+                            lowerName.endsWith(".3gp") || lowerName.endsWith(".mkv")
+                        val mimeType: String
+                        val ext: String
+                        val mediaUri: android.net.Uri
+                        val displayNameKey: String
+                        val mimeTypeKey: String
+                        val relativePathKey: String
+                        val isPendingKey: String
+                        val dataKey: String
+                        if (isVideo) {
+                            mimeType = "video/mp4"
+                            ext = ".mp4"
+                            mediaUri = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                            displayNameKey = MediaStore.Video.Media.DISPLAY_NAME
+                            mimeTypeKey = MediaStore.Video.Media.MIME_TYPE
+                            relativePathKey = MediaStore.Video.Media.RELATIVE_PATH
+                            isPendingKey = MediaStore.Video.Media.IS_PENDING
+                            dataKey = MediaStore.Video.Media.DATA
+                        } else {
+                            val isPng = lowerName.endsWith(".png")
+                            mimeType = if (isPng) "image/png" else "image/jpeg"
+                            ext = if (isPng) ".png" else ".jpg"
+                            mediaUri = MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                            displayNameKey = MediaStore.Images.Media.DISPLAY_NAME
+                            mimeTypeKey = MediaStore.Images.Media.MIME_TYPE
+                            relativePathKey = MediaStore.Images.Media.RELATIVE_PATH
+                            isPendingKey = MediaStore.Images.Media.IS_PENDING
+                            dataKey = MediaStore.Images.Media.DATA
+                        }
                         val dateStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
                         val displayName = "NAKKDA_$dateStr$ext"
 
                         val values = ContentValues().apply {
-                            put(MediaStore.Images.Media.DISPLAY_NAME, displayName)
-                            put(MediaStore.Images.Media.MIME_TYPE, mimeType)
-                            put(MediaStore.Images.Media.RELATIVE_PATH, "$relativePath/")
-                            put(MediaStore.Images.Media.IS_PENDING, 1)
+                            put(displayNameKey, displayName)
+                            put(mimeTypeKey, mimeType)
+                            put(relativePathKey, "$relativePath/")
+                            put(isPendingKey, 1)
                         }
-                        val uri = contentResolver.insert(
-                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
-                        )
+                        val uri = contentResolver.insert(mediaUri, values)
                         if (uri == null) {
                             result.error("INSERT_FAILED", "MediaStore insert returned null", null)
                             return@setMethodCallHandler
@@ -93,17 +119,15 @@ class MainActivity : FlutterActivity() {
                         out.use { sourceFile.inputStream().copyTo(it) }
 
                         values.clear()
-                        values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                        values.put(isPendingKey, 0)
                         contentResolver.update(uri, values, null, null)
 
                         var filePath: String? = null
                         contentResolver.query(
-                            uri, arrayOf(MediaStore.Images.Media.DATA), null, null, null
+                            uri, arrayOf(dataKey), null, null, null
                         )?.use { cursor ->
                             if (cursor.moveToFirst()) {
-                                filePath = cursor.getString(
-                                    cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA)
-                                )
+                                filePath = cursor.getString(cursor.getColumnIndexOrThrow(dataKey))
                             }
                         }
                         if (filePath.isNullOrEmpty()) {

@@ -1,10 +1,8 @@
 import 'dart:async';
-import 'dart:io';
 import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../settings/presentation/settings_provider.dart';
 import '../../settings/domain/models/app_settings.dart';
@@ -217,28 +215,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   }
 
   Future<String?> _saveVideo(String tempPath) async {
-    try {
-      final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
-      final ts = DateTime.now().millisecondsSinceEpoch;
-      final filename = 'video_$ts.mp4';
-      saveToGallery(tempPath, relativePath: 'DCIM/nakkda');
-      if (savePath.isNotEmpty && !savePath.startsWith('content://')) {
-        final videosDir = Directory('$savePath/videos');
-        await videosDir.create(recursive: true);
-        await File(tempPath).copy('$savePath/videos/$filename');
-        return 'videos/$filename';
-      } else {
-        final dir = await getExternalStorageDirectory();
-        if (dir == null) return tempPath;
-        final videosDir = Directory('${dir.path}/videos');
-        await videosDir.create(recursive: true);
-        final destPath = '${videosDir.path}/$filename';
-        await File(tempPath).copy(destPath);
-        return destPath;
-      }
-    } catch (_) {
-      return tempPath;
-    }
+    return await saveToGallery(tempPath, relativePath: 'DCIM/nakkda');
   }
 
   String get _timerLabel {

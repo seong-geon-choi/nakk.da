@@ -3,7 +3,6 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import '../domain/models/memo_entry.dart';
 import 'memo_provider.dart';
@@ -237,29 +236,8 @@ class MemoInputSheet extends ConsumerStatefulWidget {
     return null;
   }
 
-  /// 갤러리 동영상을 savePath/videos/에 복사, 상대 경로 반환 (SAF/미설정 시 절대 경로)
-  static Future<String?> copyGalleryVideo(String tempPath, String savePath) async {
-    final ts = DateTime.now().millisecondsSinceEpoch;
-    final ext = tempPath.contains('.') ? tempPath.split('.').last.toLowerCase() : 'mp4';
-    final filename = 'gallery_video_$ts.$ext';
-    if (savePath.isNotEmpty && !savePath.startsWith('content://')) {
-      try {
-        final videosDir = Directory('$savePath/videos');
-        await videosDir.create(recursive: true);
-        await File(tempPath).copy('$savePath/videos/$filename');
-        return 'videos/$filename';
-      } catch (_) { return null; }
-    } else {
-      try {
-        final dir = await getExternalStorageDirectory();
-        if (dir == null) return null;
-        final videosDir = Directory('${dir.path}/videos');
-        await videosDir.create(recursive: true);
-        await File(tempPath).copy('${videosDir.path}/$filename');
-        return '${videosDir.path}/$filename';
-      } catch (_) { return null; }
-    }
-  }
+  static Future<String?> copyGalleryVideo(String tempPath, String savePath) =>
+      saveToGallery(tempPath, relativePath: 'DCIM/nakkda');
 
   static String _mediaRelPath(String photoSavePath) {
     final lower = photoSavePath.toLowerCase();
