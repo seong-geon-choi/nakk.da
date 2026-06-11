@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart';
 
-const _channel = MethodChannel('com.nakkda.nakkda/accessibility');
+const _channel = MethodChannel('com.sgchoisg.nakkda/accessibility');
 
 Future<bool> isAccessibilityServiceEnabled() async {
   try {

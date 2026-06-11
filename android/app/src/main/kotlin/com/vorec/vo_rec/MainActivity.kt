@@ -1,4 +1,4 @@
-package com.nakkda.nakkda
+package com.sgchoisg.nakkda
 
 import android.app.Activity
 import android.content.*
@@ -22,10 +22,10 @@ import org.json.JSONArray
 
 class MainActivity : FlutterActivity() {
 
-    private val mediaChannelName = "com.nakkda.nakkda/media"
-    private val accessibilityChannelName = "com.nakkda.nakkda/accessibility"
-    private val arChannelName = "com.nakkda.nakkda/ar"
-    private val safChannelName = "com.nakkda.nakkda/saf"
+    private val mediaChannelName = "com.sgchoisg.nakkda/media"
+    private val accessibilityChannelName = "com.sgchoisg.nakkda/accessibility"
+    private val arChannelName = "com.sgchoisg.nakkda/ar"
+    private val safChannelName = "com.sgchoisg.nakkda/saf"
 
     private var accessibilityChannel: MethodChannel? = null
     private var pendingArResult: MethodChannel.Result? = null
@@ -443,7 +443,7 @@ class MainActivity : FlutterActivity() {
             }
 
         // ── 위치 트래킹 채널 ─────────────────────────────────────
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.nakkda.nakkda/tracking")
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.sgchoisg.nakkda/tracking")
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "startTracking" -> {

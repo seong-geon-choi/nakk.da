@@ -64,7 +64,7 @@
 DCIM/nakkda/                          # 사진 (갤러리에 표시)
 └── NAKKDA_20260603_143000.jpg
 
-Android/data/com.nakkda.nakkda/files/videos/   # 동영상 (앱 전용)
+Android/data/com.sgchoisg.nakkda/files/videos/   # 동영상 (앱 전용)
 ├── video_1717394400000.mp4
 └── gallery_video_1717394500000.mp4
 ```
@@ -93,7 +93,7 @@ Android/data/com.nakkda.nakkda/files/videos/   # 동영상 (앱 전용)
 ---
 
 ### 15:10 | 🛰 34.8540, 128.4330
-[video](/storage/emulated/0/Android/data/com.nakkda.nakkda/files/videos/video_1717395000000.mp4)
+[video](/storage/emulated/0/Android/data/com.sgchoisg.nakkda/files/videos/video_1717395000000.mp4)
 ```
 
 ---

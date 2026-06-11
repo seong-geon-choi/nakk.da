@@ -1,4 +1,4 @@
-package com.nakkda.nakkda
+package com.sgchoisg.nakkda
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -18,7 +18,7 @@ class VoiceRecordAccessibilityService : AccessibilityService() {
         const val PREFS_NAME = "nakkda_prefs"
         const val PREFS_KEY = "pending_voice_result"
         const val PREFS_VOICE_RUNNING = "voice_running"
-        const val BROADCAST_ACTION = "com.nakkda.nakkda.VOICE_RESULT"
+        const val BROADCAST_ACTION = "com.sgchoisg.nakkda.VOICE_RESULT"
         private const val DOUBLE_PRESS_MS = 500L
         private const val RESULT_CHANNEL_ID = "nakkda_result_channel"
         private const val RESULT_NOTIFICATION_ID = 1003

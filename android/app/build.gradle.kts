@@ -16,7 +16,7 @@ val keyProps = Properties().also { props ->
 val buildTime = SimpleDateFormat("yyyy-MM-dd HH:mm").format(Date())
 
 android {
-    namespace = "com.nakkda.nakkda"
+    namespace = "com.sgchoisg.nakkda"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -34,7 +34,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.nakkda.nakkda"
+        applicationId = "com.sgchoisg.nakkda"
         minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode

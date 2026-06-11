@@ -1,4 +1,4 @@
-package com.nakkda.nakkda
+package com.sgchoisg.nakkda
 
 import android.app.Activity
 import android.content.Intent

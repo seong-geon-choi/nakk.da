@@ -217,7 +217,7 @@ class AppSettings {
 ├── NAKKDA_20260603_143000.jpg
 └── ...
 
-Android/data/com.nakkda.nakkda/files/videos/   # 동영상 전용 (앱 전용 외부 저장소)
+Android/data/com.sgchoisg.nakkda/files/videos/   # 동영상 전용 (앱 전용 외부 저장소)
 ├── video_1717394400000.mp4
 ├── gallery_video_1717394500000.mp4
 └── ...
@@ -247,7 +247,7 @@ Android/data/com.nakkda.nakkda/files/videos/   # 동영상 전용 (앱 전용 �
 ---
 
 ### 15:10 | 🛰 34.8540, 128.4330
-[video](/storage/emulated/0/Android/data/com.nakkda.nakkda/files/videos/video_1717395000000.mp4)
+[video](/storage/emulated/0/Android/data/com.sgchoisg.nakkda/files/videos/video_1717395000000.mp4)
 ```
 
 **미디어 경로 규칙:**

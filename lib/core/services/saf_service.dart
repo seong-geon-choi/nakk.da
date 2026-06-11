@@ -2,7 +2,7 @@ import 'dart:typed_data';
 import 'package:flutter/services.dart';
 
 class SafService {
-  static const _channel = MethodChannel('com.nakkda.nakkda/saf');
+  static const _channel = MethodChannel('com.sgchoisg.nakkda/saf');
 
   static bool isSafUri(String? path) => path?.startsWith('content://') == true;
 

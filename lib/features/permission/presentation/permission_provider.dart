@@ -28,7 +28,7 @@ class PermissionStatusNotifier
     // RECORD_AUDIO가 허가되면 볼륨버튼 음성 서비스 기동 시도
     if (result[Permission.microphone]?.isGranted == true) {
       try {
-        await const MethodChannel('com.nakkda.nakkda/accessibility')
+        await const MethodChannel('com.sgchoisg.nakkda/accessibility')
             .invokeMethod('startVoiceService');
       } catch (_) {}
     }

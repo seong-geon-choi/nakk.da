@@ -1,4 +1,4 @@
-package com.nakkda.nakkda
+package com.sgchoisg.nakkda
 
 import android.app.*
 import android.content.*
@@ -17,7 +17,7 @@ class VoiceRecordForegroundService : Service() {
         private const val RESULT_CHANNEL_ID = "nakkda_result_channel"
         private const val NOTIFICATION_ID        = 1002
         private const val RESULT_NOTIFICATION_ID = 1003
-        const val ACTION_STOP = "com.nakkda.nakkda.STOP_VOICE_SERVICE"
+        const val ACTION_STOP = "com.sgchoisg.nakkda.STOP_VOICE_SERVICE"
         const val EXTRA_MODE  = "mode"
 
         private const val VOL_CHANGED        = "android.media.VOLUME_CHANGED_ACTION"

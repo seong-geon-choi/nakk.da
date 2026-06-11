@@ -413,7 +413,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               TileLayer(
                 urlTemplate:
                     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.nakkda.nakkda',
+                userAgentPackageName: 'com.sgchoisg.nakkda',
               ),
               if (_showTrack && _trackPoints.length >= 2)
                 PolylineLayer(

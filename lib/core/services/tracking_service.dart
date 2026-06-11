@@ -22,7 +22,7 @@ class TrackPoint {
 }
 
 class TrackingService {
-  static const _channel = MethodChannel('com.nakkda.nakkda/tracking');
+  static const _channel = MethodChannel('com.sgchoisg.nakkda/tracking');
 
   Future<void> startTracking(int intervalMeters) =>
       _channel.invokeMethod('startTracking', {'intervalMeters': intervalMeters});

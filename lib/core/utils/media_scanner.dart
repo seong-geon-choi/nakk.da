@@ -3,7 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-const _channel = MethodChannel('com.nakkda.nakkda/media');
+const _channel = MethodChannel('com.sgchoisg.nakkda/media');
 
 /// [sourcePath] 파일을 MediaStore에 등록해 갤러리에서 보이도록 저장.
 /// [relativePath]: "DCIM/nakkda" 형태의 MediaStore 상대 경로.

@@ -1,4 +1,4 @@
-package com.nakkda.nakkda
+package com.sgchoisg.nakkda
 
 import android.annotation.SuppressLint
 import android.app.*
@@ -16,7 +16,7 @@ class LocationTrackingService : Service() {
     companion object {
         private const val CHANNEL_ID = "nakkda_tracking_channel"
         private const val NOTIFICATION_ID = 1004
-        const val ACTION_STOP = "com.nakkda.nakkda.STOP_TRACKING"
+        const val ACTION_STOP = "com.sgchoisg.nakkda.STOP_TRACKING"
         const val PREFS_NAME = "nakkda_track_prefs"
         const val PREFS_PENDING_KEY = "pending_points"
         const val PREFS_ACTIVE_KEY = "tracking_active"
