@@ -488,6 +488,7 @@ class _PermissionSubScreenState extends ConsumerState<_PermissionSubScreen>
             (Permission.locationWhenInUse, '위치', 'GPS 좌표 기록'),
             (Permission.camera, '카메라', '사진 촬영'),
             (Permission.photos, '사진', '갤러리 사진 선택'),
+            (Permission.videos, '동영상', '갤러리 동영상 선택'),
             (Permission.notification, '알림', '음성 메모 상태 표시'),
           ];
           return ListTileTheme(
@@ -898,10 +899,15 @@ class _BackupSubScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final backupAsync = ref.watch(backupProvider);
     final settingsAsync = ref.watch(settingsProvider);
+    final backupProgress = ref.watch(backupProgressProvider);
+    final isBacking = backupProgress != null;
+    final restoreProgress = ref.watch(restoreProgressProvider);
+    final isRestoring = restoreProgress != null;
 
     return Scaffold(
       appBar: AppBar(title: const Text('백업 및 동기화')),
       body: backupAsync.when(
+        skipLoadingOnReload: true,
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('오류: $e')),
         data: (backup) {
@@ -921,10 +927,10 @@ class _BackupSubScreen extends ConsumerWidget {
                   value: backup.enabled,
                   onChanged: (v) async {
                     if (v) {
-                      final ok = await ref.read(backupProvider.notifier).enableBackup();
-                      if (!ok && context.mounted) {
+                      final result = await ref.read(backupProvider.notifier).enableBackup();
+                      if (!result.ok && context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('구글 로그인에 실패했습니다')),
+                          SnackBar(content: Text('구글 로그인 실패: ${result.error}')),
                         );
                       }
                     } else {
@@ -970,18 +976,56 @@ class _BackupSubScreen extends ConsumerWidget {
                         : '없음'),
                   ),
                   ListTile(
-                    leading: const Icon(Icons.cloud_upload_outlined),
+                    leading: Icon(Icons.cloud_upload_outlined,
+                        color: isBacking ? Theme.of(context).disabledColor : null),
                     title: const Text('지금 전체 백업'),
-                    subtitle: const Text('모든 메모 파일을 드라이브에 올립니다'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => _showBackupAllDialog(context, ref, settings?.savePath ?? ''),
+                    subtitle: isBacking
+                        ? Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 4),
+                              LinearProgressIndicator(
+                                value: backupProgress.$2 > 0
+                                    ? backupProgress.$1 / backupProgress.$2
+                                    : null,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(backupProgress.$2 > 0
+                                  ? '${backupProgress.$1} / ${backupProgress.$2} 파일'
+                                  : '준비 중...'),
+                            ],
+                          )
+                        : const Text('모든 메모 파일을 드라이브에 올립니다'),
+                    trailing: isBacking ? null : const Icon(Icons.chevron_right),
+                    onTap: isBacking
+                        ? null
+                        : () => _showBackupAllDialog(context, ref, settings?.savePath ?? ''),
                   ),
                   ListTile(
-                    leading: const Icon(Icons.restore_outlined),
+                    leading: Icon(Icons.restore_outlined,
+                        color: isRestoring ? Theme.of(context).disabledColor : null),
                     title: const Text('지금 복원하기'),
-                    subtitle: const Text('드라이브 데이터를 로컬과 병합합니다'),
-                    trailing: const Icon(Icons.chevron_right),
-                    onTap: () => _showRestoreDialog(context, ref, settings?.savePath ?? ''),
+                    subtitle: isRestoring
+                        ? Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              const SizedBox(height: 4),
+                              LinearProgressIndicator(
+                                value: restoreProgress.$2 > 0
+                                    ? restoreProgress.$1 / restoreProgress.$2
+                                    : null,
+                              ),
+                              const SizedBox(height: 4),
+                              Text(restoreProgress.$2 > 0
+                                  ? '${restoreProgress.$1} / ${restoreProgress.$2} 파일'
+                                  : '준비 중...'),
+                            ],
+                          )
+                        : const Text('드라이브 데이터를 로컬과 병합합니다'),
+                    trailing: isRestoring ? null : const Icon(Icons.chevron_right),
+                    onTap: isRestoring
+                        ? null
+                        : () => _showRestoreDialog(context, ref, settings?.savePath ?? ''),
                   ),
                 ],
               ],
@@ -1018,31 +1062,20 @@ class _BackupSubScreen extends ConsumerWidget {
     );
     if (confirmed != true || !context.mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('백업 중...'), duration: Duration(minutes: 5)),
-    );
-
-    try {
-      final result = await ref.read(backupProvider.notifier).backupAll(savePath);
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        if (result.skippedNoWifi) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Wi-Fi에 연결되지 않아 백업을 건너뜁니다')),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('${result.succeeded}/${result.total}개 파일 백업 완료')),
-          );
-        }
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('백업 실패: $e')),
-        );
-      }
+    final result = await ref.read(backupProvider.notifier).backupAll(savePath);
+    if (!context.mounted) return;
+    if (result.skippedNoWifi) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Wi-Fi에 연결되지 않아 백업을 건너뜁니다')),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(
+          result.skipped > 0
+              ? '${result.succeeded}개 업로드, ${result.skipped}개 이미 최신 상태'
+              : '${result.succeeded}/${result.total}개 파일 백업 완료',
+        )),
+      );
     }
   }
 
@@ -1075,21 +1108,20 @@ class _BackupSubScreen extends ConsumerWidget {
     );
     if (confirmed != true || !context.mounted) return;
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('복원 중...'), duration: Duration(minutes: 2)),
-    );
-
     try {
       final result = await ref.read(backupProvider.notifier).restore(savePath);
       if (context.mounted) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        final mediaAlreadyLocal = result.mediaDriveTotal - result.mediaRestored;
+        final parts = <String>[];
+        if (result.mediaRestored > 0) parts.add('미디어 ${result.mediaRestored}개 복원');
+        if (mediaAlreadyLocal > 0) parts.add('${mediaAlreadyLocal}개 이미 로컬');
+        final mediaPart = parts.isNotEmpty ? ', ${parts.join(', ')}' : '';
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('${result.filesRestored}개 파일 복원 완료')),
+          SnackBar(content: Text('메모 ${result.filesRestored}개 복원$mediaPart')),
         );
       }
     } catch (e) {
       if (context.mounted) {
-        ScaffoldMessenger.of(context).hideCurrentSnackBar();
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('복원 실패: $e')),
         );

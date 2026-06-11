@@ -1,15 +1,26 @@
 import 'dart:io';
+import 'dart:convert';
+import 'dart:math' show min;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../data/drive_backup_service.dart';
 import '../../settings/presentation/settings_provider.dart';
 import '../../memo/data/md_serializer.dart';
 import '../../../core/services/saf_service.dart';
+import '../../../core/services/tracking_service.dart';
 
 final driveBackupServiceProvider = Provider((_) => DriveBackupService());
 
 final backupProvider = AsyncNotifierProvider<BackupNotifier, BackupState>(
   BackupNotifier.new,
 );
+
+/// 백업 진행 상태: null이면 백업 중 아님, (current, total)이면 진행 중
+final backupProgressProvider = StateProvider<(int, int)?>((_) => null);
+
+/// 복원 진행 상태: null이면 복원 중 아님, (current, total)이면 진행 중
+final restoreProgressProvider = StateProvider<(int, int)?>((_) => null);
+
 
 class BackupState {
   final bool enabled;
@@ -44,16 +55,15 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     );
   }
 
-  Future<bool> enableBackup() async {
+  Future<({bool ok, String? error})> enableBackup() async {
     try {
       final svc = ref.read(driveBackupServiceProvider);
       final email = await svc.signIn();
-      if (email == null) return false;
-      // settingsProvider 변경 시 backupProvider가 watch로 자동 rebuild 됨
+      if (email == null) return (ok: false, error: '계정을 선택하지 않았습니다');
       await ref.read(settingsProvider.notifier).updateDriveBackup(enabled: true);
-      return true;
+      return (ok: true, error: null);
     } catch (e) {
-      return false;
+      return (ok: false, error: e.toString());
     }
   }
 
@@ -108,42 +118,88 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
 
   /// 저장 폴더의 모든 .md 파일 (+ 옵션 시 사진/동영상)을 드라이브에 업로드
   Future<BackupAllResult> backupAll(String savePath) async {
-    final settings = await ref.read(settingsProvider.future);
-    final svc = ref.read(driveBackupServiceProvider);
-    if (!await svc.isWifi()) {
-      return const BackupAllResult(total: 0, succeeded: 0, skippedNoWifi: true);
-    }
+    final progress = ref.read(backupProgressProvider.notifier);
+    progress.state = (0, 0);
+    try {
+      final settings = await ref.read(settingsProvider.future);
+      final svc = ref.read(driveBackupServiceProvider);
+      if (!await svc.isWifi()) {
+        return const BackupAllResult(total: 0, succeeded: 0, skippedNoWifi: true);
+      }
 
-    // md 파일 백업
-    final filenames = await _listMdFiles(savePath);
-    int total = filenames.length;
-    int succeeded = 0;
-    for (final filename in filenames) {
-      try {
+      // 전체 파일 목록을 먼저 수집해서 total 확정
+      final filenames = await _listMdFiles(savePath);
+      final mediaFiles = settings.driveBackupIncludeMedia
+          ? await _listMediaFiles(savePath)
+          : <String>[];
+      final total = filenames.length + mediaFiles.length;
+      int done = 0;
+      progress.state = (done, total);
+
+      // 로컬 매니페스트 + Drive 파일 ID 맵 (한 번의 API 호출로 수집)
+      final manifest = await _loadManifest();
+      final driveFiles = await svc.listMdFiles();
+      final driveIdMap = {for (final f in driveFiles) f.name: f.id};
+
+      int succeeded = 0;
+      int skipped = 0;
+
+      // 업로드 대상 수집 (순차 읽기)
+      final toUpload = <({String filename, String content, int size})>[];
+      for (final filename in filenames) {
         final content = await _read(savePath, filename);
-        if (content == null) continue;
-        await svc.syncMdFile(filename, content);
-        succeeded++;
-      } catch (_) {}
-    }
+        if (content == null) {
+          progress.state = (++done, total);
+          continue;
+        }
+        final localSize = utf8.encode(content).length;
+        if (manifest[filename] == localSize) {
+          skipped++;
+          progress.state = (++done, total);
+        } else {
+          toUpload.add((filename: filename, content: content, size: localSize));
+        }
+      }
 
-    // 미디어 파일 백업
-    if (settings.driveBackupIncludeMedia) {
-      final mediaFiles = await _listMediaFiles(savePath);
-      total += mediaFiles.length;
+      // 병렬 업로드 (4개씩 동시 실행, existingId 전달로 _findFile 생략)
+      for (var i = 0; i < toUpload.length; i += 4) {
+        final batch = toUpload.sublist(i, min(i + 4, toUpload.length));
+        await Future.wait(batch.map((item) async {
+          try {
+            await svc.syncMdFile(item.filename, item.content,
+                existingId: driveIdMap[item.filename]);
+            manifest[item.filename] = item.size;
+            succeeded++;
+          } catch (_) {}
+          progress.state = (++done, total);
+        }));
+      }
+
+      // 미디어 파일 백업 — 사진은 불변이므로 매니페스트에 있으면 스킵
       for (final filename in mediaFiles) {
+        if (manifest.containsKey(filename)) {
+          skipped++;
+          progress.state = (++done, total);
+          continue;
+        }
         try {
           final bytes = await _readMedia(savePath, filename);
-          if (bytes == null || bytes.isEmpty) continue;
-          final mimeType = filename.endsWith('.mp4') ? 'video/mp4' : 'image/jpeg';
-          await svc.syncMediaBytes(filename, bytes, mimeType);
-          succeeded++;
+          if (bytes != null && bytes.isNotEmpty) {
+            final mimeType = filename.endsWith('.mp4') ? 'video/mp4' : 'image/jpeg';
+            await svc.syncMediaBytes(filename, bytes, mimeType);
+            manifest[filename] = bytes.length;
+            succeeded++;
+          }
         } catch (_) {}
+        progress.state = (++done, total);
       }
-    }
 
-    await _updateSyncStatus(succeeded == total);
-    return BackupAllResult(total: total, succeeded: succeeded);
+      await _saveManifest(manifest);
+      await _updateSyncStatus(succeeded + skipped == total);
+      return BackupAllResult(total: total, succeeded: succeeded, skipped: skipped);
+    } finally {
+      progress.state = null;
+    }
   }
 
   Future<List<String>> _listMdFiles(String savePath) async {
@@ -182,24 +238,95 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
 
   /// 드라이브 → 로컬 병합 복원
   Future<RestoreResult> restore(String savePath) async {
-    final svc = ref.read(driveBackupServiceProvider);
-    final files = await svc.listMdFiles();
-    int restored = 0;
-    for (final driveFile in files) {
-      try {
-        final driveContent = await svc.downloadMdFile(driveFile.id);
-        if (driveContent == null) continue;
-        final date = _parseDateFromFilename(driveFile.name);
-        if (date == null) continue;
-        final localContent = await _read(savePath, driveFile.name);
-        final merged = localContent != null
-            ? _mergeContent(localContent, driveContent, date)
-            : driveContent;
-        await _write(savePath, driveFile.name, merged, date);
-        restored++;
-      } catch (_) {}
+    final progress = ref.read(restoreProgressProvider.notifier);
+    progress.state = (0, 0);
+    try {
+      final svc = ref.read(driveBackupServiceProvider);
+
+      // 전체 복원 대상 파악 (total 확정)
+      final mdFiles = await svc.listMdFiles();
+      final localMediaSet = (await _listMediaFiles(savePath)).toSet();
+      final driveMediaFiles = await svc.listMediaFiles();
+      // total = md 전체 + Drive 미디어 전체 (이미 로컬에 있어도 progress에 포함)
+      final total = mdFiles.length + driveMediaFiles.length;
+      int done = 0;
+      progress.state = (done, total);
+
+      // .md 파일 복원 — 4개씩 병렬 처리
+      // 매니페스트 size == 로컬 size면 마지막 백업 이후 변경 없음 → 다운로드 스킵
+      final manifest = await _loadManifest();
+      int restored = 0;
+      for (var i = 0; i < mdFiles.length; i += 4) {
+        final batch = mdFiles.sublist(i, min(i + 4, mdFiles.length));
+        final counts = await Future.wait(batch.map((driveFile) async {
+          try {
+            final localContent = await _read(savePath, driveFile.name);
+            if (localContent != null) {
+              final localSize = utf8.encode(localContent).length;
+              if (manifest[driveFile.name] == localSize) {
+                return 0; // 백업 이후 변경 없음 — 스킵
+              }
+            }
+            final driveContent = await svc.downloadMdFile(driveFile.id);
+            if (driveContent == null) return 0;
+            final date = _parseDateFromFilename(driveFile.name);
+            if (date == null) return 0;
+            final merged = localContent != null
+                ? _mergeContent(localContent, driveContent, date)
+                : driveContent;
+            if (merged == localContent) return 0;
+            await _write(savePath, driveFile.name, merged, date);
+            return 1;
+          } catch (_) {
+            return 0;
+          } finally {
+            progress.state = (++done, total);
+          }
+        }));
+        restored += counts.fold(0, (a, b) => a + b);
+      }
+
+      // 미디어 파일 복원 — 로컬에 없는 것만 다운로드, 있는 것은 progress만 업데이트
+      int mediaRestored = 0;
+      for (var i = 0; i < driveMediaFiles.length; i += 4) {
+        final batch = driveMediaFiles.sublist(i, min(i + 4, driveMediaFiles.length));
+        final counts = await Future.wait(batch.map((driveFile) async {
+          if (localMediaSet.contains(driveFile.name)) {
+            progress.state = (++done, total);
+            return 0;
+          }
+          try {
+            final bytes = await svc.downloadMediaFile(driveFile.id);
+            if (bytes == null || bytes.isEmpty) return 0;
+            await _writeMedia(savePath, driveFile.name, bytes);
+            return 1;
+          } catch (_) {
+            return 0;
+          } finally {
+            progress.state = (++done, total);
+          }
+        }));
+        mediaRestored += counts.fold(0, (a, b) => a + b);
+      }
+
+      return RestoreResult(
+        filesRestored: restored,
+        mediaRestored: mediaRestored,
+        mediaDriveTotal: driveMediaFiles.length,
+      );
+    } finally {
+      progress.state = null;
     }
-    return RestoreResult(filesRestored: restored);
+  }
+
+  Future<void> _writeMedia(String savePath, String filename, List<int> bytes) async {
+    if (SafService.isSafUri(savePath)) {
+      await _saf.writePhotoBytes(savePath, filename, bytes);
+    } else {
+      final dir = Directory('$savePath/photos');
+      if (!await dir.exists()) await dir.create(recursive: true);
+      await File('$savePath/photos/$filename').writeAsBytes(bytes);
+    }
   }
 
   String _mergeContent(String local, String remote, DateTime date) {
@@ -212,7 +339,17 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     }
     final sorted = mergedMap.values.toList()
       ..sort((a, b) => _blockTs(a).compareTo(_blockTs(b)));
-    return MdSerializer.buildFullContent(date, sorted);
+
+    final localPoints = MdSerializer.parseTrackPoints(local);
+    final remotePoints = MdSerializer.parseTrackPoints(remote);
+    final pointMap = <String, TrackPoint>{};
+    for (final p in [...localPoints, ...remotePoints]) {
+      pointMap[p.timestamp.toIso8601String()] = p;
+    }
+    final mergedPoints = pointMap.values.toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+    return MdSerializer.buildFullContent(date, sorted, mergedPoints);
   }
 
   String _blockKey(dynamic b) => _blockTs(b).toIso8601String();
@@ -242,12 +379,26 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     }
   }
 
+  static const _manifestKey = 'backup_md_manifest';
+
+  Future<Map<String, int>> _loadManifest() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_manifestKey);
+    if (raw == null) return {};
+    final map = jsonDecode(raw) as Map<String, dynamic>;
+    return map.map((k, v) => MapEntry(k, (v as num).toInt()));
+  }
+
+  Future<void> _saveManifest(Map<String, int> manifest) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_manifestKey, jsonEncode(manifest));
+  }
+
   Future<void> _updateSyncStatus(bool success) async {
     await ref.read(settingsProvider.notifier).updateDriveBackup(
       lastSyncAt: DateTime.now(),
       lastSyncSuccess: success,
     );
-    ref.invalidateSelf();
   }
 
   String _filename(DateTime date) =>
@@ -262,16 +413,24 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
 
 class RestoreResult {
   final int filesRestored;
-  const RestoreResult({required this.filesRestored});
+  final int mediaRestored;
+  final int mediaDriveTotal;
+  const RestoreResult({
+    required this.filesRestored,
+    this.mediaRestored = 0,
+    this.mediaDriveTotal = 0,
+  });
 }
 
 class BackupAllResult {
   final int total;
   final int succeeded;
+  final int skipped;
   final bool skippedNoWifi;
   const BackupAllResult({
     required this.total,
     required this.succeeded,
+    this.skipped = 0,
     this.skippedNoWifi = false,
   });
 }

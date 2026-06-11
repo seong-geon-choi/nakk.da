@@ -37,6 +37,12 @@ class TrackingService {
     }
   }
 
+  Future<void> setQuickLaunchMode(String mode) async {
+    try {
+      await _channel.invokeMethod('setQuickLaunchMode', {'mode': mode});
+    } catch (_) {}
+  }
+
   Future<List<TrackPoint>> getAndClearTrackPoints() async {
     try {
       final list =

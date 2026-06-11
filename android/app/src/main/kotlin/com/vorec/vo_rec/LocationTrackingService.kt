@@ -21,6 +21,7 @@ class LocationTrackingService : Service() {
         const val PREFS_PENDING_KEY = "pending_points"
         const val PREFS_ACTIVE_KEY = "tracking_active"
         const val PREFS_QUICK_LAUNCH_MODE_KEY = "quick_launch_mode"
+        @JvmField val pendingLock = Any()
         private const val EXTRA_INTERVAL = "intervalMeters"
         private const val AUTO_STOP_MS = 12L * 60 * 60 * 1000
 
@@ -132,13 +133,15 @@ class LocationTrackingService : Service() {
 
     private fun savePoint(lat: Double, lng: Double, timeMs: Long) {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val arr = try {
-            JSONArray(prefs.getString(PREFS_PENDING_KEY, "[]"))
-        } catch (_: Exception) {
-            JSONArray()
+        synchronized(pendingLock) {
+            val arr = try {
+                JSONArray(prefs.getString(PREFS_PENDING_KEY, "[]"))
+            } catch (_: Exception) {
+                JSONArray()
+            }
+            arr.put("$lat,$lng,${timeFmt.format(java.util.Date(timeMs))}")
+            prefs.edit().putString(PREFS_PENDING_KEY, arr.toString()).commit()
         }
-        arr.put("$lat,$lng,${timeFmt.format(java.util.Date(timeMs))}")
-        prefs.edit().putString(PREFS_PENDING_KEY, arr.toString()).apply()
     }
 
     private fun createNotificationChannel() {

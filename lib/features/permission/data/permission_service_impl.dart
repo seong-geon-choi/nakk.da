@@ -7,6 +7,7 @@ class PermissionServiceImpl implements PermissionService {
     Permission.locationWhenInUse,
     Permission.camera,
     Permission.photos,
+    Permission.videos,
     Permission.notification,
   ];
 

@@ -18,12 +18,8 @@ class DriveBackupService {
   String? get accountEmail => _signIn.currentUser?.email;
 
   Future<String?> signIn() async {
-    try {
-      final account = await _signIn.signIn();
-      return account?.email;
-    } catch (_) {
-      return null;
-    }
+    final account = await _signIn.signIn();
+    return account?.email;
   }
 
   Future<void> signOut() async {
@@ -100,19 +96,19 @@ class DriveBackupService {
     return list.files?.firstOrNull?.id;
   }
 
-  Future<void> syncMdFile(String filename, String content) async {
+  Future<void> syncMdFile(String filename, String content, {String? existingId}) async {
     final api = await _getApi();
     if (api == null) return;
     final folderId = await _getOrCreateFolder(api);
-    final existingId = await _findFile(api, filename, folderId);
+    final fileId = existingId ?? await _findFile(api, filename, folderId);
     final bytes = utf8.encode(content);
     final media = drive.Media(
       Stream.value(bytes),
       bytes.length,
       contentType: 'text/markdown',
     );
-    if (existingId != null) {
-      await api.files.update(drive.File(), existingId, uploadMedia: media);
+    if (fileId != null) {
+      await api.files.update(drive.File(), fileId, uploadMedia: media);
     } else {
       await api.files.create(
         drive.File()
@@ -166,11 +162,16 @@ class DriveBackupService {
     final list = await api.files.list(
       q: "name contains '.md' and '$folderId' in parents and trashed=false",
       spaces: 'drive',
-      $fields: 'files(id,name,modifiedTime)',
+      $fields: 'files(id,name,modifiedTime,size)',
       orderBy: 'name desc',
     );
     return (list.files ?? [])
-        .map((f) => DriveFileInfo(id: f.id!, name: f.name!, modifiedTime: f.modifiedTime))
+        .map((f) => DriveFileInfo(
+              id: f.id!,
+              name: f.name!,
+              modifiedTime: f.modifiedTime,
+              size: f.size != null ? int.tryParse(f.size!) : null,
+            ))
         .toList();
   }
 
@@ -187,13 +188,43 @@ class DriveBackupService {
     }
     return utf8.decode(chunks);
   }
+
+  Future<List<DriveFileInfo>> listMediaFiles() async {
+    final api = await _getApi();
+    if (api == null) return [];
+    final folderId = await _getOrCreateFolder(api);
+    final photosFolderId = await _getOrCreatePhotosFolder(api, folderId);
+    final list = await api.files.list(
+      q: "'$photosFolderId' in parents and trashed=false",
+      spaces: 'drive',
+      $fields: 'files(id,name)',
+    );
+    return (list.files ?? [])
+        .map((f) => DriveFileInfo(id: f.id!, name: f.name!))
+        .toList();
+  }
+
+  Future<List<int>?> downloadMediaFile(String fileId) async {
+    final api = await _getApi();
+    if (api == null) return null;
+    final media = await api.files.get(
+      fileId,
+      downloadOptions: drive.DownloadOptions.fullMedia,
+    ) as drive.Media;
+    final chunks = <int>[];
+    await for (final chunk in media.stream) {
+      chunks.addAll(chunk);
+    }
+    return chunks;
+  }
 }
 
 class DriveFileInfo {
   final String id;
   final String name;
   final DateTime? modifiedTime;
-  const DriveFileInfo({required this.id, required this.name, this.modifiedTime});
+  final int? size;
+  const DriveFileInfo({required this.id, required this.name, this.modifiedTime, this.size});
 }
 
 class _AuthClient extends http.BaseClient {

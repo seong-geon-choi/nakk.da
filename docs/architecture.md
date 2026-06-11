@@ -1,8 +1,8 @@
 # 아키텍처 설계서: vo-rec
 
-**버전:** 2.1  
+**버전:** 2.2  
 **최초 작성:** 2026-06-02  
-**최종 수정:** 2026-06-06  
+**최종 수정:** 2026-06-11  
 **플랫폼:** Android (Flutter)
 
 ---
@@ -38,6 +38,9 @@
 | `video_player` | ^2.9.x | 동영상 전체화면 재생 |
 | `video_thumbnail` | ^0.5.x | 동영상 썸네일 첫 프레임 추출 |
 | `photo_manager` | ^3.4.x | 커스텀 갤러리 피커 (사진·동영상 통합 조회) |
+| `google_sign_in` | ^6.x | Google OAuth 로그인 (Drive 백업용) |
+| `googleapis` | ^13.x | Google Drive REST API v3 |
+| `connectivity_plus` | ^6.x | 네트워크 연결 상태 확인 (백업 전 체크) |
 | `flutter_launcher_icons` | ^0.14.x | 앱 아이콘 생성 (dev) |
 
 ---
@@ -121,7 +124,8 @@ lib/
 
 ```
 android/app/src/main/kotlin/com/vorec/vo_rec/
-└── MainActivity.kt   # saveToGallery (MediaStore), scanFile 메서드 채널
+├── MainActivity.kt              # 메서드 채널 핸들러
+└── LocationTrackingService.kt   # GPS 트래킹 포그라운드 서비스
 ```
 
 ---
@@ -329,6 +333,12 @@ fileListProvider ← FileListRepositoryImpl
 fileListProvider ← settingsProvider
 
 permissionStatusProvider ← permission_handler
+
+backupProvider ← DriveBackupService
+backupProvider ← settingsProvider
+backupProvider ← connectivity_plus
+DriveBackupService ← google_sign_in
+DriveBackupService ← googleapis (Drive v3)
 ```
 
 ---
@@ -344,3 +354,86 @@ permissionStatusProvider ← permission_handler
 | `pickGalleryMedia` | `mimeFilter: String` | `{path, isVideo, lat, lng}?` | 이미지·동영상 통합 피커 (ACTION_GET_CONTENT) |
 | `scanPhotosByDate` | `year, month, day` | `List<{contentUri, dateTaken, lat, lng}>` | 날짜별 사진 목록 (지도 화면용) |
 | `copyContentUriToCache` | `uri: String` | `String?` | content URI → 앱 캐시 복사 |
+| `writePhotoBytes` | `bytes: ByteArray`, `filename: String`, `relativePath: String` | `String?` (절대 경로) | Drive 복원 시 미디어 바이트를 MediaStore에 저장 |
+| `getAndClearTrackPoints` | — | `List<String>` | GPS 트래킹 포인트 읽기·지우기 (synchronized) |
+
+---
+
+## 10. Google Drive 백업 시스템
+
+### 개요
+
+`features/backup/` 피처 아래 구현된 Google Drive 백업/복원 기능.
+Google 로그인(OAuth 2.0) 후 앱 전용 Drive 폴더(`appDataFolder`)에 .md 파일 및 미디어를 저장한다.
+
+### 파일 구조 (Drive)
+
+```
+appDataFolder/
+├── 2026-06-03.md
+├── 2026-06-02.md
+├── NAKKDA_20260603_143000.jpg
+└── video_1717394400000.mp4
+```
+
+### 업로드 스킵 로직
+
+로컬 `SharedPreferences`에 `backup_md_manifest` 키로 `{filename: utf8_byte_length}` 매핑을 저장.
+업로드 전 로컬 파일의 UTF-8 바이트 수를 manifest 값과 비교 → 동일하면 스킵.
+업로드 성공 시에만 manifest 갱신.
+
+> Drive API `files.list` 의 `size` 필드가 일부 파일에서 null을 반환하는 문제로 로컬 manifest 방식 채택.
+
+### 복원 병합 로직 (`_mergeContent`)
+
+로컬과 Drive 양쪽에 같은 날짜 파일이 있을 때:
+1. 각 파일의 블록을 파싱하여 타임스탬프 기준 중복 제거 후 병합
+2. 각 파일의 트래킹 포인트(`## 이동 경로` 섹션)도 파싱하여 타임스탬프 기준 병합
+3. `MdSerializer.buildFullContent(date, blocks, mergedTrackPoints)` 로 최종 파일 생성
+
+### 병렬 처리
+
+`Future.wait()` 로 4개씩 묶어 병렬 업로드/복원.
+
+---
+
+## 11. GPS 트래킹 동기화 (Android)
+
+`LocationTrackingService.kt`의 `savePoint()`와 `MainActivity.kt`의 `getAndClearTrackPoints` 핸들러는
+같은 SharedPreferences 키(`pending_track_points`)를 서로 다른 스레드에서 접근한다.
+
+경쟁 조건 방지:
+- `companion object { @JvmField val pendingLock = Any() }` 를 공유 락으로 사용
+- 양쪽 모두 `synchronized(pendingLock)` 블록 안에서 읽기→수정→쓰기 수행
+- `apply()` → `commit()` 변경 (동기 쓰기로 즉각 반영)
+
+---
+
+## 12. 빌드 플래그
+
+```bash
+# 릴리즈 빌드 (V: 드라이브는 한글 경로 우회용 SUBST 가상 드라이브)
+V:
+flutter build apk --release --no-tree-shake-icons
+```
+
+`--no-tree-shake-icons`: `photo_manager` 등 패키지 변동 시 아이콘 트리쉐이킹으로 MaterialIcons가
+99% 제거되는 현상이 발생한 이력이 있음. 안전을 위해 항상 비활성화.
+
+`subst V: "D:\개인\dev\vo-rec\vo_rec"`: Flutter AOT 컴파일러가 한글 경로를 처리하지 못하는 문제 우회.
+
+---
+
+## 13. 권한 모델 (Android 13+)
+
+| Flutter 권한 | Android 권한 | 용도 |
+|---|---|---|
+| `Permission.microphone` | `RECORD_AUDIO` | 음성 메모 |
+| `Permission.locationWhenInUse` | `ACCESS_FINE_LOCATION` | GPS 기록 |
+| `Permission.camera` | `CAMERA` | 카메라 촬영 |
+| `Permission.photos` | `READ_MEDIA_IMAGES` | 갤러리 이미지 |
+| `Permission.videos` | `READ_MEDIA_VIDEO` | 갤러리 동영상 |
+| `Permission.notification` | `POST_NOTIFICATIONS` | 서비스 알림 |
+
+`photo_manager`가 `PermissionState.authorized`가 되려면 `READ_MEDIA_IMAGES` **와** `READ_MEDIA_VIDEO` 모두 필요.
+두 권한은 Android 시스템에서 단일 다이얼로그로 함께 처리된다.

@@ -33,6 +33,16 @@ class SafService {
     return result ?? [];
   }
 
+  /// SAF 파일들의 수정 시간 반환 (epoch milliseconds → DateTime UTC)
+  Future<Map<String, DateTime>> getFilesModifiedTimes(String folderUri, List<String> filenames) async {
+    final result = await _channel.invokeMapMethod<String, dynamic>(
+      'getFilesModifiedTimes',
+      {'uri': folderUri, 'filenames': filenames},
+    );
+    if (result == null) return {};
+    return result.map((k, v) => MapEntry(k, DateTime.fromMillisecondsSinceEpoch(v as int, isUtc: true)));
+  }
+
   Future<void> ensureFolder(String folderUri) =>
       _channel.invokeMethod('ensureFolder', {'uri': folderUri});
 
@@ -67,6 +77,13 @@ class SafService {
 
   Future<void> deletePhotoFile(String folderUri, String filename) =>
       _channel.invokeMethod('deletePhotoFile', {'uri': folderUri, 'filename': filename});
+
+  Future<void> writePhotoBytes(String folderUri, String filename, List<int> bytes) =>
+      _channel.invokeMethod('writePhotoBytes', {
+        'folderUri': folderUri,
+        'filename': filename,
+        'bytes': Uint8List.fromList(bytes),
+      });
 
   /// 로컬 파일 경로에서 EXIF GPS 좌표 읽기 (Android native ExifInterface 사용)
   Future<({double lat, double lng})?> readExifGpsFromPath(String filePath) async {

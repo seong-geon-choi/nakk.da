@@ -100,7 +100,8 @@ class MemoRepositoryImpl implements MemoRepository {
       if (dayFile == null || blockIndex >= dayFile.blocks.length) return;
       final blocks = List<dynamic>.from(dayFile.blocks);
       blocks[blockIndex] = newBlock;
-      await _saf.writeFile(savePath, filename, MdSerializer.buildFullContent(date, blocks));
+      await _saf.writeFile(savePath, filename,
+          MdSerializer.buildFullContent(date, blocks, dayFile.trackPoints));
     } else {
       final file = File('$savePath/$filename');
       if (!await file.exists()) return;
@@ -108,7 +109,8 @@ class MemoRepositoryImpl implements MemoRepository {
       if (dayFile == null || blockIndex >= dayFile.blocks.length) return;
       final blocks = List<dynamic>.from(dayFile.blocks);
       blocks[blockIndex] = newBlock;
-      await file.writeAsString(MdSerializer.buildFullContent(date, blocks));
+      await file.writeAsString(
+          MdSerializer.buildFullContent(date, blocks, dayFile.trackPoints));
     }
   }
 
@@ -118,7 +120,7 @@ class MemoRepositoryImpl implements MemoRepository {
     final dayFile = await loadDayFile(date, savePath);
     if (dayFile == null || blockIndex >= dayFile.blocks.length) return;
     final blocks = List<dynamic>.from(dayFile.blocks)..removeAt(blockIndex);
-    final content = MdSerializer.buildFullContent(date, blocks);
+    final content = MdSerializer.buildFullContent(date, blocks, dayFile.trackPoints);
     if (SafService.isSafUri(savePath)) {
       await _saf.writeFile(savePath, filename, content);
     } else {

@@ -310,6 +310,17 @@ class MainActivity : FlutterActivity() {
                         val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
                         result.success(safListMdFiles(uri))
                     }
+                    "getFilesModifiedTimes" -> {
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        val filenames = call.argument<List<String>>("filenames") ?: return@setMethodCallHandler result.error("ARG", "filenames missing", null)
+                        val folder = safFolder(uri)
+                        val times = mutableMapOf<String, Long>()
+                        filenames.forEach { name ->
+                            val ms = folder?.findFile(name)?.lastModified() ?: 0L
+                            if (ms > 0L) times[name] = ms
+                        }
+                        result.success(times)
+                    }
                     "ensureFolder" -> {
                         val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
                         safEnsureNoMedia(uri)
@@ -380,6 +391,20 @@ class MainActivity : FlutterActivity() {
                         safFolder(uri)?.findFile("photos")?.findFile(filename)?.delete()
                         result.success(null)
                     }
+                    "writePhotoBytes" -> {
+                        val folderUri = call.argument<String>("folderUri") ?: return@setMethodCallHandler result.error("ARG", "folderUri missing", null)
+                        val filename  = call.argument<String>("filename")  ?: return@setMethodCallHandler result.error("ARG", "filename missing", null)
+                        val bytes     = call.argument<ByteArray>("bytes")  ?: return@setMethodCallHandler result.error("ARG", "bytes missing", null)
+                        try {
+                            val root = DocumentFile.fromTreeUri(this, Uri.parse(folderUri))
+                            val sub  = root?.findFile("photos") ?: root?.createDirectory("photos")
+                            val mime = if (filename.endsWith(".mp4")) "video/mp4" else "image/jpeg"
+                            val dest = sub?.findFile(filename) ?: sub?.createFile(mime, filename)
+                            if (dest == null) { result.error("CREATE_FAILED", "cannot create file", null); return@setMethodCallHandler }
+                            contentResolver.openOutputStream(dest.uri)?.use { out -> out.write(bytes) }
+                            result.success(null)
+                        } catch (e: Exception) { result.error("WRITE_ERROR", e.message, null) }
+                    }
                     "readExifGps" -> {
                         val path = call.argument<String>("path") ?: return@setMethodCallHandler result.error("ARG", "path missing", null)
                         android.util.Log.d("ExifGps", "readExifGps path=$path")
@@ -443,11 +468,14 @@ class MainActivity : FlutterActivity() {
                         val prefs = getSharedPreferences(
                             LocationTrackingService.PREFS_NAME, Context.MODE_PRIVATE
                         )
-                        val json = prefs.getString(LocationTrackingService.PREFS_PENDING_KEY, "[]") ?: "[]"
-                        val arr = try { JSONArray(json) } catch (_: Exception) { JSONArray() }
-                        val list = mutableListOf<String>()
-                        for (i in 0 until arr.length()) list.add(arr.getString(i))
-                        prefs.edit().remove(LocationTrackingService.PREFS_PENDING_KEY).apply()
+                        val list = synchronized(LocationTrackingService.pendingLock) {
+                            val json = prefs.getString(LocationTrackingService.PREFS_PENDING_KEY, "[]") ?: "[]"
+                            val arr = try { JSONArray(json) } catch (_: Exception) { JSONArray() }
+                            val items = mutableListOf<String>()
+                            for (i in 0 until arr.length()) items.add(arr.getString(i))
+                            prefs.edit().remove(LocationTrackingService.PREFS_PENDING_KEY).commit()
+                            items
+                        }
                         result.success(list)
                     }
                     "setQuickLaunchMode" -> {

@@ -142,13 +142,13 @@ ARCore를 이용한 실제 거리 측정 카메라입니다.
 
 ## 9. 권한 체계
 
-| 권한 | 필수/선택 | 용도 |
-|------|-----------|------|
-| `RECORD_AUDIO` | 필수 | 음성 메모, Foreground Service |
-| `ACCESS_FINE_LOCATION` | 필수 | GPS 좌표 기록 |
-| `CAMERA` | 필수 | 사진 촬영 |
-| `READ_MEDIA_IMAGES` | 필수 | 갤러리 사진 선택 |
-| `POST_NOTIFICATIONS` | 필수 | 음성 서비스 알림 |
-| `MANAGE_EXTERNAL_STORAGE` | 선택 | DCIM/nakkda 메모 영구 저장 |
+| 권한 | Flutter | 필수/선택 | 용도 |
+|------|---------|-----------|------|
+| `RECORD_AUDIO` | `Permission.microphone` | 필수 | 음성 메모, Foreground Service |
+| `ACCESS_FINE_LOCATION` | `Permission.locationWhenInUse` | 필수 | GPS 좌표 기록 |
+| `CAMERA` | `Permission.camera` | 필수 | 사진 촬영 |
+| `READ_MEDIA_IMAGES` | `Permission.photos` | 필수 | 갤러리 사진 선택 |
+| `READ_MEDIA_VIDEO` | `Permission.videos` | 필수 | 갤러리 동영상 선택 |
+| `POST_NOTIFICATIONS` | `Permission.notification` | 필수 | 서비스 알림 |
 
-> `MANAGE_EXTERNAL_STORAGE`는 일반 권한 요청 플로우와 별도로, 시스템 설정 페이지를 통해 허가합니다.
+> Android 13+에서 `photo_manager`가 `PermissionState.authorized` 상태가 되려면 `READ_MEDIA_IMAGES`와 `READ_MEDIA_VIDEO` 모두 필요합니다.
