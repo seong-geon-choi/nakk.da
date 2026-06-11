@@ -86,8 +86,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             const _SectionHeader(label: '표시'),
             SwitchListTile(
               secondary: const Icon(Icons.add_location_alt_outlined),
-              title: const Text('위치 추가 버튼 표시'),
-              subtitle: const Text('메인 화면 하단에 위치 추가 버튼을 표시합니다'),
+              title: const Text('현재 위치 정보 추가 버튼 표시'),
+              subtitle: const Text('메인 화면 하단에 현재 위치 정보 추가 버튼을 표시합니다'),
               value: settings.showLocationButton,
               onChanged: (v) =>
                   ref.read(settingsProvider.notifier).updateShowLocationButton(v),
@@ -157,7 +157,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             const _SectionHeader(label: '위치 트래킹'),
             ListTile(
               leading: const Icon(Icons.route_outlined),
-              title: const Text('경로 기록'),
+              title: const Text('이동 경로 기록'),
               subtitle: Text('기록 간격: ${settings.trackingIntervalMeters}m'),
               trailing: Switch(
                 value: settings.showTrackingButton,
@@ -424,8 +424,8 @@ class _TrackingIntervalSubScreenState
                 Text(
                   '이동 경로 기록 시 최소 이동 거리를 설정합니다.\n'
                   '거리가 짧을수록 더 상세한 경로가 기록됩니다.\n\n'
-                  '메모 작성 화면에서 경로 기록 버튼을 활성화한 경우에만 이동 경로가 기록됩니다.\n\n'
-                  '경로 기록은 활성화 후 12시간이 경과하거나 자정(0시)이 되면 자동으로 중단됩니다.',
+                  '메모 작성 화면에서 이동 경로 기록 버튼을 활성화한 경우에만 이동 경로가 기록됩니다.\n\n'
+                  '이동 경로 기록은 자정(0시)이 되면 자동으로 중단됩니다.',
                   style: TextStyle(
                     fontSize: 13,
                     color: Theme.of(context)

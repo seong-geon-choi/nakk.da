@@ -263,10 +263,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
-  void _fitTrackPoints() {
-    if (_trackPoints.isEmpty) return;
-    final lats = _trackPoints.map((p) => p.lat).toList();
-    final lngs = _trackPoints.map((p) => p.lng).toList();
+  void _fitAllVisible(List<_PlacedPoint> placed, List<TrackPoint> track) {
+    final lats = [...placed.map((p) => p.lat), ...track.map((p) => p.lat)];
+    final lngs = [...placed.map((p) => p.lng), ...track.map((p) => p.lng)];
+    if (lats.isEmpty) return;
     final minLat = lats.reduce(math.min);
     final maxLat = lats.reduce(math.max);
     final minLng = lngs.reduce(math.min);
@@ -277,10 +277,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
     _mapController.fitCamera(
       CameraFit.bounds(
-        bounds: LatLngBounds(
-          LatLng(minLat, minLng),
-          LatLng(maxLat, maxLng),
-        ),
+        bounds: LatLngBounds(LatLng(minLat, minLng), LatLng(maxLat, maxLng)),
         padding: const EdgeInsets.all(52),
         maxZoom: 18,
       ),
@@ -688,7 +685,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                           ? () {
                               setState(() => _showLines = !_showLines);
                               _showToastMessage(
-                                  _showLines ? '경로 연결선 켜짐' : '경로 연결선 꺼짐');
+                                  _showLines ? '메모지점 연결 켜짐' : '메모지점 연결 꺼짐');
+                              if (_showLines) _fitAllVisible(placed, _showTrack ? _trackPoints : []);
                             }
                           : () => _showToastMessage('GPS 메모가 2개 이상 필요합니다'),
                     ),
@@ -702,7 +700,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                       placed.length < 2
                           ? () => _showToastMessage('GPS 메모가 2개 이상 필요합니다')
                           : !_showLines
-                              ? () => _showToastMessage('경로 연결선을 먼저 켜세요')
+                              ? () => _showToastMessage('메모지점 연결을 먼저 켜세요')
                               : () {
                                   setState(() => _showDistances = !_showDistances);
                                   _showToastMessage(
@@ -722,10 +720,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                             ? () {
                                 final nowOn = !_showTrack;
                                 setState(() => _showTrack = nowOn);
-                                if (nowOn) _fitTrackPoints();
-                                _showToastMessage(nowOn ? '경로기록 표시중' : '경로기록 숨김');
+                                if (nowOn) _fitAllVisible(_showLines ? placed : [], _trackPoints);
+                                _showToastMessage(nowOn ? '이동 경로 표시중' : '이동 경로 숨김');
                               }
-                            : () => _showToastMessage('트래킹 기록이 없습니다'),
+                            : () => _showToastMessage('이동 경로 기록이 없습니다'),
                       ),
                     ],
                   ],

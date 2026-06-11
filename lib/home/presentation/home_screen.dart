@@ -960,7 +960,7 @@ class _LocationFabState extends State<_LocationFab> {
                 size: 22,
               ),
               Text(
-                '위치 추가',
+                '현재 위치 정보 추가',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onTertiary,
                   fontSize: 9,
@@ -1156,7 +1156,7 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
                 size: 22,
               ),
               Text(
-                _isActive ? '기록 중' : '경로 기록',
+                _isActive ? '기록 중' : '이동 경로 기록',
                 style: TextStyle(
                   color: _isActive ? Colors.white : Theme.of(context).colorScheme.onSecondary,
                   fontSize: 9,

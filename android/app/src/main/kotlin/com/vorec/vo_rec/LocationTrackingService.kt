@@ -23,7 +23,6 @@ class LocationTrackingService : Service() {
         const val PREFS_QUICK_LAUNCH_MODE_KEY = "quick_launch_mode"
         @JvmField val pendingLock = Any()
         private const val EXTRA_INTERVAL = "intervalMeters"
-        private const val AUTO_STOP_MS = 12L * 60 * 60 * 1000
 
         fun getQuickLaunchMode(context: Context): String =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -44,7 +43,6 @@ class LocationTrackingService : Service() {
         }
     }
 
-    private val handler = Handler(Looper.getMainLooper())
     private var locationManager: LocationManager? = null
     private var minDistanceMeters: Float = 100f
     private var lastSavedLocation: Location? = null
@@ -66,8 +64,6 @@ class LocationTrackingService : Service() {
             stopSelf()
         }
     }
-
-    private val autoStopRunnable = Runnable { stopSelf() }
 
     override fun onCreate() {
         super.onCreate()
@@ -104,9 +100,6 @@ class LocationTrackingService : Service() {
         val intervalMeters = (intent?.getIntExtra(EXTRA_INTERVAL, 100) ?: 100).toFloat()
         minDistanceMeters = intervalMeters
 
-        handler.removeCallbacks(autoStopRunnable)
-        handler.postDelayed(autoStopRunnable, AUTO_STOP_MS)
-
         locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
         val hasGps = locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true
         val provider = if (hasGps) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
@@ -119,7 +112,6 @@ class LocationTrackingService : Service() {
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(autoStopRunnable)
         try { locationManager?.removeUpdates(locationListener) } catch (_: Exception) {}
         try { unregisterReceiver(dateChangedReceiver) } catch (_: Exception) {}
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
