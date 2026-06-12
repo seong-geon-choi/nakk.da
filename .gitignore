@@ -46,6 +46,11 @@ android/key.properties
 *.keystore
 *.jks
 
+# ── Google Play 서비스 계정 키 (절대 커밋 금지) ──────────────
+tools/*.json
+**/*service*account*.json
+nakkda-*.json
+
 # ── 빌드 결과물 ────────────────────────────────────────────
 /android/app/debug
 /android/app/profile
