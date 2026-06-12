@@ -165,7 +165,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             const _SectionHeader(label: '위치 트래킹'),
             ListTile(
               leading: const Icon(Icons.route_outlined),
-              title: const Text('이동 경로 기록'),
+              title: const Text('경로 기록'),
               subtitle: Text('기록 간격: ${settings.trackingIntervalMeters}m'),
               trailing: Switch(
                 value: settings.showTrackingButton,

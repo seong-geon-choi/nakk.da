@@ -357,19 +357,35 @@ class MdSerializer {
 
   // ── 트래킹 포인트 파싱/쓰기 ──────────────────────────────
 
+  // 신 포맷: track:날짜시각 | 🛰 lat, lng
   static final _trackRe = RegExp(
+      r'^\[//\]: # \(track:(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|\s*🛰\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)\)$');
+  // 구 포맷 하위호환: track:lat,lng,날짜시각
+  static final _trackReOld = RegExp(
       r'^\[//\]: # \(track:(-?\d+\.\d+),(-?\d+\.\d+),(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\)$');
 
   static List<TrackPoint> parseTrackPoints(String content) {
     final points = <TrackPoint>[];
     for (final line in content.split('\n')) {
-      final m = _trackRe.firstMatch(line.trim());
-      if (m == null) continue;
-      final lat = double.tryParse(m.group(1)!);
-      final lng = double.tryParse(m.group(2)!);
-      final dt = DateTime.tryParse(m.group(3)!);
-      if (lat != null && lng != null && dt != null) {
-        points.add(TrackPoint(lat: lat, lng: lng, timestamp: dt));
+      final l = line.trim();
+      final m = _trackRe.firstMatch(l);
+      if (m != null) {
+        final dt = DateTime.tryParse(m.group(1)!);
+        final lat = double.tryParse(m.group(2)!);
+        final lng = double.tryParse(m.group(3)!);
+        if (lat != null && lng != null && dt != null) {
+          points.add(TrackPoint(lat: lat, lng: lng, timestamp: dt));
+        }
+        continue;
+      }
+      final mo = _trackReOld.firstMatch(l);
+      if (mo != null) {
+        final lat = double.tryParse(mo.group(1)!);
+        final lng = double.tryParse(mo.group(2)!);
+        final dt = DateTime.tryParse(mo.group(3)!);
+        if (lat != null && lng != null && dt != null) {
+          points.add(TrackPoint(lat: lat, lng: lng, timestamp: dt));
+        }
       }
     }
     return points;
@@ -377,9 +393,10 @@ class MdSerializer {
 
   static String trackCommentsFor(List<TrackPoint> points) {
     if (points.isEmpty) return '';
+    // 메모 헤더와 동일한 '날짜시각 | 🛰 GPS' 순서로 기록 (숨김 주석)
     final joined = points
         .map((p) =>
-            '[//]: # (track:${_fmt(p.lat)},${_fmt(p.lng)},${_fmtDt(p.timestamp)})')
+            '[//]: # (track:${_fmtDt(p.timestamp)} | 🛰 ${_fmt(p.lat)}, ${_fmt(p.lng)})')
         .join('\n');
     return '$joined\n';
   }

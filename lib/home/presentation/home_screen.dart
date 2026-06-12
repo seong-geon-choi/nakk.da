@@ -1111,6 +1111,35 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     await ref.read(settingsProvider.notifier).updateLocationTrackingEnabled(true);
     if (mounted) setState(() => _isActive = true);
     _startFlushTimer();
+    // 활성화 즉시 현재 위치를 1포인트 기록 (정지 상태에선 네이티브 첫 픽스가
+    // 최소 이동거리 필터로 지연되므로, 클릭 시점에 바로 한 점 남기고 카운트 표시)
+    await _recordCurrentPointNow();
+  }
+
+  Future<void> _recordCurrentPointNow() async {
+    final settings = ref.read(settingsProvider).valueOrNull;
+    if (settings == null || settings.savePath.isEmpty) return;
+    double? lat = ref.read(locationProvider).valueOrNull?.latitude;
+    double? lng = ref.read(locationProvider).valueOrNull?.longitude;
+    if (lat == null) {
+      final cached = ref.read(locationProvider.notifier).cached;
+      lat = cached?.latitude;
+      lng = cached?.longitude;
+    }
+    if (lat == null) {
+      try {
+        final pos = await Geolocator.getLastKnownPosition();
+        if (pos != null) { lat = pos.latitude; lng = pos.longitude; }
+      } catch (_) {}
+    }
+    if (lat == null || lng == null) return;
+    final now = DateTime.now();
+    await ref.read(memoRepositoryProvider).appendTrackPoints(
+      DateTime(now.year, now.month, now.day),
+      [TrackPoint(lat: lat, lng: lng, timestamp: now)],
+      settings.savePath,
+    );
+    await _refreshCount();
   }
 
   @override
@@ -1163,7 +1192,7 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
                 size: 22,
               ),
               Text(
-                _isActive ? '기록 중' : '이동 경로 기록',
+                _isActive ? '기록 중' : '경로 기록',
                 style: TextStyle(
                   color: _isActive ? Colors.white : Theme.of(context).colorScheme.onSecondary,
                   fontSize: 9,
@@ -1217,10 +1246,9 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         actions: [
-          IconButton(
-            icon: const Icon(Icons.today_outlined),
-            tooltip: '오늘 메모로 가기',
+          TextButton(
             onPressed: () => context.go(AppRoutes.home),
+            child: const Text('오늘'),
           ),
         ],
       ),
