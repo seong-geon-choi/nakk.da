@@ -7,7 +7,6 @@ import 'package:sensors_plus/sensors_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../settings/presentation/settings_provider.dart';
-import '../../settings/domain/models/app_settings.dart';
 import '../../../core/utils/watermark.dart';
 import '../../../core/utils/media_scanner.dart';
 
@@ -323,8 +322,11 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
             onHorizontalDragEnd: (d) {
               if (_isRecording) return;
               final v = d.primaryVelocity ?? 0;
-              if (v < -300 && !_isVideoMode) _switchMode(true);
-              else if (v > 300 && _isVideoMode) _switchMode(false);
+              if (v < -300 && !_isVideoMode) {
+                _switchMode(true);
+              } else if (v > 300 && _isVideoMode) {
+                _switchMode(false);
+              }
             },
             child: CameraPreview(ctrl),
           ),
@@ -651,11 +653,11 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
     final marginX = wm.fontSize * screenW / 960.0;
     final marginY = wm.fontSize * screenH / (960.0 * photoAspect);
 
-    final _fontMax = mq.size.shortestSide * 0.09;
+    final fontMax = mq.size.shortestSide * 0.09;
     final overlayFont = math.min(
       wm.fontSize * screenW / 480.0,
       wm.fontSize * screenH / (480.0 * photoAspect),
-    ).clamp(8.0, _fontMax);
+    ).clamp(8.0, fontMax);
 
     final boxColor = Color.fromARGB(
         (wm.boxOpacity * 255).round().clamp(0, 255), 0, 0, 0);

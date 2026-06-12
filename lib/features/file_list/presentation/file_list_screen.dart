@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 import 'file_list_provider.dart';
 import '../domain/models/file_summary.dart';
 import '../../../core/widgets/empty_state_view.dart';
-import '../../../core/utils/date_formatter.dart';
 import '../../../core/router/app_router.dart';
 import '../../settings/presentation/settings_provider.dart';
 
@@ -199,7 +198,7 @@ class _FileItemState extends ConsumerState<_FileItem> {
     final textColor = Theme.of(context).colorScheme.onSurface;
     return InkWell(
       onTap: () => _openViewer(context),
-      onLongPress: () => _showContextMenu(context),
+      onLongPress: () => _showContextMenu(),
       child: Container(
         constraints: const BoxConstraints(minHeight: 64),
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -260,7 +259,7 @@ class _FileItemState extends ConsumerState<_FileItem> {
     );
   }
 
-  Future<void> _showContextMenu(BuildContext context) async {
+  Future<void> _showContextMenu() async {
     final action = await showModalBottomSheet<_FileAction>(
       context: context,
       builder: (sheetCtx) => SafeArea(
@@ -288,15 +287,15 @@ class _FileItemState extends ConsumerState<_FileItem> {
     );
     if (!mounted) return;
     if (action == _FileAction.rename) {
-      await _showRenameDialog(context);
+      await _showRenameDialog();
     } else if (action == _FileAction.copy) {
-      await _showCopyDialog(context);
+      await _showCopyDialog();
     } else if (action == _FileAction.delete) {
-      await _showDeleteDialog(context);
+      await _showDeleteDialog();
     }
   }
 
-  Future<void> _showRenameDialog(BuildContext context) async {
+  Future<void> _showRenameDialog() async {
     final controller = TextEditingController(text: file.displayName);
     final confirmed = await showDialog<bool>(
       context: context,
@@ -332,7 +331,7 @@ class _FileItemState extends ConsumerState<_FileItem> {
     }
   }
 
-  Future<void> _showCopyDialog(BuildContext context) async {
+  Future<void> _showCopyDialog() async {
     final controller = TextEditingController(text: '${file.displayName}_복사');
     final confirmed = await showDialog<bool>(
       context: context,
@@ -368,7 +367,7 @@ class _FileItemState extends ConsumerState<_FileItem> {
     }
   }
 
-  Future<void> _showDeleteDialog(BuildContext context) async {
+  Future<void> _showDeleteDialog() async {
     bool deletePhotos = false;
     final confirmed = await showDialog<bool>(
       context: context,

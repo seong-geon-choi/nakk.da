@@ -104,13 +104,15 @@ class _GalleryPickerScreenState extends State<GalleryPickerScreen>
       }
       _album = albums.first;
       final assets = await _album!.getAssetListPaged(page: 0, size: _pageSize);
-      if (mounted) setState(() {
-        _assets = assets;
-        _groups = _buildGroups(assets);
-        _page = 1;
-        _hasMore = assets.length == _pageSize;
-        _loading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _assets = assets;
+          _groups = _buildGroups(assets);
+          _page = 1;
+          _hasMore = assets.length == _pageSize;
+          _loading = false;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() { _loading = false; });
     }
@@ -135,13 +137,15 @@ class _GalleryPickerScreenState extends State<GalleryPickerScreen>
     setState(() { _loadingMore = true; });
     try {
       final more = await _album!.getAssetListPaged(page: _page, size: _pageSize);
-      if (mounted) setState(() {
-        _assets.addAll(more);
-        _groups = _buildGroups(_assets);
-        _page++;
-        _hasMore = more.length == _pageSize;
-        _loadingMore = false;
-      });
+      if (mounted) {
+        setState(() {
+          _assets.addAll(more);
+          _groups = _buildGroups(_assets);
+          _page++;
+          _hasMore = more.length == _pageSize;
+          _loadingMore = false;
+        });
+      }
     } catch (_) {
       if (mounted) setState(() { _loadingMore = false; });
     }

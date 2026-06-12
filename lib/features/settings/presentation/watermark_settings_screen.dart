@@ -1,8 +1,6 @@
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'settings_provider.dart';
-import '../domain/models/app_settings.dart';
 
 class WatermarkSettingsScreen extends ConsumerStatefulWidget {
   const WatermarkSettingsScreen({super.key});

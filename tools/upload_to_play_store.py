@@ -17,7 +17,11 @@
   3) Google Play Android Developer API 사용 설정
 """
 import argparse
+import socket
 import sys
+
+# 대용량(.aab) 업로드 중 읽기 타임아웃 방지
+socket.setdefaulttimeout(600)
 
 try:
     from google.oauth2 import service_account
@@ -88,12 +92,21 @@ def main() -> int:
         edit_id = edits.insert(body={}, packageName=args.package).execute()["id"]
         print(f"[1/4] edit 생성: {edit_id}")
 
-        upload = edits.bundles().upload(
-            packageName=args.package,
-            editId=edit_id,
-            media_body=MediaFileUpload(args.aab, mimetype="application/octet-stream"),
-        ).execute()
-        version_code = upload["versionCode"]
+        media = MediaFileUpload(
+            args.aab,
+            mimetype="application/octet-stream",
+            resumable=True,
+            chunksize=5 * 1024 * 1024,
+        )
+        request = edits.bundles().upload(
+            packageName=args.package, editId=edit_id, media_body=media
+        )
+        response = None
+        while response is None:
+            status, response = request.next_chunk()
+            if status:
+                print(f"      업로드 {int(status.progress() * 100)}%")
+        version_code = response["versionCode"]
         print(f"[2/4] 번들 업로드 완료: versionCode={version_code}")
 
         release = {"status": args.status, "versionCodes": [str(version_code)]}

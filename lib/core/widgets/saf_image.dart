@@ -30,7 +30,6 @@ class SafImage extends StatefulWidget {
 class _SafImageState extends State<SafImage> {
   Uint8List? _bytes;
   bool _loading = false;
-  bool _error = false;
 
   bool get _needsSaf =>
       !SafImage.isAbsolute(widget.photoPath) &&
@@ -47,7 +46,7 @@ class _SafImageState extends State<SafImage> {
     super.didUpdateWidget(old);
     if (old.photoPath != widget.photoPath || old.savePath != widget.savePath) {
       if (_needsSaf) {
-        setState(() { _bytes = null; _error = false; });
+        setState(() { _bytes = null; });
         _loadBytes();
       }
     }
@@ -57,9 +56,9 @@ class _SafImageState extends State<SafImage> {
     setState(() => _loading = true);
     try {
       final b = await SafService().readSafImage(widget.savePath, widget.photoPath);
-      if (mounted) setState(() { _bytes = b; _loading = false; _error = b == null; });
+      if (mounted) setState(() { _bytes = b; _loading = false; });
     } catch (_) {
-      if (mounted) setState(() { _loading = false; _error = true; });
+      if (mounted) setState(() { _loading = false; });
     }
   }
 

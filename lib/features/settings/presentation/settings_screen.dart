@@ -4,7 +4,6 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'settings_provider.dart';
 import '../../backup/presentation/backup_provider.dart';
-import '../domain/models/app_settings.dart';
 import 'watermark_settings_screen.dart';
 import '../../permission/presentation/permission_provider.dart';
 import '../../file_list/presentation/file_list_provider.dart';
@@ -187,7 +186,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 title: Text('권한 설정'),
                 subtitle: Text('확인 중...'),
               ),
-              error: (_, __) => const ListTile(
+              error: (_, _) => const ListTile(
                 leading: Icon(Icons.security_outlined),
                 title: Text('권한 설정'),
               ),
@@ -510,7 +509,7 @@ class _FishSpeciesSubScreenState extends ConsumerState<_FishSpeciesSubScreen> {
                   )
                 : ListView.separated(
                     itemCount: filtered.length,
-                    separatorBuilder: (_, __) =>
+                    separatorBuilder: (_, _) =>
                         const Divider(height: 1, indent: 16, endIndent: 16),
                     itemBuilder: (_, i) {
                       final s = filtered[i];
@@ -694,7 +693,7 @@ class _PermissionSubScreenState extends ConsumerState<_PermissionSubScreen>
       appBar: AppBar(title: const Text('권한 설정')),
       body: permAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
-        error: (_, __) => const Center(child: Text('권한 확인 실패')),
+        error: (_, _) => const Center(child: Text('권한 확인 실패')),
         data: (statuses) {
           const items = [
             (Permission.microphone, '마이크', '음성 메모 녹음'),
@@ -754,27 +753,27 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
           }
           return ListTileTheme(
             data: _subtitleTheme(context),
-            child: ListView(
-            children: [
-              RadioListTile<QuickLaunchMode>(
-                secondary: const Icon(Icons.vibration),
-                title: const Text('화면 흔들기'),
-                subtitle: const Text('1.5초 내 3회 흔들면 음성 메모 시작'),
-                value: QuickLaunchMode.shake,
-                groupValue: mode,
-                onChanged: setMode,
+            child: RadioGroup<QuickLaunchMode>(
+              groupValue: mode,
+              onChanged: setMode,
+              child: ListView(
+              children: [
+                RadioListTile<QuickLaunchMode>(
+                  secondary: const Icon(Icons.vibration),
+                  title: const Text('화면 흔들기'),
+                  subtitle: const Text('1.5초 내 3회 흔들면 음성 메모 시작'),
+                  value: QuickLaunchMode.shake,
+                ),
+                RadioListTile<QuickLaunchMode>(
+                  secondary: const Icon(Icons.volume_up_outlined),
+                  title: const Text('볼륨 버튼'),
+                  subtitle: const Text('볼륨 ↑ 2회 연속으로 음성 메모 시작'),
+                  value: QuickLaunchMode.volume,
+                ),
+                if (mode == QuickLaunchMode.volume)
+                  const _AccessibilityTile(),
+              ],
               ),
-              RadioListTile<QuickLaunchMode>(
-                secondary: const Icon(Icons.volume_up_outlined),
-                title: const Text('볼륨 버튼'),
-                subtitle: const Text('볼륨 ↑ 2회 연속으로 음성 메모 시작'),
-                value: QuickLaunchMode.volume,
-                groupValue: mode,
-                onChanged: setMode,
-              ),
-              if (mode == QuickLaunchMode.volume)
-                const _AccessibilityTile(),
-            ],
             ),
           );
         },
@@ -896,7 +895,7 @@ Future<void> _cleanUnusedPhotos(BuildContext context, WidgetRef ref) async {
   if (context.mounted) {
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('${count}개 사진 삭제 완료')),
+      SnackBar(content: Text('$count개 사진 삭제 완료')),
     );
   }
 }
@@ -1158,21 +1157,28 @@ class _BackupSubScreen extends ConsumerWidget {
                     child: Text('동기화 범위',
                         style: Theme.of(context).textTheme.labelMedium),
                   ),
-                  RadioListTile<bool>(
-                    title: const Text('메모 파일만'),
-                    subtitle: const Text('.md 파일만 동기화 (빠름)'),
-                    value: false,
+                  RadioGroup<bool>(
                     groupValue: backup.includeMedia,
-                    onChanged: (v) =>
-                        ref.read(backupProvider.notifier).setIncludeMedia(false),
-                  ),
-                  RadioListTile<bool>(
-                    title: const Text('이미지·동영상 포함'),
-                    subtitle: const Text('사진과 동영상도 함께 동기화'),
-                    value: true,
-                    groupValue: backup.includeMedia,
-                    onChanged: (v) =>
-                        ref.read(backupProvider.notifier).setIncludeMedia(true),
+                    onChanged: (v) {
+                      if (v != null) {
+                        ref.read(backupProvider.notifier).setIncludeMedia(v);
+                      }
+                    },
+                    child: const Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        RadioListTile<bool>(
+                          title: Text('메모 파일만'),
+                          subtitle: Text('.md 파일만 동기화 (빠름)'),
+                          value: false,
+                        ),
+                        RadioListTile<bool>(
+                          title: Text('이미지·동영상 포함'),
+                          subtitle: Text('사진과 동영상도 함께 동기화'),
+                          value: true,
+                        ),
+                      ],
+                    ),
                   ),
                   const Divider(indent: 16, endIndent: 16),
                   ListTile(
@@ -1327,7 +1333,7 @@ class _BackupSubScreen extends ConsumerWidget {
         final mediaAlreadyLocal = result.mediaDriveTotal - result.mediaRestored;
         final parts = <String>[];
         if (result.mediaRestored > 0) parts.add('미디어 ${result.mediaRestored}개 복원');
-        if (mediaAlreadyLocal > 0) parts.add('${mediaAlreadyLocal}개 이미 로컬');
+        if (mediaAlreadyLocal > 0) parts.add('$mediaAlreadyLocal개 이미 로컬');
         final mediaPart = parts.isNotEmpty ? ', ${parts.join(', ')}' : '';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('메모 ${result.filesRestored}개 복원$mediaPart')),

@@ -158,7 +158,7 @@ class TideService {
         final t = DateTime.tryParse(times[i]);
         if (t != null && !t.isBefore(nowHour)) {
           final v = temps[i];
-          return v == double.nan ? null : v.toDouble();
+          return v.isNaN ? null : v.toDouble();
         }
       }
       return temps.last.toDouble();

@@ -134,6 +134,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     final text = await getPendingVoiceResult();
     if (text != null && mounted) {
       await clearPendingVoiceResult();
+      if (!mounted) return;
       final autoSave = ref.read(settingsProvider).valueOrNull?.autoSaveVoice ?? false;
       if (autoSave) {
         _saveVoiceDirectly(text);
@@ -366,13 +367,13 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
 
     // 기존 사진 타임스탬프 수집 (중복 방지) — 초 단위 비교, 구 HH:mm 형식 하위 호환
-    DateTime _toSecond(DateTime dt) =>
+    DateTime toSecond(DateTime dt) =>
         DateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
 
     final existing = await ref.read(memoRepositoryProvider).loadDayFile(date, savePath);
     final existingPhotoSeconds = existing?.entries
         .where((e) => e.isPhoto)
-        .map((e) => _toSecond(e.timestamp))
+        .map((e) => toSecond(e.timestamp))
         .toSet() ?? <DateTime>{};
 
     // 사진 처리
@@ -380,7 +381,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     int skipped = 0;
     for (int i = 0; i < photos.length; i++) {
       final photo = photos[i];
-      final photoSec = _toSecond(photo.timestamp);
+      final photoSec = toSecond(photo.timestamp);
       final photoMin = DateTime(photo.timestamp.year, photo.timestamp.month,
           photo.timestamp.day, photo.timestamp.hour, photo.timestamp.minute);
       if (existingPhotoSeconds.contains(photoSec) || existingPhotoSeconds.contains(photoMin)) {
@@ -423,7 +424,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(skipped > 0
-            ? '${entries.length}개 사진 추가, ${skipped}개 중복 건너뜀'
+            ? '${entries.length}개 사진 추가, $skipped개 중복 건너뜀'
             : '${entries.length}개 사진을 메모에 추가했습니다'),
       ),
     );
@@ -444,6 +445,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (!await _requireFolderSetup()) return;
     if (!await _requirePermission(Permission.camera, '카메라')) return;
     if (!await _requirePermission(Permission.photos, '사진')) return;
+    if (!mounted) return;
     final result = await MemoInputSheet.pickMedia(context, ref);
     if (result == null || !mounted) return;
 
@@ -498,6 +500,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
 
   Future<void> _onLocationTap() async {
     if (!await _requirePermission(Permission.locationWhenInUse, '위치')) return;
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
         content: Row(
@@ -522,14 +525,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         .read(locationProvider.notifier)
         .buildEnrichedLocation(isMove: true);
 
-    if (!context.mounted) return;
+    if (!mounted) return;
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
       builder: (_) => _LocationPreviewSheet(location: loc),
     );
-    if (confirmed == true && context.mounted) {
+    if (confirmed == true && mounted) {
       await ref.read(todayFileProvider.notifier).addLocationBlock(loc);
     }
   }
@@ -1002,7 +1005,7 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     WidgetsBinding.instance.addObserver(this);
     _refreshStatus();
     // 메모 저장 등으로 todayFileProvider가 갱신될 때 트래킹 카운트도 재조회
-    ref.listenManual(todayFileProvider, (_, __) => _refreshCount());
+    ref.listenManual(todayFileProvider, (_, _) => _refreshCount());
   }
 
   @override
@@ -1213,6 +1216,13 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
           widget.displayName,
           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.today_outlined),
+            tooltip: '오늘 메모로 가기',
+            onPressed: () => context.go(AppRoutes.home),
+          ),
+        ],
       ),
       body: Stack(
         children: [
@@ -1334,14 +1344,14 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
         .read(locationProvider.notifier)
         .buildEnrichedLocation(isMove: true);
 
-    if (!context.mounted) return;
+    if (!mounted) return;
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
 
     final confirmed = await showModalBottomSheet<bool>(
       context: context,
       builder: (_) => _LocationPreviewSheet(location: loc),
     );
-    if (confirmed == true && context.mounted) {
+    if (confirmed == true && mounted) {
       await ref
           .read(dayFileProvider(widget.filePath).notifier)
           .addLocationBlock(loc);
@@ -1399,7 +1409,7 @@ class _ImportProgressDialog extends StatelessWidget {
         padding: const EdgeInsets.all(24),
         child: ValueListenableBuilder<int>(
           valueListenable: progress,
-          builder: (_, current, __) => Column(
+          builder: (_, current, _) => Column(
             mainAxisSize: MainAxisSize.min,
             children: [
               Text('사진 추가 중...', style: Theme.of(context).textTheme.titleMedium),

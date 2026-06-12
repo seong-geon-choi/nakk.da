@@ -21,7 +21,7 @@ class MemoEntryCard extends StatelessWidget {
         children: [
           _Header(entry: entry),
           const SizedBox(height: 6),
-          if (media != null) media,
+          ?media,
           // 미디어가 없을 때만 조과 정보를 본문 위에 텍스트로 표시
           if (media == null && catchLabel != null)
             Text(

@@ -202,7 +202,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     // 좌표가 비유효하거나 모든 점이 동일 위치인 경우
     // → CameraFit.bounds가 0÷0=NaN → toInt() 크래시 방지
     if (!minLat.isFinite || !minLng.isFinite ||
-        !maxLat.isFinite || !maxLng.isFinite) return null;
+        !maxLat.isFinite || !maxLng.isFinite) {
+      return null;
+    }
     if (minLat == maxLat && minLng == maxLng) return null;
 
     return CameraFit.bounds(
@@ -237,7 +239,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final minLng = allLngs.reduce(math.min);
     final maxLng = allLngs.reduce(math.max);
     if (!minLat.isFinite || !minLng.isFinite ||
-        !maxLat.isFinite || !maxLng.isFinite) return;
+        !maxLat.isFinite || !maxLng.isFinite) {
+      return;
+    }
     if (minLat == maxLat && minLng == maxLng) {
       _mapController.move(LatLng(minLat, minLng), 15);
       return;
@@ -399,7 +403,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               initialCameraFit: _cameraFit(),
               initialCenter: _initialCenter,
               initialZoom: 15,
-              onTap: (_, __) => setState(() => _selected = null),
+              onTap: (_, _) => setState(() => _selected = null),
               onPositionChanged: (camera, hasGesture) {
                 if ((camera.zoom - _zoom).abs() >= 0.5) {
                   setState(() => _zoom = camera.zoom);
@@ -458,7 +462,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                       final t = _thresholdDeg();
                       if (km < 0.001 ||
                           ((a.point.lat - b.point.lat).abs() < t &&
-                           (a.point.lng - b.point.lng).abs() < t)) continue;
+                           (a.point.lng - b.point.lng).abs() < t)) {
+                        continue;
+                      }
                       final label = km < 1
                           ? '${(km * 1000).round()}m'
                           : '${km.toStringAsFixed(2)}km';
