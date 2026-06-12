@@ -2,8 +2,13 @@ package com.sgchoisg.nakkda
 
 import android.app.Activity
 import android.content.Intent
+import android.content.Context
 import android.graphics.*
 import android.graphics.drawable.GradientDrawable
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.opengl.GLES20
 import android.opengl.GLSurfaceView
 import android.os.Build
@@ -13,9 +18,7 @@ import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
-import android.view.OrientationEventListener
 import android.view.PixelCopy
-import android.view.Surface
 import android.view.View
 import android.content.res.ColorStateList
 import android.widget.FrameLayout
@@ -32,6 +35,7 @@ import java.io.File
 import java.io.FileOutputStream
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
+import kotlin.math.abs
 import kotlin.math.sqrt
 
 class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
@@ -57,6 +61,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
     private lateinit var watermarkBtn: ImageButton
     private lateinit var includeLengthBtn: ImageButton
     private lateinit var sideButtons: LinearLayout
+    private lateinit var sensitivitySeekBar: SeekBar
     private lateinit var msgText: TextView
     private val msgHandler = Handler(Looper.getMainLooper())
     private val msgHideRunnable = Runnable { hideMsg() }
@@ -76,7 +81,6 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
     private var wmDragDX = 0f // 드래그 시작 시 터치-뷰 오프셋
     private var wmDragDY = 0f
     private var wmDragging = false
-    private var wmOrientationListener: OrientationEventListener? = null
     private var wmDateFmt = ""
     private var wmTimeFmt = ""
     private var wmCustomText = ""
@@ -108,6 +112,21 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
     private var dragStart: Pair<Float, Float>? = null
     private var isDragging = false
     private val dragThresholdPx by lazy { 20 * resources.displayMetrics.density }
+
+    // ── 기기 방향 → 컨트롤/워터마크 제자리 회전 (일반 카메라와 동일한 가속도계 방식) ──
+    private var sensorManager: SensorManager? = null
+    private var uiTurns = 0                       // 0=세로, 1/3=가로
+    private var rotatableViews: List<View> = emptyList()
+    private val accelListener = object : SensorEventListener {
+        override fun onSensorChanged(e: SensorEvent) {
+            if (e.sensor.type != Sensor.TYPE_ACCELEROMETER || rotatableViews.isEmpty()) return
+            val ax = e.values[0]; val ay = e.values[1]
+            if (abs(ax) < 3 && abs(ay) < 3) return            // 평평하면 방향 판단 보류
+            val turns = if (abs(ay) >= abs(ax)) 0 else if (ax >= 0) 1 else 3
+            if (turns != uiTurns) { uiTurns = turns; applyUiRotation(turns) }
+        }
+        override fun onAccuracyChanged(s: Sensor?, a: Int) {}
+    }
 
     // ── Lifecycle ───────────────────────────────────────────────────
 
@@ -147,7 +166,11 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         session?.resume()
         glSurfaceView.onResume()
         if (applyWatermark) wmHandler.post(wmRunnable)
-        enableWmOrientation()
+        sensorManager = (getSystemService(Context.SENSOR_SERVICE) as SensorManager).also { sm ->
+            sm.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
+                sm.registerListener(accelListener, it, SensorManager.SENSOR_DELAY_UI)
+            }
+        }
     }
 
     override fun onPause() {
@@ -155,39 +178,20 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         glSurfaceView.onPause()
         session?.pause()
         displayRotationHelper.onPause()
-        wmOrientationListener?.disable()
+        sensorManager?.unregisterListener(accelListener)
         super.onPause()
     }
 
-    /// 기기 방향에 맞춰 워터마크 박스를 똑바로 회전.
-    /// 윈도우(디스플레이)가 이미 회전하면 net≈0(이중 회전 방지), 고정이면 기기 각도만큼 보정.
-    private fun enableWmOrientation() {
-        if (wmOrientationListener == null) {
-            wmOrientationListener = object : OrientationEventListener(this) {
-                override fun onOrientationChanged(orientation: Int) {
-                    if (orientation == ORIENTATION_UNKNOWN || !::wmOverlay.isInitialized) return
-                    val device = when {
-                        orientation >= 315 || orientation < 45 -> 0
-                        orientation < 135 -> 90
-                        orientation < 225 -> 180
-                        else -> 270
-                    }
-                    @Suppress("DEPRECATION")
-                    val disp = when (windowManager.defaultDisplay.rotation) {
-                        Surface.ROTATION_90 -> 90
-                        Surface.ROTATION_180 -> 180
-                        Surface.ROTATION_270 -> 270
-                        else -> 0
-                    }
-                    val target = ((disp - device) + 360) % 360
-                    if (wmOverlay.rotation.toInt() != target) {
-                        wmOverlay.animate().rotation(target.toFloat()).setDuration(200).start()
-                    }
-                }
-            }
+    /// 기기 방향에 맞춰 컨트롤·워터마크 박스만 제자리에서 회전 (레이아웃 위치는 세로 고정).
+    /// turns: 0=세로, 1=가로(시계+90°), 3=가로(반시계). 일반 카메라와 동일한 방향·속도.
+    private fun applyUiRotation(turns: Int) {
+        val deg = (turns * 90).toFloat()
+        rotatableViews.forEach { v ->
+            if (v.rotation != deg) v.animate().rotation(deg).setDuration(250).start()
         }
-        if (wmOrientationListener?.canDetectOrientation() == true) {
-            wmOrientationListener?.enable()
+        // 감도 슬라이더: 세로(270°) 기준, 가로 전환 시 시계방향 180° 회전 → 90°
+        if (::sensitivitySeekBar.isInitialized) {
+            sensitivitySeekBar.rotation = if (turns == 0) 270f else 90f
         }
     }
 
@@ -404,10 +408,10 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
 
     private fun updateStatus() {
         val (txt, bgColor) = when {
-            worldPoint2 != null -> "✓ 측정 완료  아래 촬영 버튼을 누르세요" to 0xCC000000.toInt()
-            worldPoint1 != null -> "② 끝점을 터치하세요"                    to 0xCC1565C0.toInt()
-            canMeasure          -> "● 측정 가능  시작점을 터치하거나 드래그" to 0xCC2E7D32.toInt()
-            else                -> "⏳ 평면 인식 중..."                      to 0xCCE65100.toInt()
+            worldPoint2 != null -> "✓ 측정 완료"   to 0xCC000000.toInt()
+            worldPoint1 != null -> "② 끝점 터치"   to 0xCC1565C0.toInt()
+            canMeasure          -> "● 측정 가능"   to 0xCC2E7D32.toInt()
+            else                -> "⏳ 평면 인식 중" to 0xCCE65100.toInt()
         }
         statusText.text = txt
         statusBg.setColor(bgColor)
@@ -620,7 +624,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             setColor(0xCCE65100.toInt()); cornerRadius = dpToPx(24).toFloat()
         }
         statusText = TextView(this).apply {
-            text = "카메라를 측정 대상에 가까이 향해 주세요"
+            text = "⏳ 평면 인식 중"
             setTextColor(Color.WHITE); textSize = 16f; typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setPadding(dpToPx(20), dpToPx(12), dpToPx(20), dpToPx(12))
@@ -792,14 +796,16 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             LinearLayout.LayoutParams(iconSize, iconSize).apply { bottomMargin = dpToPx(12) })
         sideButtons.addView(includeLengthBtn,
             LinearLayout.LayoutParams(iconSize, iconSize).apply { bottomMargin = dpToPx(12) })
-        sideButtons.addView(TextView(this).apply {
+        val sensitivityLabel = TextView(this).apply {
             text = "감도"; setTextColor(Color.WHITE); textSize = 10f; gravity = Gravity.CENTER
-        }, LinearLayout.LayoutParams(iconSize, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-            bottomMargin = dpToPx(4)
-        })
+        }
+        sideButtons.addView(sensitivityLabel,
+            LinearLayout.LayoutParams(iconSize, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dpToPx(4)
+            })
         // 세로 SeekBar: layout은 130×32, rotation=270 → 시각적으로 32×130
         val sliderWrapper = FrameLayout(this).apply { clipChildren = false; clipToPadding = false }
-        sliderWrapper.addView(SeekBar(this).apply {
+        sensitivitySeekBar = SeekBar(this).apply {
             max = 100
             progress = 90  // 기본 감도 높음 (threshold ≈ 0.005)
             rotation = 270f
@@ -812,7 +818,9 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
                 override fun onStartTrackingTouch(sb: SeekBar) {}
                 override fun onStopTrackingTouch(sb: SeekBar) {}
             })
-        }, FrameLayout.LayoutParams(dpToPx(130), dpToPx(32)).apply { gravity = Gravity.CENTER })
+        }
+        sliderWrapper.addView(sensitivitySeekBar,
+            FrameLayout.LayoutParams(dpToPx(130), dpToPx(32)).apply { gravity = Gravity.CENTER })
         sideButtons.addView(sliderWrapper, LinearLayout.LayoutParams(iconSize, dpToPx(130)))
 
         val sideParams = FrameLayout.LayoutParams(
@@ -861,6 +869,12 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             addView(msgText, msgParams)
         }
         setContentView(root)
+
+        // 가로 전환 시 제자리에서 90° 회전시킬 컨트롤/워터마크 위젯 (촬영 버튼은 원형이라 제외)
+        rotatableViews = listOf(
+            closeBtn, statusText, distanceCard, resetBtn,
+            watermarkBtn, includeLengthBtn, sensitivityLabel, msgText, wmOverlay
+        )
 
         // System bar insets — handle all 4 sides for portrait & landscape
         root.setOnApplyWindowInsetsListener { _, insets ->
