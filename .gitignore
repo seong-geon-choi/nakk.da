@@ -51,6 +51,10 @@ tools/*.json
 **/*service*account*.json
 nakkda-*.json
 
+# ── 로컬 작업 메모/지침 (저장소에서 제외) ──────────────────────
+CLAUDE.md
+context.md
+
 # ── 빌드 결과물 ────────────────────────────────────────────
 /android/app/debug
 /android/app/profile
