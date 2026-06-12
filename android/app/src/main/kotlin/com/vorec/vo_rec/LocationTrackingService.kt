@@ -4,9 +4,15 @@ import android.annotation.SuppressLint
 import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
-import android.location.*
+import android.location.Location
 import android.os.*
 import androidx.core.app.NotificationCompat
+import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationCallback
+import com.google.android.gms.location.LocationRequest
+import com.google.android.gms.location.LocationResult
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
 import org.json.JSONArray
 import java.text.SimpleDateFormat
 import java.util.Locale
@@ -23,6 +29,9 @@ class LocationTrackingService : Service() {
         const val PREFS_QUICK_LAUNCH_MODE_KEY = "quick_launch_mode"
         @JvmField val pendingLock = Any()
         private const val EXTRA_INTERVAL = "intervalMeters"
+        private const val UPDATE_INTERVAL_MS = 5000L   // 위치 갱신 주기
+        private const val FASTEST_INTERVAL_MS = 2000L  // 최소 갱신 간격
+        private const val MAX_ACCURACY_METERS = 1000f  // 이보다 부정확한 픽스는 제외
 
         fun getQuickLaunchMode(context: Context): String =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -43,20 +52,20 @@ class LocationTrackingService : Service() {
         }
     }
 
-    private var locationManager: LocationManager? = null
+    private var fusedClient: FusedLocationProviderClient? = null
     private var minDistanceMeters: Float = 100f
     private var lastSavedLocation: Location? = null
 
-    private val locationListener = object : LocationListener {
-        override fun onLocationChanged(location: Location) {
+    private val locationCallback = object : LocationCallback() {
+        override fun onLocationResult(result: LocationResult) {
+            val location = result.lastLocation ?: return
+            // 지나치게 부정확한 네트워크 픽스 제외 (지하에서도 합리적인 점만 기록)
+            if (location.hasAccuracy() && location.accuracy > MAX_ACCURACY_METERS) return
             val last = lastSavedLocation
             if (last != null && last.distanceTo(location) < minDistanceMeters) return
             lastSavedLocation = location
             savePoint(location.latitude, location.longitude, location.time)
         }
-
-        @Deprecated("Deprecated in Java")
-        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
     }
 
     private val dateChangedReceiver = object : BroadcastReceiver() {
@@ -100,11 +109,17 @@ class LocationTrackingService : Service() {
         val intervalMeters = (intent?.getIntExtra(EXTRA_INTERVAL, 100) ?: 100).toFloat()
         minDistanceMeters = intervalMeters
 
-        locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
-        val hasGps = locationManager?.isProviderEnabled(LocationManager.GPS_PROVIDER) == true
-        val provider = if (hasGps) LocationManager.GPS_PROVIDER else LocationManager.NETWORK_PROVIDER
+        // FusedLocationProvider: GPS+WiFi+기지국을 융합.
+        // setWaitForAccurateLocation(false) → GPS 신호를 기다리지 않고 네트워크 위치도 즉시 수신
+        // (지하철 등 GPS 음영에서도 WiFi/기지국 기반 위치 기록 가능)
+        fusedClient = LocationServices.getFusedLocationProviderClient(this)
+        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, UPDATE_INTERVAL_MS)
+            .setMinUpdateIntervalMillis(FASTEST_INTERVAL_MS)
+            .setMinUpdateDistanceMeters(minDistanceMeters)
+            .setWaitForAccurateLocation(false)
+            .build()
         try {
-            locationManager?.requestLocationUpdates(provider, 0L, intervalMeters, locationListener)
+            fusedClient?.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
         } catch (_: SecurityException) {
             stopSelf()
         }
@@ -112,7 +127,7 @@ class LocationTrackingService : Service() {
     }
 
     override fun onDestroy() {
-        try { locationManager?.removeUpdates(locationListener) } catch (_: Exception) {}
+        try { fusedClient?.removeLocationUpdates(locationCallback) } catch (_: Exception) {}
         try { unregisterReceiver(dateChangedReceiver) } catch (_: Exception) {}
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(PREFS_ACTIVE_KEY, false).apply()
