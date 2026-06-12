@@ -4,6 +4,8 @@ import '../../features/settings/presentation/settings_screen.dart';
 import '../../home/presentation/home_screen.dart';
 import '../../features/file_list/presentation/file_list_screen.dart';
 import '../../features/map/presentation/map_screen.dart';
+import '../../features/search/presentation/search_screen.dart';
+import '../../features/stats/presentation/stats_screen.dart';
 
 class AppRoutes {
   static const permission = '/permission';
@@ -12,6 +14,8 @@ class AppRoutes {
   static const fileViewer = '/files/:filePath';
   static const settings = '/settings';
   static const map = '/map';
+  static const search = '/search';
+  static const stats = '/stats';
 }
 
 GoRouter buildAppRouter({bool firstLaunch = false}) => GoRouter(
@@ -44,6 +48,14 @@ GoRouter buildAppRouter({bool firstLaunch = false}) => GoRouter(
     GoRoute(
       path: AppRoutes.map,
       builder: (context, state) => MapScreen(filePath: state.extra as String?),
+    ),
+    GoRoute(
+      path: AppRoutes.search,
+      builder: (context, state) => const SearchScreen(),
+    ),
+    GoRoute(
+      path: AppRoutes.stats,
+      builder: (context, state) => const StatsScreen(),
     ),
   ],
 );

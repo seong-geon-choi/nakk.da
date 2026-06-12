@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:sensors_plus/sensors_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../settings/presentation/settings_provider.dart';
@@ -36,12 +38,43 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   Timer? _recordTimer;
   ResolutionPreset _videoResolution = ResolutionPreset.high; // 720p
 
+  // 화면은 세로 고정, 기기 방향에 따라 컨트롤만 회전
+  int _uiQuarterTurns = 0; // 0=세로, 1/3=가로
+  StreamSubscription<AccelerometerEvent>? _accelSub;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // 레이아웃이 화면과 같이 돌지 않도록 세로로 고정
+    SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
+    _accelSub = accelerometerEventStream(
+      samplingPeriod: const Duration(milliseconds: 200),
+    ).listen(_onAccel);
     _loadPrefsAndInit();
   }
+
+  void _onAccel(AccelerometerEvent e) {
+    final ax = e.x, ay = e.y;
+    // 거의 평평하면(테이블 위 등) 방향 판단 보류
+    if (ax.abs() < 3 && ay.abs() < 3) return;
+    int turns;
+    if (ay.abs() >= ax.abs()) {
+      turns = 0; // 세로(위/아래 뒤집힘은 무시)
+    } else {
+      turns = ax >= 0 ? 1 : 3; // 가로 좌/우
+    }
+    if (turns != _uiQuarterTurns && mounted) {
+      setState(() => _uiQuarterTurns = turns);
+    }
+  }
+
+  /// 기기 방향에 맞춰 컨트롤(아이콘/텍스트)만 제자리에서 회전
+  Widget _rot(Widget child) => AnimatedRotation(
+        turns: _uiQuarterTurns / 4,
+        duration: const Duration(milliseconds: 250),
+        child: child,
+      );
 
   Future<void> _loadPrefsAndInit() async {
     final prefs = await SharedPreferences.getInstance();
@@ -58,6 +91,9 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   void dispose() {
     _toastTimer?.cancel();
     _recordTimer?.cancel();
+    _accelSub?.cancel();
+    // 화면 방향 잠금 해제 (앱 기본값 복구)
+    SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     WidgetsBinding.instance.removeObserver(this);
     _ctrl?.dispose();
     super.dispose();
@@ -292,9 +328,16 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
             },
             child: CameraPreview(ctrl),
           ),
-          // 워터마크 프리뷰 (사진 모드에서만)
+          // 워터마크 프리뷰 (사진 모드에서만) — 드래그로 위치 이동 가능
           if (!_isVideoMode && wmEnabled && wm != null)
-            _WatermarkOverlay(wm: wm, previewSize: ctrl.value.previewSize!),
+            _WatermarkOverlay(
+              wm: wm,
+              previewSize: ctrl.value.previewSize!,
+              quarterTurns: _uiQuarterTurns,
+              onMove: (x, y) => ref
+                  .read(settingsProvider.notifier)
+                  .updateWatermark(wm.copyWith(posX: x, posY: y)),
+            ),
           // 녹화 중 인디케이터
           if (_isRecording)
             Positioned(
@@ -310,7 +353,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                       color: Colors.black54,
                       borderRadius: BorderRadius.circular(16),
                     ),
-                    child: Row(
+                    child: _rot(Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         const Icon(Icons.circle, color: Colors.red, size: 10),
@@ -321,7 +364,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                             color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
                         ),
                       ],
-                    ),
+                    )),
                   ),
                 ),
               ),
@@ -335,7 +378,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               child: Row(
                 children: [
                   IconButton(
-                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    icon: _rot(const Icon(Icons.arrow_back, color: Colors.white)),
                     onPressed: _isRecording ? null : () => Navigator.of(context).pop(),
                   ),
                   const Spacer(),
@@ -349,42 +392,14 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                           color: Colors.black54,
                           borderRadius: BorderRadius.circular(12),
                         ),
-                        child: Text(
+                        child: _rot(Text(
                           _videoResolution == ResolutionPreset.veryHigh ? '1080p' : '720p',
                           style: TextStyle(
                             color: _isRecording ? Colors.white38 : Colors.white,
                             fontSize: 13,
                             fontWeight: FontWeight.bold,
                           ),
-                        ),
-                      ),
-                    ),
-                  // 사진 모드: 워터마크 토글
-                  if (!_isVideoMode)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: GestureDetector(
-                        onTap: wm == null
-                            ? null
-                            : () {
-                                final next = !wmEnabled;
-                                ref.read(settingsProvider.notifier)
-                                    .updateWatermark(wm.copyWith(enabled: next));
-                                _showToast(next ? '워터마크 ON' : '워터마크 OFF');
-                              },
-                        child: Container(
-                          width: 40,
-                          height: 40,
-                          padding: const EdgeInsets.all(8),
-                          decoration: const BoxDecoration(
-                            color: Color(0x99000000),
-                            shape: BoxShape.circle,
-                          ),
-                          child: Icon(
-                            Icons.water,
-                            color: wmEnabled ? const Color(0xFF40C4FF) : Colors.white54,
-                          ),
-                        ),
+                        )),
                       ),
                     ),
                   const SizedBox(width: 8),
@@ -392,6 +407,42 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               ),
             ),
           ),
+          // 우측 중앙: 워터마크 토글 (AR 카메라와 동일한 아이콘/위치)
+          if (!_isVideoMode && wm != null)
+            Positioned(
+              top: 0,
+              bottom: 0,
+              right: 8,
+              child: SafeArea(
+                child: Align(
+                  alignment: Alignment.centerRight,
+                  child: GestureDetector(
+                    onTap: () {
+                      final next = !wmEnabled;
+                      ref
+                          .read(settingsProvider.notifier)
+                          .updateWatermark(wm.copyWith(enabled: next));
+                      _showToast(next ? '워터마크 ON' : '워터마크 OFF');
+                    },
+                    child: Container(
+                      width: 48,
+                      height: 48,
+                      padding: const EdgeInsets.all(10),
+                      decoration: const BoxDecoration(
+                        color: Color(0x99000000),
+                        shape: BoxShape.circle,
+                      ),
+                      child: _rot(Icon(
+                        Icons.water_drop,
+                        color: wmEnabled
+                            ? const Color(0xFF40C4FF)
+                            : const Color(0x80FFFFFF),
+                      )),
+                    ),
+                  ),
+                ),
+              ),
+            ),
           // 하단: 모드 선택 + 촬영 버튼
           Positioned(
             bottom: 0,
@@ -414,7 +465,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                               : null,
                           child: Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                            child: Text(
+                            child: _rot(Text(
                               '사진',
                               style: TextStyle(
                                 color: !_isVideoMode ? Colors.white : Colors.white38,
@@ -423,7 +474,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                                     ? FontWeight.bold
                                     : FontWeight.normal,
                               ),
-                            ),
+                            )),
                           ),
                         ),
                         GestureDetector(
@@ -432,7 +483,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                               : null,
                           child: Padding(
                             padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
-                            child: Text(
+                            child: _rot(Text(
                               '동영상',
                               style: TextStyle(
                                 color: _isVideoMode ? Colors.white : Colors.white38,
@@ -441,7 +492,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                                     ? FontWeight.bold
                                     : FontWeight.normal,
                               ),
-                            ),
+                            )),
                           ),
                         ),
                       ],
@@ -501,7 +552,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                       opacity: _toastVisible ? 1.0 : 0.0,
                       duration: const Duration(milliseconds: 300),
                       child: Center(
-                        child: Container(
+                        child: _rot(Container(
                           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                           decoration: BoxDecoration(
                             color: Colors.black87,
@@ -512,7 +563,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                             style: const TextStyle(
                               color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500),
                           ),
-                        ),
+                        )),
                       ),
                     ),
                   ),
@@ -530,7 +581,13 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
 class _WatermarkOverlay extends StatefulWidget {
   final WatermarkSettings wm;
   final Size previewSize;
-  const _WatermarkOverlay({required this.wm, required this.previewSize});
+  final void Function(double, double)? onMove;
+  final int quarterTurns; // 기기 방향에 맞춘 박스 회전
+  const _WatermarkOverlay(
+      {required this.wm,
+      required this.previewSize,
+      this.onMove,
+      this.quarterTurns = 0});
 
   @override
   State<_WatermarkOverlay> createState() => _WatermarkOverlayState();
@@ -539,6 +596,14 @@ class _WatermarkOverlay extends StatefulWidget {
 class _WatermarkOverlayState extends State<_WatermarkOverlay> {
   late DateTime _now;
   late Timer _timer;
+  // 드래그 중 로컬 위치(즉시 반영). 커밋되면 didUpdateWidget에서 해제.
+  double? _dragX;
+  double? _dragY;
+  final _areaKey = GlobalKey();
+  final _boxKey = GlobalKey();
+  // 잡은 지점과 박스 좌상단의 오프셋(AR과 동일한 상대 이동)
+  double _grabDX = 0;
+  double _grabDY = 0;
 
   @override
   void initState() {
@@ -547,6 +612,15 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _now = DateTime.now());
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant _WatermarkOverlay old) {
+    super.didUpdateWidget(old);
+    if (old.wm.posX != widget.wm.posX || old.wm.posY != widget.wm.posY) {
+      _dragX = null;
+      _dragY = null;
+    }
   }
 
   @override
@@ -583,11 +657,6 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
       wm.fontSize * screenH / (480.0 * photoAspect),
     ).clamp(8.0, _fontMax);
 
-    final isTop = wm.position == WatermarkPosition.topLeft ||
-        wm.position == WatermarkPosition.topRight;
-    final isLeft = wm.position == WatermarkPosition.topLeft ||
-        wm.position == WatermarkPosition.bottomLeft;
-
     final boxColor = Color.fromARGB(
         (wm.boxOpacity * 255).round().clamp(0, 255), 0, 0, 0);
 
@@ -604,37 +673,118 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
     };
 
     final vp = mq.viewPadding;
-    return Positioned(
-      top: isTop ? marginY + vp.top : null,
-      bottom: !isTop ? marginY + vp.bottom : null,
-      left: isLeft ? marginX + vp.left : null,
-      right: !isLeft ? marginX + vp.right : null,
-      child: Container(
-        padding: EdgeInsets.symmetric(
-          horizontal: overlayFont * 0.5,
-          vertical: overlayFont * 0.3,
+    final posX = _dragX ?? wm.posX;
+    final posY = _dragY ?? wm.posY;
+    final draggable = widget.onMove != null;
+
+    final box = Container(
+      key: _boxKey,
+      padding: EdgeInsets.symmetric(
+        horizontal: overlayFont * 0.5,
+        vertical: overlayFont * 0.3,
+      ),
+      decoration: BoxDecoration(
+        color: boxColor,
+        borderRadius: BorderRadius.circular(overlayFont * 0.2),
+        // 드래그 가능함을 알리는 옅은 점선 느낌의 테두리
+        border: draggable
+            ? Border.all(color: Colors.white.withValues(alpha: 0.5), width: 1)
+            : null,
+      ),
+      child: Column(
+        crossAxisAlignment: crossAlign,
+        mainAxisSize: MainAxisSize.min,
+        children: lines
+            .map((text) => Text(
+                  text,
+                  textAlign: textAlign,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: overlayFont,
+                    fontWeight: wm.bold ? FontWeight.bold : FontWeight.normal,
+                    fontFamily: _fontFam(wm.fontFamily),
+                    shadows: const [Shadow(blurRadius: 2)],
+                    height: 1.35,
+                  ),
+                ))
+            .toList(),
+      ),
+    );
+
+    // 자유 위치: posX/posY(0~1) → Alignment. 여백(마진+세이프에어리어) 안쪽에 배치
+    return Positioned.fill(
+      child: Padding(
+        padding: EdgeInsets.only(
+          top: marginY + vp.top,
+          bottom: marginY + vp.bottom,
+          left: marginX + vp.left,
+          right: marginX + vp.right,
         ),
-        decoration: BoxDecoration(
-          color: boxColor,
-          borderRadius: BorderRadius.circular(overlayFont * 0.2),
-        ),
-        child: Column(
-          crossAxisAlignment: crossAlign,
-          mainAxisSize: MainAxisSize.min,
-          children: lines
-              .map((text) => Text(
-                    text,
-                    textAlign: textAlign,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontSize: overlayFont,
-                      fontWeight: wm.bold ? FontWeight.bold : FontWeight.normal,
-                      fontFamily: _fontFam(wm.fontFamily),
-                      shadows: const [Shadow(blurRadius: 2)],
-                      height: 1.35,
-                    ),
-                  ))
-              .toList(),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final availW = constraints.maxWidth;
+            final availH = constraints.maxHeight;
+            // AR과 동일: 잡은 지점 기준 상대 이동 (점프 없음)
+            Offset? areaLocal(Offset global) {
+              final rb =
+                  _areaKey.currentContext?.findRenderObject() as RenderBox?;
+              return rb?.globalToLocal(global);
+            }
+
+            void onStart(Offset global) {
+              final local = areaLocal(global);
+              if (local == null) return;
+              final bs = _boxKey.currentContext?.size ?? Size.zero;
+              final freeW = availW - bs.width;
+              final freeH = availH - bs.height;
+              final curX = (_dragX ?? wm.posX) * (freeW > 0 ? freeW : 0);
+              final curY = (_dragY ?? wm.posY) * (freeH > 0 ? freeH : 0);
+              _grabDX = curX - local.dx;
+              _grabDY = curY - local.dy;
+            }
+
+            void onMove(Offset global) {
+              final local = areaLocal(global);
+              if (local == null) return;
+              final bs = _boxKey.currentContext?.size ?? Size.zero;
+              final freeW = availW - bs.width;
+              final freeH = availH - bs.height;
+              setState(() {
+                _dragX = freeW > 0
+                    ? ((local.dx + _grabDX) / freeW).clamp(0.0, 1.0)
+                    : 0.0;
+                _dragY = freeH > 0
+                    ? ((local.dy + _grabDY) / freeH).clamp(0.0, 1.0)
+                    : 0.0;
+              });
+            }
+
+            return SizedBox(
+              key: _areaKey,
+              width: availW,
+              height: availH,
+              child: Align(
+                alignment: Alignment(posX * 2 - 1, posY * 2 - 1),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onPanStart: !draggable ? null : (d) => onStart(d.globalPosition),
+                  onPanUpdate: !draggable ? null : (d) => onMove(d.globalPosition),
+                  onPanEnd: !draggable
+                      ? null
+                      : (_) {
+                          if (_dragX != null && _dragY != null) {
+                            widget.onMove!(_dragX!, _dragY!);
+                          }
+                        },
+                  child: AnimatedRotation(
+                    turns: widget.quarterTurns / 4,
+                    duration: const Duration(milliseconds: 250),
+                    child: box,
+                  ),
+                ),
+              ),
+            );
+          },
         ),
       ),
     );
@@ -662,9 +812,14 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
     final yy = (dt.year % 100).toString().padLeft(2, '0');
     final mm = dt.month.toString().padLeft(2, '0');
     final dd = dt.day.toString().padLeft(2, '0');
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    final sec = dt.second.toString().padLeft(2, '0');
     switch (fmt) {
       case 'yy/MM/dd': return '$yy/$mm/$dd';
       case 'MM/dd': return '$mm/$dd';
+      case 'yyyy-MM-dd HH:mm:ss': return '$y-$mm-$dd $hh:$min:$sec';
+      case 'yyyy-MM-dd HH:mm': return '$y-$mm-$dd $hh:$min';
       default: return '$y-$mm-$dd';
     }
   }

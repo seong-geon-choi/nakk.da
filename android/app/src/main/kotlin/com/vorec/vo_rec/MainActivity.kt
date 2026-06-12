@@ -271,6 +271,8 @@ class MainActivity : FlutterActivity() {
                             call.argument<Boolean>("wmBold")?.let { putExtra("wmBold", it) }
                             call.argument<Double>("wmBoxOpacity")?.let { putExtra("wmBoxOpacity", it.toFloat()) }
                             call.argument<String>("wmAlignment")?.let { putExtra("wmAlignment", it) }
+                            call.argument<Double>("wmPosX")?.let { putExtra(ArMeasureActivity.EXTRA_POS_X, it.toFloat()) }
+                            call.argument<Double>("wmPosY")?.let { putExtra(ArMeasureActivity.EXTRA_POS_Y, it.toFloat()) }
                         },
                         AR_REQUEST_CODE
                     )
@@ -579,7 +581,13 @@ class MainActivity : FlutterActivity() {
                     data.getDoubleExtra(ArMeasureActivity.EXTRA_DISTANCE_CM, -1.0)
                 else null
                 val applyWm = data.getBooleanExtra(ArMeasureActivity.EXTRA_APPLY_WATERMARK, false)
-                pending?.success(mapOf("path" to path, "distanceCm" to dist, "applyWatermark" to applyWm))
+                val posX = if (data.hasExtra(ArMeasureActivity.EXTRA_POS_X))
+                    data.getFloatExtra(ArMeasureActivity.EXTRA_POS_X, 1f).toDouble() else null
+                val posY = if (data.hasExtra(ArMeasureActivity.EXTRA_POS_Y))
+                    data.getFloatExtra(ArMeasureActivity.EXTRA_POS_Y, 1f).toDouble() else null
+                pending?.success(mapOf(
+                    "path" to path, "distanceCm" to dist, "applyWatermark" to applyWm,
+                    "posX" to posX, "posY" to posY))
             } else {
                 pending?.success(null)
             }

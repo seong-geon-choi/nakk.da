@@ -6,6 +6,7 @@ class MemoEntry {
   final String? photoPath;
   final String? videoPath;
   final double? fishLength;
+  final String? fishSpecies;
 
   const MemoEntry({
     required this.timestamp,
@@ -15,6 +16,7 @@ class MemoEntry {
     this.photoPath,
     this.videoPath,
     this.fishLength,
+    this.fishSpecies,
   });
 
   bool get isPhoto => photoPath != null;

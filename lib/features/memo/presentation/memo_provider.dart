@@ -20,10 +20,12 @@ final todayFileProvider = AsyncNotifierProvider<TodayFileNotifier, DayFile?>(
 class TodayFileNotifier extends AsyncNotifier<DayFile?> {
   @override
   Future<DayFile?> build() async {
-    final settings = await ref.watch(settingsProvider.future);
+    // savePath만 구독 — 트래킹 토글 등 무관한 설정 변경 시 재로딩(깜빡임) 방지
+    final savePath =
+        await ref.watch(settingsProvider.selectAsync((s) => s.savePath));
     return ref
         .read(memoRepositoryProvider)
-        .loadDayFile(DateTime.now(), settings.savePath);
+        .loadDayFile(DateTime.now(), savePath);
   }
 
   Future<void> addEntry(MemoEntry entry) async {
@@ -94,9 +96,11 @@ class DayFileNotifier extends FamilyAsyncNotifier<DayFile?, String> {
 
   @override
   Future<DayFile?> build(String arg) async {
-    final settings = await ref.watch(settingsProvider.future);
-    _savePath = settings.savePath;
-    return ref.read(memoRepositoryProvider).loadDayFile(_date, _savePath!);
+    // savePath만 구독 — 무관한 설정 변경 시 재로딩(깜빡임) 방지
+    final savePath =
+        await ref.watch(settingsProvider.selectAsync((s) => s.savePath));
+    _savePath = savePath;
+    return ref.read(memoRepositoryProvider).loadDayFile(_date, savePath);
   }
 
   Future<void> addEntry(MemoEntry entry) async {

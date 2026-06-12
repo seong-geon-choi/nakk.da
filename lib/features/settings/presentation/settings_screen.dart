@@ -86,8 +86,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             const _SectionHeader(label: '표시'),
             SwitchListTile(
               secondary: const Icon(Icons.add_location_alt_outlined),
-              title: const Text('현재 위치 정보 추가 버튼 표시'),
-              subtitle: const Text('메인 화면 하단에 현재 위치 정보 추가 버튼을 표시합니다'),
+              title: const Text('환경 정보 추가 버튼 표시'),
+              subtitle: const Text('메인 화면 하단에 환경 정보 추가 버튼을 표시합니다'),
               value: settings.showLocationButton,
               onChanged: (v) =>
                   ref.read(settingsProvider.notifier).updateShowLocationButton(v),
@@ -109,6 +109,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   ref.read(settingsProvider.notifier).updateShowAddressInMemoName(v),
             ),
 
+            // ── 어종 섹션 ─────────────────────────────
+            const _SectionHeader(label: '어종'),
+            ListTile(
+              leading: const Icon(Icons.set_meal_outlined),
+              title: const Text('어종 목록 관리'),
+              subtitle: Text('${settings.fishSpecies.length}개 — 메모 입력 시 선택/자동 인식'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const _FishSpeciesSubScreen()),
+              ),
+            ),
+
             // ── API 섹션 ──────────────────────────────
             const _SectionHeader(label: 'API 키'),
             ListTile(
@@ -125,7 +137,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             // ── 사진 워터마크 섹션 ───────────────────────
             const _SectionHeader(label: '사진 워터마크'),
             ListTile(
-              leading: const Icon(Icons.water_outlined),
+              leading: const Icon(Icons.water_drop),
               title: const Text('워터마크 설정'),
               subtitle: Text(settings.watermark.enabled ? '활성화됨' : '비활성화됨'),
               onTap: () => Navigator.of(context).push(
@@ -357,6 +369,144 @@ class _SaveLocationSubScreen extends ConsumerWidget {
           ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ── 어종 목록 관리 하위 화면 ──────────────────────────────────────
+
+class _FishSpeciesSubScreen extends ConsumerStatefulWidget {
+  const _FishSpeciesSubScreen();
+
+  @override
+  ConsumerState<_FishSpeciesSubScreen> createState() =>
+      _FishSpeciesSubScreenState();
+}
+
+class _FishSpeciesSubScreenState extends ConsumerState<_FishSpeciesSubScreen> {
+  final _addCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _addCtrl.addListener(() => setState(() {})); // 입력 시 실시간 필터링/중복 표시
+  }
+
+  @override
+  void dispose() {
+    _addCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _add() async {
+    final name = _addCtrl.text.trim();
+    if (name.isEmpty) return;
+    final list = ref.read(settingsProvider).valueOrNull?.fishSpecies ?? const [];
+    if (list.contains(name)) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('이미 있는 어종입니다: $name')),
+      );
+      return;
+    }
+    await ref.read(settingsProvider.notifier).addFishSpecies(name);
+    _addCtrl.clear();
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('추가됨: $name'), duration: const Duration(seconds: 1)),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final stored =
+        ref.watch(settingsProvider).valueOrNull?.fishSpecies ?? const <String>[];
+    final all = [...stored]..sort(); // 가나다순 정렬
+    final query = _addCtrl.text.trim();
+    final exactExists = query.isNotEmpty && all.contains(query);
+    final filtered =
+        query.isEmpty ? all : all.where((s) => s.contains(query)).toList();
+
+    return Scaffold(
+      appBar: AppBar(title: Text('어종 목록 관리 (${all.length})')),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _addCtrl,
+                    textInputAction: TextInputAction.done,
+                    decoration: InputDecoration(
+                      labelText: '어종 추가 / 검색',
+                      hintText: '예: 돗돔',
+                      isDense: true,
+                      border: const OutlineInputBorder(),
+                      errorText: exactExists ? '이미 있는 어종입니다' : null,
+                    ),
+                    onSubmitted: (_) => _add(),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: FilledButton(
+                    onPressed: (query.isEmpty || exactExists) ? null : _add,
+                    child: const Text('추가'),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: filtered.isEmpty
+                ? Center(
+                    child: Text(
+                      query.isEmpty
+                          ? '어종이 없습니다. 위에서 추가하세요.'
+                          : "'$query' 와 일치하는 어종이 없습니다.\n'추가'로 새로 등록하세요.",
+                      textAlign: TextAlign.center,
+                    ),
+                  )
+                : ListView.separated(
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, __) =>
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                    itemBuilder: (_, i) {
+                      final s = filtered[i];
+                      return ListTile(
+                        leading: SizedBox(
+                          width: 32,
+                          child: Text(
+                            '${i + 1}',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: Theme.of(context)
+                                  .colorScheme
+                                  .onSurface
+                                  .withValues(alpha: 0.5),
+                            ),
+                          ),
+                        ),
+                        title: Text(s),
+                        trailing: IconButton(
+                          icon: const Icon(Icons.delete_outline, color: Colors.red),
+                          tooltip: '삭제',
+                          onPressed: () => ref
+                              .read(settingsProvider.notifier)
+                              .removeFishSpecies(s),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
       ),
     );
   }

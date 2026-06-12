@@ -128,6 +128,27 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     state = AsyncData(updated);
   }
 
+  /// 어종 추가 (중복·공백 무시). 새 항목은 목록 맨 앞에 추가.
+  Future<void> addFishSpecies(String species) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final name = species.trim();
+    if (name.isEmpty || current.fishSpecies.contains(name)) return;
+    final updated = current.copyWith(fishSpecies: [name, ...current.fishSpecies]);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  Future<void> removeFishSpecies(String species) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(
+      fishSpecies: current.fishSpecies.where((s) => s != species).toList(),
+    );
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
   Future<void> updateQuickLaunchMode(QuickLaunchMode mode) async {
     final current = state.valueOrNull;
     if (current == null) return;

@@ -20,6 +20,8 @@ import '../../../core/services/saf_service.dart';
 import '../../../core/widgets/saf_image.dart';
 import '../../../core/widgets/video_player_widget.dart';
 import '../../../core/screens/gallery_picker_screen.dart';
+import '../../../core/constants/app_constants.dart';
+import '../../../core/utils/species_detector.dart';
 
 class MemoInputSheet extends ConsumerStatefulWidget {
   final bool startWithVoice;
@@ -140,8 +142,15 @@ class MemoInputSheet extends ConsumerStatefulWidget {
         watermarkSettings: wmSettings,
       );
       if (arResult == null || !context.mounted) return null;
-      final rawPath = (arResult.applyWatermark && wmSettings != null)
-          ? await applyWatermark(arResult.path, wmSettings.copyWith(enabled: true))
+      // AR에서 드래그한 워터마크 위치를 설정에 반영하고 굽기에 사용
+      var effectiveWm = wmSettings;
+      if (wmSettings != null && arResult.posX != null && arResult.posY != null) {
+        effectiveWm =
+            wmSettings.copyWith(posX: arResult.posX!, posY: arResult.posY!);
+        await ref.read(settingsProvider.notifier).updateWatermark(effectiveWm);
+      }
+      final rawPath = (arResult.applyWatermark && effectiveWm != null)
+          ? await applyWatermark(arResult.path, effectiveWm.copyWith(enabled: true))
           : arResult.path;
       exifSourcePath = rawPath;
       path = await saveToGallery(rawPath, relativePath: relPath);
@@ -262,6 +271,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
   final _latCtrl = TextEditingController();
   final _lngCtrl = TextEditingController();
   final _fishLengthCtrl = TextEditingController();
+  final _fishSpeciesCtrl = TextEditingController();
   late DateTime _timestamp;
   String? _photoPath;
   String? _videoPath;
@@ -273,6 +283,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
   @override
   void initState() {
     super.initState();
+    _textCtrl.addListener(_autoDetectFromText);
     final entry = widget.existingEntry;
     if (entry != null) {
       _timestamp = entry.timestamp;
@@ -282,6 +293,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
       if (entry.latitude != null) _latCtrl.text = entry.latitude!.toStringAsFixed(4);
       if (entry.longitude != null) _lngCtrl.text = entry.longitude!.toStringAsFixed(4);
       if (entry.fishLength != null) _fishLengthCtrl.text = entry.fishLength!.toStringAsFixed(1);
+      if (entry.fishSpecies != null) _fishSpeciesCtrl.text = entry.fishSpecies!;
     } else {
       _timestamp = widget.initialTimestamp ?? DateTime.now();
       if (widget.initialText != null) _textCtrl.text = widget.initialText!;
@@ -301,12 +313,33 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     }
   }
 
+  /// 메모 텍스트에서 어종·길이를 인식해 각 필드가 비어 있을 때만 자동 채움
+  void _autoDetectFromText() {
+    final text = _textCtrl.text;
+    String? species;
+    double? length;
+    if (_fishSpeciesCtrl.text.trim().isEmpty) {
+      final list =
+          ref.read(settingsProvider).valueOrNull?.fishSpecies ?? kCommonFishSpecies;
+      species = detectFishSpecies(text, list);
+    }
+    if (_fishLengthCtrl.text.trim().isEmpty) length = detectFishLength(text);
+    if ((species != null || length != null) && mounted) {
+      setState(() {
+        if (species != null) _fishSpeciesCtrl.text = species;
+        if (length != null) _fishLengthCtrl.text = length.toStringAsFixed(1);
+      });
+    }
+  }
+
   @override
   void dispose() {
+    _textCtrl.removeListener(_autoDetectFromText);
     _textCtrl.dispose();
     _latCtrl.dispose();
     _lngCtrl.dispose();
     _fishLengthCtrl.dispose();
+    _fishSpeciesCtrl.dispose();
     super.dispose();
   }
 
@@ -381,7 +414,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
                     const Divider(height: 16),
                     _buildMediaSection(),
                     const Divider(height: 16),
-                    _buildFishLengthRow(),
+                    _buildCatchSection(),
                     const Divider(height: 16),
                     TextField(
                       controller: _textCtrl,
@@ -692,35 +725,81 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     });
   }
 
-  // ── 길이 ────────────────────────────────────────────────
+  // ── 조과 (어종/길이) ─────────────────────────────────────
 
-  Widget _buildFishLengthRow() {
-    return Row(children: [
-      const Text('📏', style: TextStyle(fontSize: 16)),
-      const SizedBox(width: 8),
-      SizedBox(
-        width: 110,
-        child: TextField(
-          controller: _fishLengthCtrl,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: '길이 (cm)',
-            isDense: true,
-            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-            border: OutlineInputBorder(),
+  Widget _buildCatchSection() {
+    final speciesList = [
+      ...(ref.watch(settingsProvider).valueOrNull?.fishSpecies ?? kCommonFishSpecies)
+    ]..sort(); // 가나다순 정렬
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // 어종: 자유 입력 + 드롭다운 선택 병행
+        Row(children: [
+          const Text('🐟', style: TextStyle(fontSize: 16)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: TextField(
+              controller: _fishSpeciesCtrl,
+              decoration: const InputDecoration(
+                labelText: '어종',
+                hintText: '직접 입력 또는 ▼ 선택',
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                border: OutlineInputBorder(),
+              ),
+              style: const TextStyle(fontSize: 13),
+            ),
           ),
-          style: const TextStyle(fontSize: 13),
-        ),
-      ),
-      const SizedBox(width: 4),
-      IconButton(
-        icon: const Icon(Icons.close, size: 18),
-        tooltip: '길이 삭제',
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-        onPressed: _fishLengthCtrl.clear,
-      ),
-    ]);
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.arrow_drop_down, size: 24),
+            tooltip: '어종 선택',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            onSelected: (v) => setState(() => _fishSpeciesCtrl.text = v),
+            itemBuilder: (_) => speciesList
+                .map((s) => PopupMenuItem<String>(value: s, child: Text(s)))
+                .toList(),
+          ),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            tooltip: '어종 삭제',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            onPressed: _fishSpeciesCtrl.clear,
+          ),
+        ]),
+        const SizedBox(height: 8),
+        // 길이
+        Row(children: [
+          const SizedBox(width: 24),
+          const Text('📏', style: TextStyle(fontSize: 16)),
+          const SizedBox(width: 8),
+          SizedBox(
+            width: 100,
+            child: TextField(
+              controller: _fishLengthCtrl,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: const InputDecoration(
+                labelText: '길이 (cm)',
+                isDense: true,
+                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                border: OutlineInputBorder(),
+              ),
+              style: const TextStyle(fontSize: 13),
+            ),
+          ),
+          const SizedBox(width: 4),
+          IconButton(
+            icon: const Icon(Icons.close, size: 18),
+            tooltip: '길이 삭제',
+            padding: EdgeInsets.zero,
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+            onPressed: _fishLengthCtrl.clear,
+          ),
+        ]),
+      ],
+    );
   }
 
   // ── 음성 ────────────────────────────────────────────────
@@ -745,7 +824,9 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
 
   Future<void> _save() async {
     final text = _textCtrl.text.trim();
-    if (text.isEmpty && _photoPath == null && _videoPath == null) {
+    final hasCatchInfo = _fishSpeciesCtrl.text.trim().isNotEmpty ||
+        _fishLengthCtrl.text.trim().isNotEmpty;
+    if (text.isEmpty && _photoPath == null && _videoPath == null && !hasCatchInfo) {
       Navigator.of(context).pop();
       return;
     }
@@ -763,7 +844,20 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
         return;
       }
       final fishLengthText = _fishLengthCtrl.text.trim();
-      final fishLength = fishLengthText.isEmpty ? null : double.tryParse(fishLengthText);
+      // 길이가 비어 있으면 메모 텍스트에서 자동 탐지
+      final fishLength = fishLengthText.isEmpty
+          ? detectFishLength(text)
+          : double.tryParse(fishLengthText);
+      final speciesList =
+          ref.read(settingsProvider).valueOrNull?.fishSpecies ?? kCommonFishSpecies;
+      final speciesText = _fishSpeciesCtrl.text.trim();
+      // 어종이 비어 있으면 메모 텍스트에서 자동 탐지
+      final fishSpecies =
+          speciesText.isEmpty ? detectFishSpecies(text, speciesList) : speciesText;
+      // 직접 입력한 새 어종은 목록에 자동 추가 (중복은 무시됨)
+      if (fishSpecies != null && fishSpecies.isNotEmpty) {
+        await ref.read(settingsProvider.notifier).addFishSpecies(fishSpecies);
+      }
 
       final entry = MemoEntry(
         timestamp: _timestamp,
@@ -773,6 +867,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
         photoPath: _photoPath,
         videoPath: _videoPath,
         fishLength: fishLength,
+        fishSpecies: fishSpecies,
       );
 
       if (_isEditMode) {

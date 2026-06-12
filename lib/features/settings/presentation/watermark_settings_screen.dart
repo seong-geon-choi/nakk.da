@@ -40,6 +40,20 @@ class _WatermarkSettingsScreenState
   void _update(WatermarkSettings updated) =>
       ref.read(settingsProvider.notifier).updateWatermark(updated);
 
+  /// 날짜에 시각이 포함된 결합 포맷(시:분/시:분:초)인지
+  bool _isCombinedDateFormat(String f) => f.contains('HH');
+
+  void _onDateFormatChanged(WatermarkSettings wm, String v) {
+    // 결합 포맷이면 시각 중복 방지로 시간 라인 OFF, 일반 포맷이면 ON
+    final combined = _isCombinedDateFormat(v);
+    final lines = wm.lines
+        .map((l) => l.type == WatermarkLineType.time
+            ? l.copyWith(visible: !combined)
+            : l)
+        .toList();
+    _update(wm.copyWith(dateFormat: v, lines: lines));
+  }
+
   @override
   Widget build(BuildContext context) {
     final wm = ref.watch(settingsProvider).valueOrNull?.watermark ??
@@ -56,6 +70,7 @@ class _WatermarkSettingsScreenState
             isPortrait: _portraitPreview,
             onToggleBg: (v) => setState(() => _darkPreview = v),
             onToggleOrientation: (v) => setState(() => _portraitPreview = v),
+            onMove: (x, y) => _update(wm.copyWith(posX: x, posY: y)),
           ),
           const Divider(height: 1),
 
@@ -65,7 +80,7 @@ class _WatermarkSettingsScreenState
               children: [
                 // 활성화
                 SwitchListTile(
-                  secondary: const Icon(Icons.water_outlined),
+                  secondary: const Icon(Icons.water_drop),
                   title: const Text('워터마크 활성화'),
                   subtitle: const Text('카메라 촬영 사진에 날짜·시간을 삽입합니다'),
                   value: wm.enabled,
@@ -74,12 +89,13 @@ class _WatermarkSettingsScreenState
                 const Divider(height: 1),
 
                 // 박스 위치
-                _Header('박스 위치'),
+                _Header('박스 위치  (미리보기에서 드래그해 이동)'),
                 Padding(
                   padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
                   child: _PositionGrid(
-                    selected: wm.position,
-                    onSelect: (p) => _update(wm.copyWith(position: p)),
+                    posX: wm.posX,
+                    posY: wm.posY,
+                    onSelect: (x, y) => _update(wm.copyWith(posX: x, posY: y)),
                   ),
                 ),
                 const Divider(height: 1),
@@ -171,8 +187,21 @@ class _WatermarkSettingsScreenState
                 if (line.type == WatermarkLineType.date)
                   _FormatDropdown(
                     value: wm.dateFormat,
-                    options: const ['yyyy-MM-dd', 'yy/MM/dd', 'MM/dd'],
-                    onChanged: (v) => _update(wm.copyWith(dateFormat: v)),
+                    options: const [
+                      'yyyy-MM-dd',
+                      'yy/MM/dd',
+                      'MM/dd',
+                      'yyyy-MM-dd HH:mm:ss',
+                      'yyyy-MM-dd HH:mm',
+                    ],
+                    labels: const [
+                      '연-월-일',
+                      '연(2)/월/일',
+                      '월/일',
+                      '연-월-일 시:분:초',
+                      '연-월-일 시:분',
+                    ],
+                    onChanged: (v) => _onDateFormatChanged(wm, v),
                   )
                 else if (line.type == WatermarkLineType.time)
                   _FormatDropdown(
@@ -210,6 +239,7 @@ class _PreviewSection extends StatelessWidget {
   final bool isPortrait;
   final void Function(bool) onToggleBg;
   final void Function(bool) onToggleOrientation;
+  final void Function(double, double) onMove;
 
   const _PreviewSection({
     required this.wm,
@@ -217,6 +247,7 @@ class _PreviewSection extends StatelessWidget {
     required this.isPortrait,
     required this.onToggleBg,
     required this.onToggleOrientation,
+    required this.onMove,
   });
 
   @override
@@ -260,7 +291,8 @@ class _PreviewSection extends StatelessWidget {
             ],
           ),
           const SizedBox(height: 8),
-          _WatermarkPreview(wm: wm, dark: dark, isPortrait: isPortrait),
+          _WatermarkPreview(
+              wm: wm, dark: dark, isPortrait: isPortrait, onMove: onMove),
         ],
       ),
     );
@@ -351,16 +383,47 @@ class _Chip extends StatelessWidget {
 
 // ── 워터마크 미리보기 ──────────────────────────────────────────
 
-class _WatermarkPreview extends StatelessWidget {
+class _WatermarkPreview extends StatefulWidget {
   final WatermarkSettings wm;
   final bool dark;
   final bool isPortrait;
+  final void Function(double, double) onMove;
 
   const _WatermarkPreview(
-      {required this.wm, required this.dark, required this.isPortrait});
+      {required this.wm,
+      required this.dark,
+      required this.isPortrait,
+      required this.onMove});
+
+  @override
+  State<_WatermarkPreview> createState() => _WatermarkPreviewState();
+}
+
+class _WatermarkPreviewState extends State<_WatermarkPreview> {
+  // 드래그 중 로컬 위치(즉시 반영). 설정에 커밋되면 didUpdateWidget에서 해제.
+  double? _dragX;
+  double? _dragY;
+  final _areaKey = GlobalKey();
+  final _boxKey = GlobalKey();
+  // 잡은 지점과 박스 좌상단의 오프셋(카메라/AR과 동일한 상대 이동)
+  double _grabDX = 0;
+  double _grabDY = 0;
+
+  @override
+  void didUpdateWidget(covariant _WatermarkPreview old) {
+    super.didUpdateWidget(old);
+    // 커밋되어 새 위치가 들어오거나 코너 프리셋으로 바뀌면 로컬 드래그값 해제
+    if (old.wm.posX != widget.wm.posX || old.wm.posY != widget.wm.posY) {
+      _dragX = null;
+      _dragY = null;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
+    final wm = widget.wm;
+    final dark = widget.dark;
+    final isPortrait = widget.isPortrait;
     final now = DateTime.now();
     final lines = wm.lines
         .where((l) => l.visible)
@@ -401,6 +464,7 @@ class _WatermarkPreview extends StatelessWidget {
         final margin = previewFont * 0.5;
 
         Widget watermarkBox = Container(
+          key: _boxKey,
           padding: EdgeInsets.symmetric(
             horizontal: previewFont * 0.5,
             vertical: previewFont * 0.3,
@@ -429,20 +493,74 @@ class _WatermarkPreview extends StatelessWidget {
           ),
         );
 
+        // 자유 위치: posX/posY(0~1) → Alignment(-1~1). 여백(margin) 안쪽에 배치
+        final insetX = previewW > 0 ? (margin / previewW).clamp(0.0, 0.49) : 0.0;
+        final insetY = previewH > 0 ? (margin / previewH).clamp(0.0, 0.49) : 0.0;
+        final posX = _dragX ?? wm.posX;
+        final posY = _dragY ?? wm.posY;
+        final alignX = (-1 + 2 * insetX) + posX * (2 - 4 * insetX);
+        final alignY = (-1 + 2 * insetY) + posY * (2 - 4 * insetY);
+
+        // 잡은 지점 기준 상대 이동 (카메라/AR과 동일, 점프 없음)
+        Offset? areaLocal(Offset global) {
+          final rb = _areaKey.currentContext?.findRenderObject() as RenderBox?;
+          return rb?.globalToLocal(global);
+        }
+        void onStart(Offset global) {
+          final local = areaLocal(global);
+          final boxRb = _boxKey.currentContext?.findRenderObject() as RenderBox?;
+          final areaRb = _areaKey.currentContext?.findRenderObject() as RenderBox?;
+          if (local == null || boxRb == null || areaRb == null) return;
+          final boxTopLeft =
+              areaRb.globalToLocal(boxRb.localToGlobal(Offset.zero));
+          _grabDX = boxTopLeft.dx - local.dx;
+          _grabDY = boxTopLeft.dy - local.dy;
+        }
+        void onMove(Offset global) {
+          final local = areaLocal(global);
+          if (local == null) return;
+          final bs = _boxKey.currentContext?.size ?? Size.zero;
+          final freeW = previewW - bs.width;
+          final freeH = previewH - bs.height;
+          // 박스 좌상단(px) → posX/posY (inset 정렬 공식의 역변환)
+          final denomX = 1 - 2 * insetX;
+          final denomY = 1 - 2 * insetY;
+          setState(() {
+            _dragX = (freeW > 0 && denomX > 0)
+                ? (((local.dx + _grabDX) / freeW - insetX) / denomX)
+                    .clamp(0.0, 1.0)
+                : 0.0;
+            _dragY = (freeH > 0 && denomY > 0)
+                ? (((local.dy + _grabDY) / freeH - insetY) / denomY)
+                    .clamp(0.0, 1.0)
+                : 0.0;
+          });
+        }
+        void commitDrag() {
+          if (_dragX != null && _dragY != null) widget.onMove(_dragX!, _dragY!);
+        }
+
         final positioned = lines.isEmpty
             ? const SizedBox.shrink()
-            : Positioned(
-                top: _isTop(wm.position) ? margin : null,
-                bottom: _isBottom(wm.position) ? margin : null,
-                left: _isLeft(wm.position) ? margin : null,
-                right: _isRight(wm.position) ? margin : null,
-                child: watermarkBox,
+            : Align(
+                alignment: Alignment(alignX, alignY),
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onPanStart:
+                      wm.enabled ? (d) => onStart(d.globalPosition) : null,
+                  onPanUpdate:
+                      wm.enabled ? (d) => onMove(d.globalPosition) : null,
+                  onPanEnd: wm.enabled ? (_) => commitDrag() : null,
+                  onPanCancel: wm.enabled ? commitDrag : null,
+                  child: watermarkBox,
+                ),
               );
 
         // 세로 사진은 중앙 정렬, 가로는 전체 폭
         Widget frame = ClipRRect(
           borderRadius: BorderRadius.circular(8),
           child: SizedBox(
+            key: _areaKey,
             width: previewW,
             height: previewH,
             child: Stack(
@@ -478,9 +596,11 @@ class _WatermarkPreview extends StatelessWidget {
   String _lineText(WatermarkLine line, DateTime now) {
     switch (line.type) {
       case WatermarkLineType.date:
-        return _formatDate(now, wm.dateFormat);
+        return _formatDate(now, widget.wm.dateFormat);
       case WatermarkLineType.time:
-        return wm.timeFormat.isEmpty ? '' : _formatTime(now, wm.timeFormat);
+        return widget.wm.timeFormat.isEmpty
+            ? ''
+            : _formatTime(now, widget.wm.timeFormat);
       case WatermarkLineType.customText:
         final t = line.customText.trim();
         return t.isEmpty ? '(커스텀 텍스트)' : t;
@@ -492,11 +612,18 @@ class _WatermarkPreview extends StatelessWidget {
     final yy = (dt.year % 100).toString().padLeft(2, '0');
     final mm = dt.month.toString().padLeft(2, '0');
     final dd = dt.day.toString().padLeft(2, '0');
+    final hh = dt.hour.toString().padLeft(2, '0');
+    final min = dt.minute.toString().padLeft(2, '0');
+    final sec = dt.second.toString().padLeft(2, '0');
     switch (format) {
       case 'yy/MM/dd':
         return '$yy/$mm/$dd';
       case 'MM/dd':
         return '$mm/$dd';
+      case 'yyyy-MM-dd HH:mm:ss':
+        return '$y-$mm-$dd $hh:$min:$sec';
+      case 'yyyy-MM-dd HH:mm':
+        return '$y-$mm-$dd $hh:$min';
       default:
         return '$y-$mm-$dd';
     }
@@ -526,39 +653,32 @@ class _WatermarkPreview extends StatelessWidget {
         WatermarkFont.serif => 'serif',
         WatermarkFont.sansSerif => 'sans-serif',
       };
-
-  bool _isTop(WatermarkPosition p) =>
-      p == WatermarkPosition.topLeft || p == WatermarkPosition.topRight;
-  bool _isBottom(WatermarkPosition p) =>
-      p == WatermarkPosition.bottomLeft || p == WatermarkPosition.bottomRight;
-  bool _isLeft(WatermarkPosition p) =>
-      p == WatermarkPosition.topLeft || p == WatermarkPosition.bottomLeft;
-  bool _isRight(WatermarkPosition p) =>
-      p == WatermarkPosition.topRight || p == WatermarkPosition.bottomRight;
 }
 
 // ── 박스 위치 선택기 ──────────────────────────────────────────
 
 class _PositionGrid extends StatelessWidget {
-  final WatermarkPosition selected;
-  final void Function(WatermarkPosition) onSelect;
+  final double posX;
+  final double posY;
+  final void Function(double, double) onSelect;
 
-  const _PositionGrid({required this.selected, required this.onSelect});
+  const _PositionGrid(
+      {required this.posX, required this.posY, required this.onSelect});
 
   @override
   Widget build(BuildContext context) {
     return Column(
       children: [
         Row(children: [
-          _PosBtn('↖ 좌상', WatermarkPosition.topLeft, selected, onSelect),
+          _PosBtn('↖ 좌상', 0, 0, posX, posY, onSelect),
           const SizedBox(width: 8),
-          _PosBtn('우상 ↗', WatermarkPosition.topRight, selected, onSelect),
+          _PosBtn('우상 ↗', 1, 0, posX, posY, onSelect),
         ]),
         const SizedBox(height: 6),
         Row(children: [
-          _PosBtn('↙ 좌하', WatermarkPosition.bottomLeft, selected, onSelect),
+          _PosBtn('↙ 좌하', 0, 1, posX, posY, onSelect),
           const SizedBox(width: 8),
-          _PosBtn('우하 ↘', WatermarkPosition.bottomRight, selected, onSelect),
+          _PosBtn('우하 ↘', 1, 1, posX, posY, onSelect),
         ]),
       ],
     );
@@ -567,15 +687,18 @@ class _PositionGrid extends StatelessWidget {
 
 class _PosBtn extends StatelessWidget {
   final String label;
-  final WatermarkPosition pos;
-  final WatermarkPosition selected;
-  final void Function(WatermarkPosition) onSelect;
+  final double x;
+  final double y;
+  final double curX;
+  final double curY;
+  final void Function(double, double) onSelect;
 
-  const _PosBtn(this.label, this.pos, this.selected, this.onSelect);
+  const _PosBtn(this.label, this.x, this.y, this.curX, this.curY, this.onSelect);
 
   @override
   Widget build(BuildContext context) {
-    final isSelected = pos == selected;
+    // 현재 위치가 해당 코너와 거의 일치하면 선택 표시
+    final isSelected = (curX - x).abs() < 0.01 && (curY - y).abs() < 0.01;
     final cs = Theme.of(context).colorScheme;
     return Expanded(
       child: OutlinedButton(
@@ -586,7 +709,7 @@ class _PosBtn extends StatelessWidget {
           minimumSize: Size.zero,
           tapTargetSize: MaterialTapTargetSize.shrinkWrap,
         ),
-        onPressed: () => onSelect(pos),
+        onPressed: () => onSelect(x, y),
         child: Text(label,
             style: TextStyle(
                 fontSize: 13, color: isSelected ? cs.primary : null)),

@@ -23,10 +23,10 @@ class MemoEntryCard extends StatelessWidget {
             SafImage(photoPath: entry.photoPath!, savePath: savePath, height: 120),
           if (entry.videoPath != null)
             VideoPlayerWidget(videoPath: entry.videoPath!, height: 120),
-          if (entry.fishLength != null) ...[
+          if (_catchLabel(entry) != null) ...[
             const SizedBox(height: 4),
             Text(
-              '📏 ${entry.fishLength!.toStringAsFixed(1)} cm',
+              _catchLabel(entry)!,
               style: TextStyle(
                 fontSize: 13,
                 color: Theme.of(context).colorScheme.primary,
@@ -42,6 +42,15 @@ class MemoEntryCard extends StatelessWidget {
       ),
     );
   }
+}
+
+/// 어종·길이를 한 줄로 합쳐 표시. 모두 없으면 null.
+String? _catchLabel(MemoEntry entry) {
+  final parts = <String>[];
+  final species = entry.fishSpecies?.trim();
+  if (species != null && species.isNotEmpty) parts.add('🐟 $species');
+  if (entry.fishLength != null) parts.add('📏 ${entry.fishLength!.toStringAsFixed(1)}cm');
+  return parts.isEmpty ? null : parts.join('  ·  ');
 }
 
 class _Header extends StatelessWidget {

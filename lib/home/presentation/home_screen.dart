@@ -21,6 +21,7 @@ import '../../features/settings/presentation/settings_provider.dart';
 import '../../features/location/presentation/location_provider.dart';
 import '../../core/utils/file_name_parser.dart';
 import '../../core/utils/media_scanner.dart';
+import '../../core/utils/species_detector.dart';
 import '../../core/widgets/memo_date_picker_dialog.dart';
 import '../../core/services/saf_service.dart';
 import 'dart:io';
@@ -161,6 +162,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       latitude: lat,
       longitude: lng,
       text: text,
+      fishSpecies: detectFishSpecies(
+          text, ref.read(settingsProvider).valueOrNull?.fishSpecies),
+      fishLength: detectFishLength(text),
     ));
     if (mounted) {
       final preview = text.length > 30 ? '${text.substring(0, 30)}…' : text;
@@ -960,7 +964,7 @@ class _LocationFabState extends State<_LocationFab> {
                 size: 22,
               ),
               Text(
-                '현재 위치 정보 추가',
+                '환경 추가',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onTertiary,
                   fontSize: 9,

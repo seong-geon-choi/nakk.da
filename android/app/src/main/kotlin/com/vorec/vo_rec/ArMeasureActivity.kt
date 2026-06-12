@@ -13,7 +13,9 @@ import android.os.Looper
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.OrientationEventListener
 import android.view.PixelCopy
+import android.view.Surface
 import android.view.View
 import android.content.res.ColorStateList
 import android.widget.FrameLayout
@@ -39,6 +41,8 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         const val EXTRA_DISTANCE_CM      = "distanceCm"
         const val EXTRA_WATERMARK_ENABLED = "watermarkEnabled"
         const val EXTRA_APPLY_WATERMARK  = "applyWatermark"
+        const val EXTRA_POS_X = "posX"
+        const val EXTRA_POS_Y = "posY"
         private const val TAG = "ArMeasureActivity"
     }
 
@@ -67,6 +71,12 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
 
     // 워터마크 오버레이
     private var wmPosition = "bottomRight"
+    private var wmPosX = 1f   // 0(좌)~1(우) 자유 위치
+    private var wmPosY = 1f   // 0(상)~1(하) 자유 위치
+    private var wmDragDX = 0f // 드래그 시작 시 터치-뷰 오프셋
+    private var wmDragDY = 0f
+    private var wmDragging = false
+    private var wmOrientationListener: OrientationEventListener? = null
     private var wmDateFmt = ""
     private var wmTimeFmt = ""
     private var wmCustomText = ""
@@ -117,6 +127,8 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         }
         applyWatermark = intent.getBooleanExtra(EXTRA_WATERMARK_ENABLED, false)
         wmPosition    = intent.getStringExtra("wmPosition")  ?: "bottomRight"
+        wmPosX        = intent.getFloatExtra(EXTRA_POS_X, 1f)
+        wmPosY        = intent.getFloatExtra(EXTRA_POS_Y, 1f)
         wmDateFmt     = intent.getStringExtra("wmDateFmt")   ?: ""
         wmTimeFmt     = intent.getStringExtra("wmTimeFmt")   ?: ""
         wmCustomText  = intent.getStringExtra("wmCustomText") ?: ""
@@ -135,6 +147,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         session?.resume()
         glSurfaceView.onResume()
         if (applyWatermark) wmHandler.post(wmRunnable)
+        enableWmOrientation()
     }
 
     override fun onPause() {
@@ -142,7 +155,40 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         glSurfaceView.onPause()
         session?.pause()
         displayRotationHelper.onPause()
+        wmOrientationListener?.disable()
         super.onPause()
+    }
+
+    /// 기기 방향에 맞춰 워터마크 박스를 똑바로 회전.
+    /// 윈도우(디스플레이)가 이미 회전하면 net≈0(이중 회전 방지), 고정이면 기기 각도만큼 보정.
+    private fun enableWmOrientation() {
+        if (wmOrientationListener == null) {
+            wmOrientationListener = object : OrientationEventListener(this) {
+                override fun onOrientationChanged(orientation: Int) {
+                    if (orientation == ORIENTATION_UNKNOWN || !::wmOverlay.isInitialized) return
+                    val device = when {
+                        orientation >= 315 || orientation < 45 -> 0
+                        orientation < 135 -> 90
+                        orientation < 225 -> 180
+                        else -> 270
+                    }
+                    @Suppress("DEPRECATION")
+                    val disp = when (windowManager.defaultDisplay.rotation) {
+                        Surface.ROTATION_90 -> 90
+                        Surface.ROTATION_180 -> 180
+                        Surface.ROTATION_270 -> 270
+                        else -> 0
+                    }
+                    val target = ((disp - device) + 360) % 360
+                    if (wmOverlay.rotation.toInt() != target) {
+                        wmOverlay.animate().rotation(target.toFloat()).setDuration(200).start()
+                    }
+                }
+            }
+        }
+        if (wmOrientationListener?.canDetectOrientation() == true) {
+            wmOrientationListener?.enable()
+        }
     }
 
     override fun onDestroy() {
@@ -431,9 +477,14 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             val yy = (y % 100).toString().padStart(2, '0')
             val mm = (cal.get(java.util.Calendar.MONTH) + 1).toString().padStart(2, '0')
             val dd = cal.get(java.util.Calendar.DAY_OF_MONTH).toString().padStart(2, '0')
+            val dh  = cal.get(java.util.Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
+            val dmin = cal.get(java.util.Calendar.MINUTE).toString().padStart(2, '0')
+            val dsec = cal.get(java.util.Calendar.SECOND).toString().padStart(2, '0')
             lines.add(when (wmDateFmt) {
                 "yy/MM/dd" -> "$yy/$mm/$dd"
                 "MM/dd"    -> "$mm/$dd"
+                "yyyy-MM-dd HH:mm:ss" -> "$y-$mm-$dd $dh:$dmin:$dsec"
+                "yyyy-MM-dd HH:mm"    -> "$y-$mm-$dd $dh:$dmin"
                 else       -> "$y-$mm-$dd"
             })
         }
@@ -445,6 +496,26 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         }
         if (wmCustomText.isNotEmpty()) lines.add(wmCustomText)
         wmOverlay.text = lines.joinToString("\n")
+        if (!wmDragging) wmOverlay.post { positionWatermark() }
+    }
+
+    /// wmPosX/wmPosY(0~1) 비율로 오버레이를 절대 배치
+    private fun positionWatermark() {
+        if (!::wmOverlay.isInitialized || wmDragging) return
+        val parent = wmOverlay.parent as? View
+        if (parent == null || parent.width == 0 || wmOverlay.width == 0) {
+            wmOverlay.post { positionWatermark() }
+            return
+        }
+        val freeW = (parent.width - wmOverlay.width).coerceAtLeast(0)
+        val freeH = (parent.height - wmOverlay.height).coerceAtLeast(0)
+        (wmOverlay.layoutParams as FrameLayout.LayoutParams).apply {
+            gravity = Gravity.TOP or Gravity.START
+            leftMargin = (wmPosX * freeW).toInt()
+            topMargin = (wmPosY * freeH).toInt()
+            rightMargin = 0; bottomMargin = 0
+        }
+        wmOverlay.requestLayout()
     }
 
     // ── Capture ──────────────────────────────────────────────────────
@@ -462,6 +533,8 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
                     putExtra(EXTRA_PHOTO_PATH, f.absolutePath)
                     measuredCm?.let { putExtra(EXTRA_DISTANCE_CM, it) }
                     putExtra(EXTRA_APPLY_WATERMARK, applyWatermark)
+                    putExtra(EXTRA_POS_X, wmPosX)
+                    putExtra(EXTRA_POS_Y, wmPosY)
                 })
                 finish()
             } else {
@@ -619,9 +692,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             gravity = Gravity.CENTER
         }
 
-        // 워터마크 오버레이 뷰
-        val isTop  = wmPosition == "topLeft"  || wmPosition == "topRight"
-        val isLeft = wmPosition == "topLeft"  || wmPosition == "bottomLeft"
+        // 워터마크 오버레이 뷰 (드래그로 위치 이동 가능)
         // Flutter와 동일한 공식으로 화면 크기 기준 폰트 크기 계산
         val dm = resources.displayMetrics
         val screenWDp = dm.widthPixels / dm.density
@@ -645,14 +716,52 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
                 val a = (wmBoxOpacity * 255).toInt().coerceIn(0, 255)
                 setColor(Color.argb(a, 0, 0, 0))
                 cornerRadius = dpToPx(4).toFloat()
+                // 드래그 가능 표시용 옅은 테두리
+                setStroke(dpToPx(1), Color.argb(128, 255, 255, 255))
             }
             visibility = if (applyWatermark) View.VISIBLE else View.GONE
+            setOnTouchListener { v, e ->
+                if (!applyWatermark) return@setOnTouchListener false
+                when (e.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> {
+                        wmDragging = true
+                        wmDragDX = v.x - e.rawX
+                        wmDragDY = v.y - e.rawY
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_MOVE -> {
+                        val parent = v.parent as? View ?: return@setOnTouchListener true
+                        val nx = (e.rawX + wmDragDX).toInt()
+                            .coerceIn(0, (parent.width - v.width).coerceAtLeast(0))
+                        val ny = (e.rawY + wmDragDY).toInt()
+                            .coerceIn(0, (parent.height - v.height).coerceAtLeast(0))
+                        (v.layoutParams as FrameLayout.LayoutParams).apply {
+                            gravity = Gravity.TOP or Gravity.START
+                            leftMargin = nx; topMargin = ny; rightMargin = 0; bottomMargin = 0
+                        }
+                        v.requestLayout()
+                        true
+                    }
+                    android.view.MotionEvent.ACTION_UP,
+                    android.view.MotionEvent.ACTION_CANCEL -> {
+                        val parent = v.parent as? View
+                        if (parent != null) {
+                            val freeW = (parent.width - v.width).coerceAtLeast(1)
+                            val freeH = (parent.height - v.height).coerceAtLeast(1)
+                            wmPosX = (v.left.toFloat() / freeW).coerceIn(0f, 1f)
+                            wmPosY = (v.top.toFloat() / freeH).coerceIn(0f, 1f)
+                        }
+                        wmDragging = false
+                        v.performClick()
+                        true
+                    }
+                    else -> false
+                }
+            }
         }
-        val wmGravity = (if (isTop) Gravity.TOP else Gravity.BOTTOM) or
-                        (if (isLeft) Gravity.START else Gravity.END)
         val wmParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT
-        ).apply { gravity = wmGravity; setMargins(dpToPx(16), dpToPx(16), dpToPx(16), dpToPx(16)) }
+        ).apply { gravity = Gravity.TOP or Gravity.START }
         updateWmOverlay()
 
         // Icon toggle buttons — right-center of screen (outside bottom area)
@@ -784,14 +893,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
                 bottomMargin = b  // 네비게이션 바 위로 수직 중앙 보정
             }
             sideButtons.requestLayout()
-            (wmOverlay.layoutParams as FrameLayout.LayoutParams).apply {
-                val m = dpToPx(16)
-                leftMargin   = if (isLeft) l + m else m
-                rightMargin  = if (!isLeft) r + m else m
-                topMargin    = if (isTop) t + m else m
-                bottomMargin = if (!isTop) b + m else m
-            }
-            wmOverlay.requestLayout()
+            positionWatermark()
             (msgText.layoutParams as FrameLayout.LayoutParams).apply {
                 bottomMargin = b + dpToPx(120)
             }

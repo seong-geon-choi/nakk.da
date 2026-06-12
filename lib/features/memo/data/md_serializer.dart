@@ -14,6 +14,8 @@ class MdSerializer {
     if (entry.photoPath != null) parts.add('![](${entry.photoPath})');
     if (entry.videoPath != null) parts.add('[video](${entry.videoPath})');
     if (entry.fishLength != null) parts.add('- 📏 ${entry.fishLength!.toStringAsFixed(1)}cm');
+    final species = entry.fishSpecies?.trim();
+    if (species != null && species.isNotEmpty) parts.add('- 🐟 $species');
     if (entry.text != null && entry.text!.isNotEmpty) parts.add(entry.text!);
     final body = parts.join('\n');
     return '\n---\n\n$header\n$body\n';
@@ -225,6 +227,7 @@ class MdSerializer {
         // 본문 수집
         final bodyLines = <String>[];
         double? fishLength;
+        String? fishSpecies;
         i++;
         while (i < lines.length &&
             !lines[i].trim().startsWith('---') &&
@@ -234,8 +237,15 @@ class MdSerializer {
           final l = lines[i].trim();
           if (l.isNotEmpty) {
             final lm = RegExp(r'^- 📏 (\d+\.?\d*)cm$').firstMatch(l);
+            final sm = RegExp(r'^- 🐟 (.+)$').firstMatch(l);
             if (lm != null) {
               fishLength = double.tryParse(lm.group(1)!);
+            } else if (sm != null) {
+              var rest = sm.group(1)!.trim();
+              // 구 포맷의 "N마리" 접미사 제거 (마릿수는 더 이상 저장하지 않음)
+              final cm = RegExp(r'\s*\d+\s*마리$').firstMatch(rest);
+              if (cm != null) rest = rest.substring(0, cm.start).trim();
+              if (rest.isNotEmpty) fishSpecies = rest;
             } else {
               bodyLines.add(l);
             }
@@ -261,6 +271,7 @@ class MdSerializer {
           photoPath: photoPath,
           videoPath: videoPath,
           fishLength: fishLength,
+          fishSpecies: fishSpecies,
         ));
         continue;
       }
@@ -366,11 +377,11 @@ class MdSerializer {
 
   static String trackCommentsFor(List<TrackPoint> points) {
     if (points.isEmpty) return '';
-    return points
-            .map((p) =>
-                '[//]: # (track:${_fmt(p.lat)},${_fmt(p.lng)},${_fmtDt(p.timestamp)})')
-            .join('\n') +
-        '\n';
+    final joined = points
+        .map((p) =>
+            '[//]: # (track:${_fmt(p.lat)},${_fmt(p.lng)},${_fmtDt(p.timestamp)})')
+        .join('\n');
+    return '$joined\n';
   }
 
   static String _fmtDt(DateTime dt) {

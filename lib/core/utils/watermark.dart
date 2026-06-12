@@ -77,7 +77,7 @@ Future<String> applyWatermark(
     final boxH = textLines.length * lineH + padding * 2;
     final margin = padding;
 
-    final boxOffset = _boxOffset(settings.position, w, h, boxW, boxH, margin);
+    final boxOffset = _boxOffset(settings.posX, settings.posY, w, h, boxW, boxH, margin);
 
     // 캔버스 그리기
     final recorder = ui.PictureRecorder();
@@ -170,11 +170,18 @@ String _formatDate(DateTime dt, String format) {
   final yy = (dt.year % 100).toString().padLeft(2, '0');
   final mm = dt.month.toString().padLeft(2, '0');
   final dd = dt.day.toString().padLeft(2, '0');
+  final hh = dt.hour.toString().padLeft(2, '0');
+  final min = dt.minute.toString().padLeft(2, '0');
+  final sec = dt.second.toString().padLeft(2, '0');
   switch (format) {
     case 'yy/MM/dd':
       return '$yy/$mm/$dd';
     case 'MM/dd':
       return '$mm/$dd';
+    case 'yyyy-MM-dd HH:mm:ss':
+      return '$y-$mm-$dd $hh:$min:$sec';
+    case 'yyyy-MM-dd HH:mm':
+      return '$y-$mm-$dd $hh:$min';
     default:
       return '$y-$mm-$dd';
   }
@@ -214,16 +221,9 @@ ui.TextAlign _uiTextAlign(WatermarkAlign a) {
   }
 }
 
-Offset _boxOffset(WatermarkPosition pos, double w, double h, double boxW,
+Offset _boxOffset(double posX, double posY, double w, double h, double boxW,
     double boxH, double margin) {
-  switch (pos) {
-    case WatermarkPosition.topLeft:
-      return Offset(margin, margin);
-    case WatermarkPosition.topRight:
-      return Offset(w - boxW - margin, margin);
-    case WatermarkPosition.bottomLeft:
-      return Offset(margin, h - boxH - margin);
-    case WatermarkPosition.bottomRight:
-      return Offset(w - boxW - margin, h - boxH - margin);
-  }
+  final freeW = math.max(0.0, w - boxW - margin * 2);
+  final freeH = math.max(0.0, h - boxH - margin * 2);
+  return Offset(margin + posX * freeW, margin + posY * freeH);
 }

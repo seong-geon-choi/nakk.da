@@ -21,6 +21,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _driveBackupIncludeMediaKey = 'drive_backup_include_media';
   static const _lastSyncAtKey = 'last_sync_at';
   static const _lastSyncSuccessKey = 'last_sync_success';
+  static const _fishSpeciesKey = 'fish_species';
 
   static const defaultMemoDisplayPath = '/storage/emulated/0/Documents/nakkda';
 
@@ -56,6 +57,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
         ? DateTime.fromMillisecondsSinceEpoch(lastSyncAtMs)
         : null;
     final lastSyncSuccessRaw = prefs.getBool(_lastSyncSuccessKey);
+    final fishSpecies = prefs.getStringList(_fishSpeciesKey);
 
     return AppSettings(
       savePath: saveUri,
@@ -74,6 +76,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       driveBackupIncludeMedia: driveBackupIncludeMedia,
       lastSyncAt: lastSyncAt,
       lastSyncSuccess: lastSyncSuccessRaw,
+      fishSpecies: fishSpecies, // null이면 AppSettings 기본값(kCommonFishSpecies)
     );
   }
 
@@ -108,6 +111,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     } else {
       await prefs.remove(_lastSyncSuccessKey);
     }
+    await prefs.setStringList(_fishSpeciesKey, settings.fishSpecies);
   }
 
   Future<String> _defaultPhotoSavePath() async {

@@ -158,7 +158,8 @@ class FileListRepositoryImpl implements FileListRepository {
   }
 
   int _countEntries(String content) {
-    return '### '.allMatches(content).length;
+    // 줄 시작이 정확히 '### '인 경우만 카운트 ('#### ' 등 하위 헤더 제외)
+    return RegExp(r'^### ', multiLine: true).allMatches(content).length;
   }
 
   String? _extractAddress(String content) {

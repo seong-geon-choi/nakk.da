@@ -50,6 +50,18 @@ class _FileListScreenState extends ConsumerState<FileListScreen> {
     return Scaffold(
       appBar: AppBar(
         title: const Text('메모 목록'),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.bar_chart),
+            tooltip: '조과 통계',
+            onPressed: () => context.push(AppRoutes.stats),
+          ),
+          IconButton(
+            icon: const Icon(Icons.search),
+            tooltip: '검색',
+            onPressed: () => context.push(AppRoutes.search),
+          ),
+        ],
       ),
       body: listAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
