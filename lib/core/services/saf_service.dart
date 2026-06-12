@@ -46,6 +46,15 @@ class SafService {
   Future<void> ensureFolder(String folderUri) =>
       _channel.invokeMethod('ensureFolder', {'uri': folderUri});
 
+  /// 공용 저장소에 relativePath(예: 'Documents/nakkda') 폴더가 없으면 생성.
+  /// 첫 설정 시 SAF 픽커가 해당 폴더에서 열려 사용자가 권한 부여만 하면 되도록 한다.
+  Future<bool> ensureFolderInPublicStorage(String relativePath) async =>
+      await _channel.invokeMethod<bool>(
+        'ensureDefaultFolder',
+        {'relativePath': relativePath},
+      ) ??
+      false;
+
   Future<void> deleteFile(String folderUri, String filename) =>
       _channel.invokeMethod('deleteFile', {'uri': folderUri, 'filename': filename});
 

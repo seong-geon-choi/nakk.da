@@ -41,6 +41,13 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     final hint = current?.saveDisplayPath.isNotEmpty == true
         ? current!.saveDisplayPath
         : SettingsRepositoryImpl.defaultMemoDisplayPath;
+    // 첫 설정(저장 경로 없음)이면 기본 폴더(Documents/nakkda)를 미리 생성해
+    // 픽커가 해당 폴더에서 열리도록 → 사용자는 '이 폴더 사용'만 누르면 됨
+    if (current != null && current.savePath.isEmpty) {
+      final rel = SettingsRepositoryImpl.defaultMemoDisplayPath
+          .replaceFirst('/storage/emulated/0/', '');
+      await _saf.ensureFolderInPublicStorage(rel);
+    }
     final picked = await _saf.pickFolder(initialPath: hint);
     if (picked == null) return false;
     if (current == null) return false;

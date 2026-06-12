@@ -311,6 +311,10 @@ class MainActivity : FlutterActivity() {
                         @Suppress("DEPRECATION")
                         startActivityForResult(intent, SAF_FOLDER_REQUEST_CODE)
                     }
+                    "ensureDefaultFolder" -> {
+                        val rel = call.argument<String>("relativePath") ?: "Documents/nakkda"
+                        result.success(ensurePublicFolder(rel))
+                    }
                     "readTextFile" -> {
                         val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
                         val filename = call.argument<String>("filename") ?: return@setMethodCallHandler result.error("ARG", "filename missing", null)
@@ -721,6 +725,45 @@ class MainActivity : FlutterActivity() {
 
     private fun safFolder(uriString: String): DocumentFile? =
         DocumentFile.fromTreeUri(this, Uri.parse(uriString))
+
+    /// 공용 저장소에 폴더(예: Documents/nakkda)가 없으면 생성한다.
+    /// SAF 픽커가 해당 폴더에서 열려 사용자가 권한 부여만 하면 되도록 하기 위함.
+    /// API 29+ : MediaStore로 .keep 마커 파일을 만들어 폴더 생성 (추가 권한 불필요)
+    /// API 26~28 : 레거시 File.mkdirs
+    private fun ensurePublicFolder(relPath: String): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                if (publicFolderExists(relPath)) return true
+                val values = ContentValues().apply {
+                    put(MediaStore.Files.FileColumns.DISPLAY_NAME, ".keep")
+                    put(MediaStore.Files.FileColumns.RELATIVE_PATH, relPath.trimEnd('/'))
+                    put(MediaStore.Files.FileColumns.MIME_TYPE, "application/octet-stream")
+                }
+                contentResolver.insert(MediaStore.Files.getContentUri("external"), values) != null
+            } else {
+                @Suppress("DEPRECATION")
+                val dir = File(Environment.getExternalStorageDirectory(), relPath)
+                dir.exists() || dir.mkdirs()
+            }
+        } catch (_: Exception) { false }
+    }
+
+    private fun publicFolderExists(relPath: String): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                val rel = relPath.trimEnd('/') + "/"
+                contentResolver.query(
+                    MediaStore.Files.getContentUri("external"),
+                    arrayOf(MediaStore.Files.FileColumns._ID),
+                    "${MediaStore.Files.FileColumns.RELATIVE_PATH}=?",
+                    arrayOf(rel), null
+                )?.use { it.count > 0 } ?: false
+            } else {
+                @Suppress("DEPRECATION")
+                File(Environment.getExternalStorageDirectory(), relPath).exists()
+            }
+        } catch (_: Exception) { false }
+    }
 
     private fun safReadFile(uriString: String, filename: String): String? {
         val file = safFolder(uriString)?.findFile(filename) ?: return null
