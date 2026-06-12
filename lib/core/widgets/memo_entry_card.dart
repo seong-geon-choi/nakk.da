@@ -12,6 +12,8 @@ class MemoEntryCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final catchLabel = _catchLabel(entry);
+    final media = _buildMedia(catchLabel);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
@@ -19,26 +21,65 @@ class MemoEntryCard extends StatelessWidget {
         children: [
           _Header(entry: entry),
           const SizedBox(height: 6),
-          if (entry.photoPath != null)
-            SafImage(photoPath: entry.photoPath!, savePath: savePath, height: 120),
-          if (entry.videoPath != null)
-            VideoPlayerWidget(videoPath: entry.videoPath!, height: 120),
-          if (_catchLabel(entry) != null) ...[
-            const SizedBox(height: 4),
+          if (media != null) media,
+          // 미디어가 없을 때만 조과 정보를 본문 위에 텍스트로 표시
+          if (media == null && catchLabel != null)
             Text(
-              _catchLabel(entry)!,
+              catchLabel,
               style: TextStyle(
                 fontSize: 13,
                 color: Theme.of(context).colorScheme.primary,
                 fontWeight: FontWeight.w500,
               ),
             ),
-          ],
           if (entry.text != null && entry.text!.isNotEmpty) ...[
             const SizedBox(height: 6),
             _TextBody(entry: entry, maxLines: maxLines),
           ],
         ],
+      ),
+    );
+  }
+
+  /// 사진/동영상 위에 조과(어종·길이) 배지를 겹쳐 표시.
+  Widget? _buildMedia(String? catchLabel) {
+    Widget? child;
+    if (entry.photoPath != null) {
+      child = SafImage(photoPath: entry.photoPath!, savePath: savePath, height: 120);
+    } else if (entry.videoPath != null) {
+      child = VideoPlayerWidget(videoPath: entry.videoPath!, height: 120);
+    }
+    if (child == null) return null;
+    if (catchLabel == null) return child;
+    return Stack(
+      children: [
+        child,
+        Positioned(left: 6, top: 6, child: _CatchBadge(label: catchLabel)),
+      ],
+    );
+  }
+}
+
+/// 사진 위에 얹는 조과 정보 배지 (반투명 배경 + 흰 글자).
+class _CatchBadge extends StatelessWidget {
+  final String label;
+  const _CatchBadge({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.black.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(6),
+      ),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+        ),
       ),
     );
   }

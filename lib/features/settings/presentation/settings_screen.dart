@@ -108,30 +108,27 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               onChanged: (v) =>
                   ref.read(settingsProvider.notifier).updateShowAddressInMemoName(v),
             ),
+            SwitchListTile(
+              secondary: const Icon(Icons.phishing),
+              title: const Text('낚시용 입력 항목'),
+              subtitle:
+                  const Text('메모 작성 시 어종 관련 항목을 포함/제외합니다'),
+              value: settings.showCatchInput,
+              onChanged: (v) =>
+                  ref.read(settingsProvider.notifier).updateShowCatchInput(v),
+            ),
 
             // ── 어종 섹션 ─────────────────────────────
             const _SectionHeader(label: '어종'),
             ListTile(
               leading: const Icon(Icons.set_meal_outlined),
               title: const Text('어종 목록 관리'),
-              subtitle: Text('${settings.fishSpecies.length}개 — 메모 입력 시 선택/자동 인식'),
+              subtitle: Text(
+                  '${settings.visibleFishSpecies.length}/${settings.fishSpecies.length} (선택가능/자동인식)'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const _FishSpeciesSubScreen()),
               ),
-            ),
-
-            // ── API 섹션 ──────────────────────────────
-            const _SectionHeader(label: 'API 키'),
-            ListTile(
-              leading: const Icon(Icons.vpn_key_outlined),
-              title: const Text('국립해양조사원 API 키'),
-              subtitle: Text(
-                settings.khoaApiKey?.isNotEmpty == true
-                    ? '사용자 키 적용 중'
-                    : '기본 키 사용 중',
-              ),
-              onTap: () => _showApiKeyDialog(context, ref, settings.khoaApiKey),
             ),
 
             // ── 사진 워터마크 섹션 ───────────────────────
@@ -244,6 +241,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             const SizedBox(height: 16),
             const _SectionHeader(label: 'About'),
             _AboutTile(),
+            ListTile(
+              leading: const Icon(Icons.vpn_key_outlined),
+              title: const Text('국립해양조사원 API 키'),
+              subtitle: Text(
+                settings.khoaApiKey?.isNotEmpty == true
+                    ? '사용자 키 적용 중'
+                    : '기본 키 사용 중',
+              ),
+              onTap: () => _showApiKeyDialog(context, ref, settings.khoaApiKey),
+            ),
             const SizedBox(height: 16),
             const _SectionHeader(label: '개발자 후원'),
             ListTile(
@@ -376,6 +383,9 @@ class _SaveLocationSubScreen extends ConsumerWidget {
 
 // ── 어종 목록 관리 하위 화면 ──────────────────────────────────────
 
+const _fishHdrStyle =
+    TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.grey);
+
 class _FishSpeciesSubScreen extends ConsumerStatefulWidget {
   const _FishSpeciesSubScreen();
 
@@ -420,8 +430,9 @@ class _FishSpeciesSubScreenState extends ConsumerState<_FishSpeciesSubScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final stored =
-        ref.watch(settingsProvider).valueOrNull?.fishSpecies ?? const <String>[];
+    final settings = ref.watch(settingsProvider).valueOrNull;
+    final stored = settings?.fishSpecies ?? const <String>[];
+    final hidden = settings?.hiddenFishSpecies ?? const <String>[];
     final all = [...stored]..sort(); // 가나다순 정렬
     final query = _addCtrl.text.trim();
     final exactExists = query.isNotEmpty && all.contains(query);
@@ -463,6 +474,30 @@ class _FishSpeciesSubScreenState extends ConsumerState<_FishSpeciesSubScreen> {
             ),
           ),
           const Divider(height: 1),
+          // 컬럼 헤더 (순번 / 어종 / 표시여부 / 삭제)
+          Container(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            child: const Row(
+              children: [
+                SizedBox(
+                    width: 36,
+                    child: Text('순번',
+                        textAlign: TextAlign.center, style: _fishHdrStyle)),
+                SizedBox(width: 8),
+                Expanded(child: Text('어종', style: _fishHdrStyle)),
+                SizedBox(
+                    width: 60,
+                    child: Text('표시여부',
+                        textAlign: TextAlign.center, style: _fishHdrStyle)),
+                SizedBox(
+                    width: 44,
+                    child: Text('삭제',
+                        textAlign: TextAlign.center, style: _fishHdrStyle)),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
           Expanded(
             child: filtered.isEmpty
                 ? Center(
@@ -479,28 +514,56 @@ class _FishSpeciesSubScreenState extends ConsumerState<_FishSpeciesSubScreen> {
                         const Divider(height: 1, indent: 16, endIndent: 16),
                     itemBuilder: (_, i) {
                       final s = filtered[i];
-                      return ListTile(
-                        leading: SizedBox(
-                          width: 32,
-                          child: Text(
-                            '${i + 1}',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 13,
-                              color: Theme.of(context)
-                                  .colorScheme
-                                  .onSurface
-                                  .withValues(alpha: 0.5),
+                      final visible = !hidden.contains(s);
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 2),
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 36,
+                              child: Text(
+                                '${i + 1}',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurface
+                                      .withValues(alpha: 0.5),
+                                ),
+                              ),
                             ),
-                          ),
-                        ),
-                        title: Text(s),
-                        trailing: IconButton(
-                          icon: const Icon(Icons.delete_outline, color: Colors.red),
-                          tooltip: '삭제',
-                          onPressed: () => ref
-                              .read(settingsProvider.notifier)
-                              .removeFishSpecies(s),
+                            const SizedBox(width: 8),
+                            Expanded(
+                                child: Text(s,
+                                    style: const TextStyle(fontSize: 15))),
+                            SizedBox(
+                              width: 60,
+                              child: Center(
+                                child: Checkbox(
+                                  value: visible,
+                                  visualDensity: VisualDensity.compact,
+                                  onChanged: (v) => ref
+                                      .read(settingsProvider.notifier)
+                                      .setFishSpeciesVisible(s, v ?? true),
+                                ),
+                              ),
+                            ),
+                            SizedBox(
+                              width: 44,
+                              child: IconButton(
+                                icon: const Icon(Icons.delete_outline,
+                                    color: Colors.red, size: 20),
+                                tooltip: '삭제',
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(),
+                                onPressed: () => ref
+                                    .read(settingsProvider.notifier)
+                                    .removeFishSpecies(s),
+                              ),
+                            ),
+                          ],
                         ),
                       );
                     },

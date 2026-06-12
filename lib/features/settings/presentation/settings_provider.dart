@@ -104,6 +104,14 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     state = AsyncData(updated);
   }
 
+  Future<void> updateShowCatchInput(bool value) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(showCatchInput: value);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
   Future<void> updateShowAddressInMemoName(bool value) async {
     final current = state.valueOrNull;
     if (current == null) return;
@@ -144,7 +152,24 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     if (current == null) return;
     final updated = current.copyWith(
       fishSpecies: current.fishSpecies.where((s) => s != species).toList(),
+      hiddenFishSpecies:
+          current.hiddenFishSpecies.where((s) => s != species).toList(),
     );
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  /// 어종의 메모 드롭다운 표시여부 토글. 탐지(음성/메모)에는 영향 없음.
+  Future<void> setFishSpeciesVisible(String species, bool visible) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final hidden = [...current.hiddenFishSpecies];
+    if (visible) {
+      hidden.remove(species);
+    } else if (!hidden.contains(species)) {
+      hidden.add(species);
+    }
+    final updated = current.copyWith(hiddenFishSpecies: hidden);
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
   }

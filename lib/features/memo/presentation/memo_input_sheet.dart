@@ -280,6 +280,20 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
 
   bool get _isEditMode => widget.blockIndex != null && widget.existingEntry != null;
 
+  /// 수정 중인 기존 메모에 어종/길이가 이미 들어 있는지
+  bool get _existingHasCatch {
+    final e = widget.existingEntry;
+    if (e == null) return false;
+    return (e.fishSpecies != null && e.fishSpecies!.trim().isNotEmpty) ||
+        e.fishLength != null;
+  }
+
+  /// 조과 입력을 다룰지: 설정이 켜져 있거나, 수정 중인 메모에 이미 조과 정보가 있을 때.
+  /// (설정이 꺼져 있어도 기존 조과 메모는 수정 화면에서 보고 편집할 수 있게 함)
+  bool get _catchEnabled =>
+      (ref.read(settingsProvider).valueOrNull?.showCatchInput ?? true) ||
+      _existingHasCatch;
+
   @override
   void initState() {
     super.initState();
@@ -313,21 +327,35 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     }
   }
 
-  /// 메모 텍스트에서 어종·길이를 인식해 각 필드가 비어 있을 때만 자동 채움
+  /// 메모 텍스트에서 어종·길이를 인식해 필드에 반영한다.
+  /// - 작성(추가): 필드가 비어 있을 때만 채움 (AR 측정 길이 등 보존)
+  /// - 수정: 이미 값이 있어도 메모 내용에서 인식되면 그 값으로 업데이트
   void _autoDetectFromText() {
+    // 조과 입력을 다루지 않는 경우(섹션 숨김) 자동 인식하지 않음
+    if (!_catchEnabled) return;
     final text = _textCtrl.text;
+    final overwrite = _isEditMode;
     String? species;
     double? length;
-    if (_fishSpeciesCtrl.text.trim().isEmpty) {
+    if (overwrite || _fishSpeciesCtrl.text.trim().isEmpty) {
       final list =
           ref.read(settingsProvider).valueOrNull?.fishSpecies ?? kCommonFishSpecies;
       species = detectFishSpecies(text, list);
     }
-    if (_fishLengthCtrl.text.trim().isEmpty) length = detectFishLength(text);
-    if ((species != null || length != null) && mounted) {
+    if (overwrite || _fishLengthCtrl.text.trim().isEmpty) {
+      length = detectFishLength(text);
+    }
+    if (!mounted) return;
+    // 인식된 값이 있고 현재 값과 다를 때만 갱신 (텍스트에 없으면 기존 값 유지)
+    final newSpecies =
+        (species != null && species != _fishSpeciesCtrl.text) ? species : null;
+    final lengthStr = length?.toStringAsFixed(1);
+    final newLength =
+        (lengthStr != null && lengthStr != _fishLengthCtrl.text) ? lengthStr : null;
+    if (newSpecies != null || newLength != null) {
       setState(() {
-        if (species != null) _fishSpeciesCtrl.text = species;
-        if (length != null) _fishLengthCtrl.text = length.toStringAsFixed(1);
+        if (newSpecies != null) _fishSpeciesCtrl.text = newSpecies;
+        if (newLength != null) _fishLengthCtrl.text = newLength;
       });
     }
   }
@@ -412,9 +440,13 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
                     const Divider(height: 16),
                     _buildGpsRow(),
                     const Divider(height: 16),
+                    if ((ref.watch(settingsProvider).valueOrNull?.showCatchInput ??
+                            true) ||
+                        _existingHasCatch) ...[
+                      _buildCatchSection(),
+                      const Divider(height: 16),
+                    ],
                     _buildMediaSection(),
-                    const Divider(height: 16),
-                    _buildCatchSection(),
                     const Divider(height: 16),
                     TextField(
                       controller: _textCtrl,
@@ -728,76 +760,57 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
   // ── 조과 (어종/길이) ─────────────────────────────────────
 
   Widget _buildCatchSection() {
+    // 드롭다운은 '표시여부' 체크된 어종만 노출 (탐지는 전체 목록 사용)
     final speciesList = [
-      ...(ref.watch(settingsProvider).valueOrNull?.fishSpecies ?? kCommonFishSpecies)
+      ...(ref.watch(settingsProvider).valueOrNull?.visibleFishSpecies ??
+          kCommonFishSpecies)
     ]..sort(); // 가나다순 정렬
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
+    // 어종(자유 입력 + 드롭다운)과 길이를 한 줄에 배치
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        // 어종: 자유 입력 + 드롭다운 선택 병행
-        Row(children: [
-          const Text('🐟', style: TextStyle(fontSize: 16)),
-          const SizedBox(width: 8),
-          Expanded(
-            child: TextField(
-              controller: _fishSpeciesCtrl,
-              decoration: const InputDecoration(
-                labelText: '어종',
-                hintText: '직접 입력 또는 ▼ 선택',
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                border: OutlineInputBorder(),
-              ),
-              style: const TextStyle(fontSize: 13),
+        const Text('🐟', style: TextStyle(fontSize: 16)),
+        const SizedBox(width: 8),
+        Expanded(
+          child: TextField(
+            controller: _fishSpeciesCtrl,
+            decoration: const InputDecoration(
+              labelText: '어종',
+              hintText: '입력 또는 ▼',
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              border: OutlineInputBorder(),
             ),
+            style: const TextStyle(fontSize: 13),
           ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.arrow_drop_down, size: 24),
-            tooltip: '어종 선택',
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            onSelected: (v) => setState(() => _fishSpeciesCtrl.text = v),
-            itemBuilder: (_) => speciesList
-                .map((s) => PopupMenuItem<String>(value: s, child: Text(s)))
-                .toList(),
-          ),
-          IconButton(
-            icon: const Icon(Icons.close, size: 18),
-            tooltip: '어종 삭제',
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            onPressed: _fishSpeciesCtrl.clear,
-          ),
-        ]),
-        const SizedBox(height: 8),
-        // 길이
-        Row(children: [
-          const SizedBox(width: 24),
-          const Text('📏', style: TextStyle(fontSize: 16)),
-          const SizedBox(width: 8),
-          SizedBox(
-            width: 100,
-            child: TextField(
-              controller: _fishLengthCtrl,
-              keyboardType: const TextInputType.numberWithOptions(decimal: true),
-              decoration: const InputDecoration(
-                labelText: '길이 (cm)',
-                isDense: true,
-                contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                border: OutlineInputBorder(),
-              ),
-              style: const TextStyle(fontSize: 13),
+        ),
+        PopupMenuButton<String>(
+          icon: const Icon(Icons.arrow_drop_down, size: 24),
+          tooltip: '어종 선택',
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+          onSelected: (v) => setState(() => _fishSpeciesCtrl.text = v),
+          itemBuilder: (_) => speciesList
+              .map((s) => PopupMenuItem<String>(value: s, child: Text(s)))
+              .toList(),
+        ),
+        const SizedBox(width: 4),
+        const Text('📏', style: TextStyle(fontSize: 16)),
+        const SizedBox(width: 6),
+        SizedBox(
+          width: 96,
+          child: TextField(
+            controller: _fishLengthCtrl,
+            keyboardType: const TextInputType.numberWithOptions(decimal: true),
+            decoration: const InputDecoration(
+              labelText: '길이(cm)',
+              isDense: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+              border: OutlineInputBorder(),
             ),
+            style: const TextStyle(fontSize: 13),
           ),
-          const SizedBox(width: 4),
-          IconButton(
-            icon: const Icon(Icons.close, size: 18),
-            tooltip: '길이 삭제',
-            padding: EdgeInsets.zero,
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            onPressed: _fishLengthCtrl.clear,
-          ),
-        ]),
+        ),
       ],
     );
   }
@@ -824,8 +837,10 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
 
   Future<void> _save() async {
     final text = _textCtrl.text.trim();
-    final hasCatchInfo = _fishSpeciesCtrl.text.trim().isNotEmpty ||
-        _fishLengthCtrl.text.trim().isNotEmpty;
+    final showCatch = _catchEnabled;
+    final hasCatchInfo = showCatch &&
+        (_fishSpeciesCtrl.text.trim().isNotEmpty ||
+            _fishLengthCtrl.text.trim().isNotEmpty);
     if (text.isEmpty && _photoPath == null && _videoPath == null && !hasCatchInfo) {
       Navigator.of(context).pop();
       return;
@@ -843,20 +858,24 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
         setState(() => _saving = false);
         return;
       }
-      final fishLengthText = _fishLengthCtrl.text.trim();
-      // 길이가 비어 있으면 메모 텍스트에서 자동 탐지
-      final fishLength = fishLengthText.isEmpty
-          ? detectFishLength(text)
-          : double.tryParse(fishLengthText);
-      final speciesList =
-          ref.read(settingsProvider).valueOrNull?.fishSpecies ?? kCommonFishSpecies;
-      final speciesText = _fishSpeciesCtrl.text.trim();
-      // 어종이 비어 있으면 메모 텍스트에서 자동 탐지
-      final fishSpecies =
-          speciesText.isEmpty ? detectFishSpecies(text, speciesList) : speciesText;
-      // 직접 입력한 새 어종은 목록에 자동 추가 (중복은 무시됨)
-      if (fishSpecies != null && fishSpecies.isNotEmpty) {
-        await ref.read(settingsProvider.notifier).addFishSpecies(fishSpecies);
+      double? fishLength;
+      String? fishSpecies;
+      if (showCatch) {
+        final fishLengthText = _fishLengthCtrl.text.trim();
+        // 길이가 비어 있으면 메모 텍스트에서 자동 탐지
+        fishLength = fishLengthText.isEmpty
+            ? detectFishLength(text)
+            : double.tryParse(fishLengthText);
+        final speciesList =
+            ref.read(settingsProvider).valueOrNull?.fishSpecies ?? kCommonFishSpecies;
+        final speciesText = _fishSpeciesCtrl.text.trim();
+        // 어종이 비어 있으면 메모 텍스트에서 자동 탐지
+        fishSpecies =
+            speciesText.isEmpty ? detectFishSpecies(text, speciesList) : speciesText;
+        // 직접 입력한 새 어종은 목록에 자동 추가 (중복은 무시됨)
+        if (fishSpecies != null && fishSpecies.isNotEmpty) {
+          await ref.read(settingsProvider.notifier).addFishSpecies(fishSpecies);
+        }
       }
 
       final entry = MemoEntry(

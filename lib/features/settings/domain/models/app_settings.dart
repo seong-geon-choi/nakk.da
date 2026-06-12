@@ -166,6 +166,7 @@ class AppSettings {
   final bool showLocationButton;
   final bool autoSaveVoice;
   final bool showAddressInMemoName;
+  final bool showCatchInput; // 메모 작성 시 어종·길이 입력 항목 표시 여부
   final String? khoaApiKey;
   final WatermarkSettings watermark;
   final bool showTrackingButton;
@@ -177,8 +178,14 @@ class AppSettings {
   final DateTime? lastSyncAt;
   final bool? lastSyncSuccess;
   final List<String> fishSpecies; // 어종 입력 목록 (사용자 편집 가능)
+  final List<String> hiddenFishSpecies; // 메모 드롭다운에서 숨길(체크 해제) 어종
 
   bool get needsFolderSetup => savePath.isEmpty;
+
+  /// 메모 작성 드롭다운에 노출할 어종 (숨김 제외).
+  /// 주의: 음성/메모 텍스트 어종 탐지는 항상 전체 [fishSpecies]를 사용한다.
+  List<String> get visibleFishSpecies =>
+      fishSpecies.where((s) => !hiddenFishSpecies.contains(s)).toList();
 
   AppSettings({
     required this.savePath,
@@ -187,6 +194,7 @@ class AppSettings {
     this.showLocationButton = true,
     this.autoSaveVoice = true,
     this.showAddressInMemoName = true,
+    this.showCatchInput = true,
     this.khoaApiKey,
     WatermarkSettings? watermark,
     this.showTrackingButton = true,
@@ -198,8 +206,10 @@ class AppSettings {
     this.lastSyncAt,
     this.lastSyncSuccess,
     List<String>? fishSpecies,
+    List<String>? hiddenFishSpecies,
   })  : watermark = watermark ?? WatermarkSettings(),
-        fishSpecies = fishSpecies ?? kCommonFishSpecies;
+        fishSpecies = fishSpecies ?? kCommonFishSpecies,
+        hiddenFishSpecies = hiddenFishSpecies ?? const [];
 
   String get effectiveKhoaApiKey {
     final key = khoaApiKey?.trim();
@@ -213,6 +223,7 @@ class AppSettings {
     bool? showLocationButton,
     bool? autoSaveVoice,
     bool? showAddressInMemoName,
+    bool? showCatchInput,
     String? khoaApiKey,
     bool clearKhoaApiKey = false,
     WatermarkSettings? watermark,
@@ -226,6 +237,7 @@ class AppSettings {
     bool? lastSyncSuccess,
     bool clearLastSync = false,
     List<String>? fishSpecies,
+    List<String>? hiddenFishSpecies,
   }) {
     return AppSettings(
       savePath: savePath ?? this.savePath,
@@ -234,6 +246,7 @@ class AppSettings {
       showLocationButton: showLocationButton ?? this.showLocationButton,
       autoSaveVoice: autoSaveVoice ?? this.autoSaveVoice,
       showAddressInMemoName: showAddressInMemoName ?? this.showAddressInMemoName,
+      showCatchInput: showCatchInput ?? this.showCatchInput,
       khoaApiKey: clearKhoaApiKey ? null : (khoaApiKey ?? this.khoaApiKey),
       watermark: watermark ?? this.watermark,
       showTrackingButton: showTrackingButton ?? this.showTrackingButton,
@@ -245,6 +258,7 @@ class AppSettings {
       lastSyncAt: clearLastSync ? null : (lastSyncAt ?? this.lastSyncAt),
       lastSyncSuccess: clearLastSync ? null : (lastSyncSuccess ?? this.lastSyncSuccess),
       fishSpecies: fishSpecies ?? this.fishSpecies,
+      hiddenFishSpecies: hiddenFishSpecies ?? this.hiddenFishSpecies,
     );
   }
 }

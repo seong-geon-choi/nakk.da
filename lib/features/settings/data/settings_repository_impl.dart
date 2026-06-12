@@ -11,6 +11,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _showLocationButtonKey = 'show_location_button';
   static const _autoSaveVoiceKey = 'auto_save_voice';
   static const _showAddressInMemoNameKey = 'show_address_in_memo_name';
+  static const _showCatchInputKey = 'show_catch_input';
   static const _khoaApiKeyKey = 'khoa_api_key';
   static const _watermarkKey = 'watermark_settings';
   static const _showTrackingButtonKey = 'show_tracking_button';
@@ -22,6 +23,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _lastSyncAtKey = 'last_sync_at';
   static const _lastSyncSuccessKey = 'last_sync_success';
   static const _fishSpeciesKey = 'fish_species';
+  static const _hiddenFishSpeciesKey = 'hidden_fish_species';
 
   static const defaultMemoDisplayPath = '/storage/emulated/0/Documents/nakkda';
 
@@ -37,6 +39,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final showLocationButton = prefs.getBool(_showLocationButtonKey) ?? true;
     final autoSaveVoice = prefs.getBool(_autoSaveVoiceKey) ?? true;
     final showAddressInMemoName = prefs.getBool(_showAddressInMemoNameKey) ?? true;
+    final showCatchInput = prefs.getBool(_showCatchInputKey) ?? true;
     final khoaApiKey = prefs.getString(_khoaApiKeyKey);
     final wmJson = prefs.getString(_watermarkKey);
     final watermark = wmJson != null
@@ -58,6 +61,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
         : null;
     final lastSyncSuccessRaw = prefs.getBool(_lastSyncSuccessKey);
     final fishSpecies = prefs.getStringList(_fishSpeciesKey);
+    final hiddenFishSpecies = prefs.getStringList(_hiddenFishSpeciesKey) ?? const [];
 
     return AppSettings(
       savePath: saveUri,
@@ -66,6 +70,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       showLocationButton: showLocationButton,
       autoSaveVoice: autoSaveVoice,
       showAddressInMemoName: showAddressInMemoName,
+      showCatchInput: showCatchInput,
       khoaApiKey: khoaApiKey,
       watermark: watermark,
       showTrackingButton: showTrackingButton,
@@ -77,6 +82,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       lastSyncAt: lastSyncAt,
       lastSyncSuccess: lastSyncSuccessRaw,
       fishSpecies: fishSpecies, // null이면 AppSettings 기본값(kCommonFishSpecies)
+      hiddenFishSpecies: hiddenFishSpecies,
     );
   }
 
@@ -89,6 +95,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setBool(_showLocationButtonKey, settings.showLocationButton);
     await prefs.setBool(_autoSaveVoiceKey, settings.autoSaveVoice);
     await prefs.setBool(_showAddressInMemoNameKey, settings.showAddressInMemoName);
+    await prefs.setBool(_showCatchInputKey, settings.showCatchInput);
     if (settings.khoaApiKey != null) {
       await prefs.setString(_khoaApiKeyKey, settings.khoaApiKey!);
     } else {
@@ -112,6 +119,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       await prefs.remove(_lastSyncSuccessKey);
     }
     await prefs.setStringList(_fishSpeciesKey, settings.fishSpecies);
+    await prefs.setStringList(_hiddenFishSpeciesKey, settings.hiddenFishSpecies);
   }
 
   Future<String> _defaultPhotoSavePath() async {
