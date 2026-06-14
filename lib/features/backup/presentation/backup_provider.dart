@@ -129,35 +129,62 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
 
       // 전체 파일 목록을 먼저 수집해서 total 확정
       final filenames = await _listMdFiles(savePath);
+
+      // md 내용을 먼저 모두 읽어 외부 참조 사진(절대경로)을 수집
+      final mdEntries = <({String filename, String content, int size})>[];
+      final externalPhotos = <String, String>{}; // basename → 절대경로
+      for (final filename in filenames) {
+        final content = await _read(savePath, filename);
+        if (content == null) continue;
+        mdEntries.add((
+          filename: filename,
+          content: content,
+          size: utf8.encode(content).length,
+        ));
+        if (settings.driveBackupIncludeMedia) {
+          for (final p in externalPhotoPaths(content)) {
+            externalPhotos.putIfAbsent(p.split('/').last, () => p);
+          }
+        }
+      }
+
       final mediaFiles = settings.driveBackupIncludeMedia
           ? await _listMediaFiles(savePath)
           : <String>[];
-      final total = filenames.length + mediaFiles.length;
+      // 실제로 존재하는 외부 사진만 업로드 대상
+      final externalList = <({String name, String path})>[
+        if (settings.driveBackupIncludeMedia)
+          for (final e in externalPhotos.entries)
+            if (File(e.value).existsSync()) (name: e.key, path: e.value),
+      ];
+
+      final total = mdEntries.length + mediaFiles.length + externalList.length;
       int done = 0;
       progress.state = (done, total);
 
-      // 로컬 매니페스트 + Drive 파일 ID 맵 (한 번의 API 호출로 수집)
+      // 로컬 매니페스트 + Drive 실제 파일 목록 (스킵 판단의 진실 원천)
+      // 매니페스트는 최적화 캐시일 뿐, Drive에 실제로 존재하는지로 재업로드 결정
+      // → 사용자가 Drive에서 직접 지운 파일도 다시 올림
       final manifest = await _loadManifest();
       final driveFiles = await svc.listMdFiles();
       final driveIdMap = {for (final f in driveFiles) f.name: f.id};
+      final driveMediaSet = settings.driveBackupIncludeMedia
+          ? (await svc.listMediaFiles()).map((f) => f.name).toSet()
+          : <String>{};
 
       int succeeded = 0;
       int skipped = 0;
 
-      // 업로드 대상 수집 (순차 읽기)
+      // 업로드 대상 수집 (이미 읽어둔 내용 사용)
       final toUpload = <({String filename, String content, int size})>[];
-      for (final filename in filenames) {
-        final content = await _read(savePath, filename);
-        if (content == null) {
-          progress.state = (++done, total);
-          continue;
-        }
-        final localSize = utf8.encode(content).length;
-        if (manifest[filename] == localSize) {
+      for (final item in mdEntries) {
+        // 매니페스트 크기가 같아도 Drive에 실제로 있어야 스킵
+        if (manifest[item.filename] == item.size &&
+            driveIdMap.containsKey(item.filename)) {
           skipped++;
           progress.state = (++done, total);
         } else {
-          toUpload.add((filename: filename, content: content, size: localSize));
+          toUpload.add(item);
         }
       }
 
@@ -175,9 +202,9 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
         }));
       }
 
-      // 미디어 파일 백업 — 사진은 불변이므로 매니페스트에 있으면 스킵
+      // 미디어 파일 백업 — 매니페스트에 있고 Drive에도 실제로 있을 때만 스킵
       for (final filename in mediaFiles) {
-        if (manifest.containsKey(filename)) {
+        if (manifest.containsKey(filename) && driveMediaSet.contains(filename)) {
           skipped++;
           progress.state = (++done, total);
           continue;
@@ -188,6 +215,24 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
             final mimeType = filename.endsWith('.mp4') ? 'video/mp4' : 'image/jpeg';
             await svc.syncMediaBytes(filename, bytes, mimeType);
             manifest[filename] = bytes.length;
+            succeeded++;
+          }
+        } catch (_) {}
+        progress.state = (++done, total);
+      }
+
+      // 외부 참조 사진 백업 — basename 키로 업로드 (복원 시 _writeMedia가 photos/로 받음)
+      for (final ext in externalList) {
+        if (manifest.containsKey(ext.name) && driveMediaSet.contains(ext.name)) {
+          skipped++;
+          progress.state = (++done, total);
+          continue;
+        }
+        try {
+          final bytes = await File(ext.path).readAsBytes();
+          if (bytes.isNotEmpty) {
+            await svc.syncMediaBytes(ext.name, bytes, 'image/jpeg');
+            manifest[ext.name] = bytes.length;
             succeeded++;
           }
         } catch (_) {}
@@ -212,6 +257,18 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
         .where((f) => f.path.endsWith('.md'))
         .map((f) => f.path.split('/').last)
         .toList();
+  }
+
+  // .md 본문에서 외부 참조 사진(절대경로)만 추출.
+  // photos/ 상대경로·content:// 동영상은 제외 (절대경로 '/'로 시작하는 것만).
+  static final _photoRe = RegExp(r'!\[\]\((.+?)\)');
+  static List<String> externalPhotoPaths(String content) {
+    final out = <String>[];
+    for (final m in _photoRe.allMatches(content)) {
+      final p = m.group(1)!;
+      if (p.startsWith('/')) out.add(p);
+    }
+    return out;
   }
 
   Future<List<String>> _listMediaFiles(String savePath) async {

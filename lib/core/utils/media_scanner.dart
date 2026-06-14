@@ -63,7 +63,7 @@ Future<({String path, bool isVideo, double? lat, double? lng})?> pickGalleryMedi
 }
 
 /// 특정 날짜에 촬영된 갤러리 사진 목록을 반환 (GPS 포함, 복사 없음).
-Future<List<({String contentUri, DateTime timestamp, double? lat, double? lng})>>
+Future<List<({String contentUri, String? path, DateTime timestamp, double? lat, double? lng})>>
     scanGalleryPhotosByDate(DateTime date) async {
   await Permission.accessMediaLocation.request();
   try {
@@ -77,6 +77,7 @@ Future<List<({String contentUri, DateTime timestamp, double? lat, double? lng})>
       final m = Map<String, dynamic>.from(item as Map);
       return (
         contentUri: m['contentUri'] as String,
+        path: m['path'] as String?,
         timestamp: DateTime.fromMillisecondsSinceEpoch((m['dateTaken'] as num).toInt()),
         lat: (m['lat'] as num?)?.toDouble(),
         lng: (m['lng'] as num?)?.toDouble(),

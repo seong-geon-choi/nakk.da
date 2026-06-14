@@ -15,6 +15,7 @@ import '../../features/memo/domain/models/memo_entry.dart';
 import '../../features/memo/domain/models/day_file.dart';
 import '../../features/location/domain/models/location_status.dart';
 import '../../features/memo/presentation/memo_provider.dart';
+import '../../features/backup/presentation/backup_provider.dart';
 import '../../features/memo/presentation/memo_input_sheet.dart';
 import '../../features/memo/presentation/location_edit_sheet.dart';
 import '../../features/settings/presentation/settings_provider.dart';
@@ -390,20 +391,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         continue;
       }
       final ts = photo.timestamp.millisecondsSinceEpoch;
-      final cachePath = await copyContentUriToCache(photo.contentUri);
-      if (cachePath != null) {
-        final ext = cachePath.contains('.') ? cachePath.split('.').last.toLowerCase() : 'jpg';
-        final dest = await MemoInputSheet.copyGalleryPhoto(
-          cachePath, savePath,
-          filenameOverride: 'import_${ts}_$i.$ext',
-        );
-        if (dest != null) {
-          entries.add(MemoEntry(
-            timestamp: photo.timestamp,
-            latitude: photo.lat,
-            longitude: photo.lng,
-            photoPath: dest,
-          ));
+      final originPath = photo.path;
+      if (originPath != null && originPath.isNotEmpty) {
+        // 갤러리 원본 경로 직접 참조 (복사 없음 — 단건 추가와 동일 방식)
+        entries.add(MemoEntry(
+          timestamp: photo.timestamp,
+          latitude: photo.lat,
+          longitude: photo.lng,
+          photoPath: originPath,
+        ));
+      } else {
+        // 절대경로를 얻지 못한 경우에만 photos/로 복사 (폴백)
+        final cachePath = await copyContentUriToCache(photo.contentUri);
+        if (cachePath != null) {
+          final ext = cachePath.contains('.') ? cachePath.split('.').last.toLowerCase() : 'jpg';
+          final dest = await MemoInputSheet.copyGalleryPhoto(
+            cachePath, savePath,
+            filenameOverride: 'import_${ts}_$i.$ext',
+          );
+          if (dest != null) {
+            entries.add(MemoEntry(
+              timestamp: photo.timestamp,
+              latitude: photo.lat,
+              longitude: photo.lng,
+              photoPath: dest,
+            ));
+          }
         }
       }
       progress.value = i + 1;
@@ -415,6 +428,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       final today = DateTime.now();
       if (date.year == today.year && date.month == today.month && date.day == today.day) {
         ref.invalidate(todayFileProvider);
+      }
+      // 백업 동기화 — 단건 추가와 동일하게 md 1회 + 사진별 1회 (백그라운드)
+      final backup = ref.read(backupProvider.notifier);
+      unawaited(backup.syncMdFile(date, savePath));
+      for (final entry in entries) {
+        if (entry.photoPath != null) {
+          unawaited(backup.syncMediaFile(entry.photoPath!));
+        }
       }
     }
 
@@ -437,6 +458,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
       final m = date.month.toString().padLeft(2, '0');
       final d = date.day.toString().padLeft(2, '0');
       final filePath = '$savePath/$y-$m-$d.md';
+      // 해당 날짜 메모를 이전에 연 적 있으면 provider에 캐시가 남아
+      // 추가된 사진이 안 보임 → 이동 전 무효화해 디스크에서 다시 읽도록 함
+      ref.invalidate(dayFileProvider(filePath));
       context.push('${AppRoutes.fileList}/${Uri.encodeComponent(filePath)}?name=${Uri.encodeComponent('$y-$m-$d')}');
     }
   }
@@ -900,17 +924,34 @@ class _ActionBar extends StatelessWidget {
 
 // ── 드래그 가능한 위치 추가 FAB ──────────────────────────────
 
-class _LocationFab extends StatefulWidget {
+class _LocationFab extends ConsumerStatefulWidget {
   final VoidCallback onTap;
   const _LocationFab({required this.onTap});
 
   @override
-  State<_LocationFab> createState() => _LocationFabState();
+  ConsumerState<_LocationFab> createState() => _LocationFabState();
 }
 
-class _LocationFabState extends State<_LocationFab> {
+class _LocationFabState extends ConsumerState<_LocationFab> {
   double _right = 16;
   double _bottom = 100;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPosition();
+  }
+
+  Future<void> _loadPosition() async {
+    try {
+      final s = await ref.read(settingsProvider.future);
+      if (!mounted) return;
+      setState(() {
+        _right = s.locationFabRight;
+        _bottom = s.locationFabBottom;
+      });
+    } catch (_) {/* 설정 로드 실패 시 기본 위치 유지 */}
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -925,6 +966,11 @@ class _LocationFabState extends State<_LocationFab> {
             _right -= details.delta.dx;
             _bottom -= details.delta.dy;
           });
+        },
+        onPanEnd: (_) {
+          ref
+              .read(settingsProvider.notifier)
+              .updateLocationFabPosition(_right, _bottom);
         },
         child: Container(
           width: 60,
@@ -1004,8 +1050,20 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     _refreshStatus();
+    _loadPosition();
     // 메모 저장 등으로 todayFileProvider가 갱신될 때 트래킹 카운트도 재조회
     ref.listenManual(todayFileProvider, (_, _) => _refreshCount());
+  }
+
+  Future<void> _loadPosition() async {
+    try {
+      final s = await ref.read(settingsProvider.future);
+      if (!mounted) return;
+      setState(() {
+        _right = s.trackingFabRight;
+        _bottom = s.trackingFabBottom;
+      });
+    } catch (_) {/* 설정 로드 실패 시 기본 위치 유지 */}
   }
 
   @override
@@ -1155,6 +1213,11 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
             _right -= details.delta.dx;
             _bottom -= details.delta.dy;
           });
+        },
+        onPanEnd: (_) {
+          ref
+              .read(settingsProvider.notifier)
+              .updateTrackingFabPosition(_right, _bottom);
         },
         child: Container(
           width: 60,

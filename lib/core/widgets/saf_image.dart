@@ -31,8 +31,18 @@ class _SafImageState extends State<SafImage> {
   Uint8List? _bytes;
   bool _loading = false;
 
+  // 절대경로 원본이 사라진 경우(예: 다른 기기로 백업 복원 — 원본 갤러리 파일 없음)
+  // 백업이 photos/로 받아둔 사본을 가리키도록 폴백
+  String get _effectivePath {
+    final p = widget.photoPath;
+    if (SafImage.isAbsolute(p) && !File(p).existsSync()) {
+      return 'photos/${p.split('/').last}';
+    }
+    return p;
+  }
+
   bool get _needsSaf =>
-      !SafImage.isAbsolute(widget.photoPath) &&
+      !SafImage.isAbsolute(_effectivePath) &&
       SafService.isSafUri(widget.savePath);
 
   @override
@@ -55,7 +65,7 @@ class _SafImageState extends State<SafImage> {
   Future<void> _loadBytes() async {
     setState(() => _loading = true);
     try {
-      final b = await SafService().readSafImage(widget.savePath, widget.photoPath);
+      final b = await SafService().readSafImage(widget.savePath, _effectivePath);
       if (mounted) setState(() { _bytes = b; _loading = false; });
     } catch (_) {
       if (mounted) setState(() { _loading = false; });
@@ -77,9 +87,9 @@ class _SafImageState extends State<SafImage> {
       }
     } else {
       // 로컬 경로: 절대 경로거나 로컬 savePath 기반 상대 경로
-      final resolved = SafImage.isAbsolute(widget.photoPath)
-          ? widget.photoPath
-          : '${widget.savePath}/${widget.photoPath}';
+      final resolved = SafImage.isAbsolute(_effectivePath)
+          ? _effectivePath
+          : '${widget.savePath}/$_effectivePath';
       final file = File(resolved);
       img = file.existsSync()
           ? Image.file(file, height: h, width: double.infinity, fit: widget.fit)

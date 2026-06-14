@@ -62,6 +62,32 @@ void main() {
       expect(loaded.showLocationButton, true);
     });
 
+    test('FAB 위치 기본값은 location(16,100)/tracking(16,172)', () async {
+      final settings = await repository.load();
+      expect(settings.locationFabRight, 16);
+      expect(settings.locationFabBottom, 100);
+      expect(settings.trackingFabRight, 16);
+      expect(settings.trackingFabBottom, 172);
+    });
+
+    test('FAB 위치 저장 후 load()에서 동일 값 반환', () async {
+      final initial = AppSettings(
+        savePath: defaultPath,
+        photoSavePath: '/test/photos',
+        locationFabRight: 40,
+        locationFabBottom: 220,
+        trackingFabRight: 90,
+        trackingFabBottom: 300,
+      );
+      await repository.save(initial);
+
+      final loaded = await repository.load();
+      expect(loaded.locationFabRight, 40);
+      expect(loaded.locationFabBottom, 220);
+      expect(loaded.trackingFabRight, 90);
+      expect(loaded.trackingFabBottom, 300);
+    });
+
     test('fishSpecies 저장 후 load()에서 동일 목록 반환', () async {
       final initial = AppSettings(
         savePath: defaultPath,

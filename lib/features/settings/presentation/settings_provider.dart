@@ -218,6 +218,24 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     state = AsyncData(updated);
   }
 
+  Future<void> updateLocationFabPosition(double right, double bottom) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated =
+        current.copyWith(locationFabRight: right, locationFabBottom: bottom);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  Future<void> updateTrackingFabPosition(double right, double bottom) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated =
+        current.copyWith(trackingFabRight: right, trackingFabBottom: bottom);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
   Future<void> updateKhoaApiKey(String? key) async {
     final current = state.valueOrNull;
     if (current == null) return;

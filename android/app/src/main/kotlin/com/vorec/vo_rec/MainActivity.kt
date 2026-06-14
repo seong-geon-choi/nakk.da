@@ -201,7 +201,7 @@ class MainActivity : FlutterActivity() {
                     val items = mutableListOf<Map<String, Any?>>()
                     contentResolver.query(
                         MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                        arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_TAKEN),
+                        arrayOf(MediaStore.Images.Media._ID, MediaStore.Images.Media.DATE_TAKEN, MediaStore.Images.Media.DATA),
                         "${MediaStore.Images.Media.DATE_TAKEN} BETWEEN ? AND ?",
                         arrayOf(startMs.toString(), endMs.toString()),
                         "${MediaStore.Images.Media.DATE_TAKEN} ASC"
@@ -209,10 +209,12 @@ class MainActivity : FlutterActivity() {
                         android.util.Log.d("ScanPhotos", "matched=${cursor.count}")
                         val idCol = cursor.getColumnIndex(MediaStore.Images.Media._ID)
                         val dtCol = cursor.getColumnIndex(MediaStore.Images.Media.DATE_TAKEN)
+                        val dataCol = cursor.getColumnIndex(MediaStore.Images.Media.DATA)
                         while (cursor.moveToNext()) {
                             val id = cursor.getLong(idCol)
                             val dateTaken = cursor.getLong(dtCol)
                             if (dateTaken == 0L) continue
+                            val filePath = if (dataCol >= 0) cursor.getString(dataCol) else null
                             val contentUri = android.content.ContentUris.withAppendedId(
                                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id)
                             var gpsLat: Double? = null; var gpsLng: Double? = null
@@ -233,7 +235,7 @@ class MainActivity : FlutterActivity() {
                                     }
                                 }
                             } catch (_: Exception) {}
-                            items.add(mapOf("contentUri" to contentUri.toString(), "dateTaken" to dateTaken, "lat" to gpsLat, "lng" to gpsLng))
+                            items.add(mapOf("contentUri" to contentUri.toString(), "path" to filePath, "dateTaken" to dateTaken, "lat" to gpsLat, "lng" to gpsLng))
                         }
                     }
                     android.util.Log.d("ScanPhotos", "result=${items.size}")

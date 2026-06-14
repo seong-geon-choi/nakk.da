@@ -24,6 +24,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _lastSyncSuccessKey = 'last_sync_success';
   static const _fishSpeciesKey = 'fish_species';
   static const _hiddenFishSpeciesKey = 'hidden_fish_species';
+  static const _locationFabRightKey = 'location_fab_right';
+  static const _locationFabBottomKey = 'location_fab_bottom';
+  static const _trackingFabRightKey = 'tracking_fab_right';
+  static const _trackingFabBottomKey = 'tracking_fab_bottom';
 
   static const defaultMemoDisplayPath = '/storage/emulated/0/Documents/nakkda';
 
@@ -62,6 +66,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final lastSyncSuccessRaw = prefs.getBool(_lastSyncSuccessKey);
     final fishSpecies = prefs.getStringList(_fishSpeciesKey);
     final hiddenFishSpecies = prefs.getStringList(_hiddenFishSpeciesKey) ?? const [];
+    final locationFabRight = prefs.getDouble(_locationFabRightKey) ?? 16;
+    final locationFabBottom = prefs.getDouble(_locationFabBottomKey) ?? 100;
+    final trackingFabRight = prefs.getDouble(_trackingFabRightKey) ?? 16;
+    final trackingFabBottom = prefs.getDouble(_trackingFabBottomKey) ?? 172;
 
     return AppSettings(
       savePath: saveUri,
@@ -83,6 +91,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
       lastSyncSuccess: lastSyncSuccessRaw,
       fishSpecies: fishSpecies, // null이면 AppSettings 기본값(kCommonFishSpecies)
       hiddenFishSpecies: hiddenFishSpecies,
+      locationFabRight: locationFabRight,
+      locationFabBottom: locationFabBottom,
+      trackingFabRight: trackingFabRight,
+      trackingFabBottom: trackingFabBottom,
     );
   }
 
@@ -120,6 +132,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
     }
     await prefs.setStringList(_fishSpeciesKey, settings.fishSpecies);
     await prefs.setStringList(_hiddenFishSpeciesKey, settings.hiddenFishSpecies);
+    await prefs.setDouble(_locationFabRightKey, settings.locationFabRight);
+    await prefs.setDouble(_locationFabBottomKey, settings.locationFabBottom);
+    await prefs.setDouble(_trackingFabRightKey, settings.trackingFabRight);
+    await prefs.setDouble(_trackingFabBottomKey, settings.trackingFabBottom);
   }
 
   Future<String> _defaultPhotoSavePath() async {

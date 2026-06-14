@@ -179,6 +179,10 @@ class AppSettings {
   final bool? lastSyncSuccess;
   final List<String> fishSpecies; // 어종 입력 목록 (사용자 편집 가능)
   final List<String> hiddenFishSpecies; // 메모 드롭다운에서 숨길(체크 해제) 어종
+  final double locationFabRight;  // 홈 '환경 추가' FAB 위치 (right)
+  final double locationFabBottom; // 홈 '환경 추가' FAB 위치 (bottom)
+  final double trackingFabRight;  // 홈 트래킹 FAB 위치 (right)
+  final double trackingFabBottom; // 홈 트래킹 FAB 위치 (bottom)
 
   bool get needsFolderSetup => savePath.isEmpty;
 
@@ -207,6 +211,10 @@ class AppSettings {
     this.lastSyncSuccess,
     List<String>? fishSpecies,
     List<String>? hiddenFishSpecies,
+    this.locationFabRight = 16,
+    this.locationFabBottom = 100,
+    this.trackingFabRight = 16,
+    this.trackingFabBottom = 172,
   })  : watermark = watermark ?? WatermarkSettings(),
         fishSpecies = fishSpecies ?? kCommonFishSpecies,
         hiddenFishSpecies = hiddenFishSpecies ?? const [];
@@ -238,6 +246,10 @@ class AppSettings {
     bool clearLastSync = false,
     List<String>? fishSpecies,
     List<String>? hiddenFishSpecies,
+    double? locationFabRight,
+    double? locationFabBottom,
+    double? trackingFabRight,
+    double? trackingFabBottom,
   }) {
     return AppSettings(
       savePath: savePath ?? this.savePath,
@@ -259,6 +271,10 @@ class AppSettings {
       lastSyncSuccess: clearLastSync ? null : (lastSyncSuccess ?? this.lastSyncSuccess),
       fishSpecies: fishSpecies ?? this.fishSpecies,
       hiddenFishSpecies: hiddenFishSpecies ?? this.hiddenFishSpecies,
+      locationFabRight: locationFabRight ?? this.locationFabRight,
+      locationFabBottom: locationFabBottom ?? this.locationFabBottom,
+      trackingFabRight: trackingFabRight ?? this.trackingFabRight,
+      trackingFabBottom: trackingFabBottom ?? this.trackingFabBottom,
     );
   }
 }

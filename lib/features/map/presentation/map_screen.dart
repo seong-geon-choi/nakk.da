@@ -163,6 +163,21 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     return dates;
   }
 
+  // 현재 표시 중인 날짜의 메모를 디스크에서 다시 읽어옴
+  Future<void> _reloadCurrentDate() async {
+    final settings = await ref.read(settingsProvider.future);
+    if (settings.savePath.isEmpty) return;
+    final date = _loadedDate;
+    final repo = ref.read(memoRepositoryProvider);
+    final dayFile = await repo.loadDayFile(date, settings.savePath);
+    if (!mounted) return;
+    _applyBlocks(dayFile?.blocks ?? [], date);
+    final pts = dayFile?.trackPoints ?? [];
+    pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    setState(() => _trackPoints = pts);
+    _showToastMessage('새로고침 완료');
+  }
+
   Future<void> _pickDate() async {
     final settings = await ref.read(settingsProvider.future);
     final markedDates = await _loadExistingDates(settings.savePath);
@@ -661,6 +676,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     _toolBtn(Icons.calendar_today_outlined, null, _pickDate),
+                    _divider(),
+                    _toolBtn(Icons.refresh, null, _reloadCurrentDate),
                     _divider(),
                     _toolBtn(Icons.my_location, null, _moveToCurrentLocation),
                     _divider(),
