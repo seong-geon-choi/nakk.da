@@ -40,6 +40,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   Timer? _noGpsTimer;
   bool _dismissedNoGpsCard = false;
   DateTime _loadedDate = DateTime.now();
+  int _reloadSeq = 0; // 같은 날짜 새로고침에도 맵을 remount시켜 initialCameraFit 재적용
   MapController _mapController = MapController();
   double _zoom = 14;
   String _savePath = '';
@@ -73,7 +74,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
-  void _applyBlocks(List<dynamic> blocks, DateTime date) {
+  void _applyBlocks(List<dynamic> blocks, DateTime date,
+      {bool resetToggles = true, bool keepCamera = false}) {
     final pts = <_GpsPoint>[];
     for (final b in blocks) {
       if (b is MemoEntry && b.hasGps) pts.add(_GpsPoint.fromMemo(b));
@@ -87,14 +89,20 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       _points = pts;
       _trackPoints = [];
       _selected = null;
-      _showLines = false;
-      _showTimes = false;
-      _showDistances = false;
-      _showTrack = false;
+      if (resetToggles) {
+        _showLines = false;
+        _showTimes = false;
+        _showDistances = false;
+        _showTrack = false;
+      }
       _dismissedNoGpsCard = false;
       _loadedDate = date;
-      _mapController = MapController();
-      _zoom = 14;
+      // 새로고침(keepCamera)일 땐 맵을 remount하지 않아 현재 카메라 위치를 유지
+      if (!keepCamera) {
+        _reloadSeq++;
+        _mapController = MapController();
+        _zoom = 14;
+      }
     });
     if (pts.isEmpty) {
       _noGpsTimer = Timer(const Duration(seconds: 4), () {
@@ -171,7 +179,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final repo = ref.read(memoRepositoryProvider);
     final dayFile = await repo.loadDayFile(date, settings.savePath);
     if (!mounted) return;
-    _applyBlocks(dayFile?.blocks ?? [], date);
+    _applyBlocks(dayFile?.blocks ?? [], date,
+        resetToggles: false, keepCamera: true);
     final pts = dayFile?.trackPoints ?? [];
     pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     setState(() => _trackPoints = pts);
@@ -412,7 +421,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       body: Stack(
         children: [
           FlutterMap(
-            key: ValueKey(_loadedDate),
+            key: ValueKey('${_loadedDate.toIso8601String()}#$_reloadSeq'),
             mapController: _mapController,
             options: MapOptions(
               initialCameraFit: _cameraFit(),

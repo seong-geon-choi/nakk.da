@@ -1088,7 +1088,13 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
       await ref.read(settingsProvider.notifier).updateLocationTrackingEnabled(active);
     }
     await _refreshCount();
-    if (active && _flushTimer == null) _startFlushTimer();
+    // 자정 등으로 네이티브가 트래킹을 멈추면 타이머를 정리해 버튼을 비활성화 유지
+    if (active) {
+      if (_flushTimer == null) _startFlushTimer();
+    } else {
+      _flushTimer?.cancel();
+      _flushTimer = null;
+    }
   }
 
   Future<void> _refreshCount() async {
@@ -1113,7 +1119,8 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
 
   void _startFlushTimer() {
     _flushTimer?.cancel();
-    _flushTimer = Timer.periodic(const Duration(seconds: 30), (_) => _refreshCount());
+    // 30초마다 포인트 플러시 + 네이티브 트래킹 상태 재확인(자정 자동 종료 반영)
+    _flushTimer = Timer.periodic(const Duration(seconds: 30), (_) => _refreshStatus());
   }
 
   Future<void> _onTap() async {
