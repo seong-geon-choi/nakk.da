@@ -55,6 +55,7 @@ nakkda-*.json
 CLAUDE.md
 context.md
 docs/*.md
+next.txt
 
 # ── 빌드 결과물 ────────────────────────────────────────────
 /android/app/debug
