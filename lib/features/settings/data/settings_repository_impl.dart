@@ -45,7 +45,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final autoSaveVoice = prefs.getBool(_autoSaveVoiceKey) ?? true;
     final showAddressInMemoName = prefs.getBool(_showAddressInMemoNameKey) ?? true;
     final showCatchInput = prefs.getBool(_showCatchInputKey) ?? true;
-    final shareEnabled = prefs.getBool(_shareEnabledKey) ?? false;
+    final shareEnabled = prefs.getBool(_shareEnabledKey) ?? true;
     final khoaApiKey = prefs.getString(_khoaApiKeyKey);
     final wmJson = prefs.getString(_watermarkKey);
     final watermark = wmJson != null

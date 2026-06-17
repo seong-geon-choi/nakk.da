@@ -288,27 +288,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
-  void _fitAllVisible(List<_PlacedPoint> placed, List<TrackPoint> track) {
-    final lats = [...placed.map((p) => p.lat), ...track.map((p) => p.lat)];
-    final lngs = [...placed.map((p) => p.lng), ...track.map((p) => p.lng)];
-    if (lats.isEmpty) return;
-    final minLat = lats.reduce(math.min);
-    final maxLat = lats.reduce(math.max);
-    final minLng = lngs.reduce(math.min);
-    final maxLng = lngs.reduce(math.max);
-    if (minLat == maxLat && minLng == maxLng) {
-      _mapController.move(LatLng(minLat, minLng), 15);
-      return;
-    }
-    _mapController.fitCamera(
-      CameraFit.bounds(
-        bounds: LatLngBounds(LatLng(minLat, minLng), LatLng(maxLat, maxLng)),
-        padding: const EdgeInsets.all(52),
-        maxZoom: 18,
-      ),
-    );
-  }
-
   void _showToastMessage(String msg) => showAppToast(context, msg);
 
   LatLng get _initialCenter => _points.isNotEmpty
@@ -428,7 +407,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.sgchoisg.nakkda',
               ),
-              if (_showTrack && _trackPoints.length >= 2)
+              // 메모지점 연결(_showLines)이 켜지면 linePoints가 메모+트랙을
+              // 시간순 단일 선으로 그리므로, 트랙 전용 선은 중복이라 생략한다.
+              if (_showTrack && !_showLines && _trackPoints.length >= 2)
                 PolylineLayer(
                   polylines: [
                     Polyline(
@@ -706,7 +687,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                               setState(() => _showLines = !_showLines);
                               _showToastMessage(
                                   _showLines ? '메모지점 연결 켜짐' : '메모지점 연결 꺼짐');
-                              if (_showLines) _fitAllVisible(placed, _showTrack ? _trackPoints : []);
                             }
                           : () => _showToastMessage('GPS 메모가 2개 이상 필요합니다'),
                     ),
@@ -740,7 +720,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                             ? () {
                                 final nowOn = !_showTrack;
                                 setState(() => _showTrack = nowOn);
-                                if (nowOn) _fitAllVisible(_showLines ? placed : [], _trackPoints);
                                 _showToastMessage(nowOn ? '이동 경로 표시중' : '이동 경로 숨김');
                               }
                             : () => _showToastMessage('이동 경로 기록이 없습니다'),

@@ -16,6 +16,7 @@ class FileListScreen extends ConsumerStatefulWidget {
 
 class _FileListScreenState extends ConsumerState<FileListScreen> {
   final Set<int> _expandedYears = {};
+  final Set<int> _expandedMonths = {}; // yyyymm = year*100 + month
   bool _initialized = false;
 
   @override
@@ -26,7 +27,7 @@ class _FileListScreenState extends ConsumerState<FileListScreen> {
     });
   }
 
-  void _toggle(int year) => setState(() {
+  void _toggleYear(int year) => setState(() {
         if (_expandedYears.contains(year)) {
           _expandedYears.remove(year);
         } else {
@@ -34,10 +35,21 @@ class _FileListScreenState extends ConsumerState<FileListScreen> {
         }
       });
 
-  Map<int, List<FileSummary>> _groupByYear(List<FileSummary> files) {
-    final map = <int, List<FileSummary>>{};
+  void _toggleMonth(int ym) => setState(() {
+        if (_expandedMonths.contains(ym)) {
+          _expandedMonths.remove(ym);
+        } else {
+          _expandedMonths.add(ym);
+        }
+      });
+
+  // 연도 → 연·월(yyyymm) → 파일 2단계 그룹화
+  Map<int, Map<int, List<FileSummary>>> _groupByYearMonth(
+      List<FileSummary> files) {
+    final map = <int, Map<int, List<FileSummary>>>{};
     for (final f in files) {
-      (map[f.date.year] ??= []).add(f);
+      final ym = f.date.year * 100 + f.date.month;
+      ((map[f.date.year] ??= {})[ym] ??= []).add(f);
     }
     return map;
   }
@@ -78,21 +90,29 @@ class _FileListScreenState extends ConsumerState<FileListScreen> {
             );
           }
 
-          final grouped = _groupByYear(files);
+          final grouped = _groupByYearMonth(files);
           final years = grouped.keys.toList()..sort((a, b) => b.compareTo(a));
 
-          // 첫 로드 시 가장 최근 연도 자동 확장
+          // 첫 로드 시 가장 최근 연도 + 그 안의 최신 월 자동 확장
           if (!_initialized) {
             _initialized = true;
-            _expandedYears.add(years.first);
+            final latestYear = years.first;
+            _expandedYears.add(latestYear);
+            _expandedMonths.add((grouped[latestYear]!.keys.toList()..sort()).last);
           }
 
-          // 연도 헤더(int)와 파일(FileSummary) 섞인 플랫 리스트 구성
+          // 연도 헤더 / 월 헤더 / 파일이 섞인 플랫 리스트 구성
           final items = <dynamic>[];
           for (final year in years) {
-            items.add(year);
-            if (_expandedYears.contains(year)) {
-              items.addAll(grouped[year]!);
+            items.add(_YearMarker(year));
+            if (!_expandedYears.contains(year)) continue;
+            final monthsOfYear = grouped[year]!.keys.toList()
+              ..sort((a, b) => b.compareTo(a));
+            for (final ym in monthsOfYear) {
+              items.add(_MonthMarker(ym));
+              if (_expandedMonths.contains(ym)) {
+                items.addAll(grouped[year]![ym]!);
+              }
             }
           }
 
@@ -103,18 +123,30 @@ class _FileListScreenState extends ConsumerState<FileListScreen> {
               if (items[index] is FileSummary &&
                   index + 1 < items.length &&
                   items[index + 1] is FileSummary) {
-                return const Divider(height: 1, indent: 16, endIndent: 16);
+                return const Divider(height: 1, indent: 48, endIndent: 16);
               }
               return const SizedBox.shrink();
             },
             itemBuilder: (context, index) {
               final item = items[index];
-              if (item is int) {
+              if (item is _YearMarker) {
+                final total = grouped[item.year]!
+                    .values
+                    .fold<int>(0, (s, l) => s + l.length);
                 return _YearHeader(
-                  year: item,
-                  count: grouped[item]!.length,
-                  expanded: _expandedYears.contains(item),
-                  onTap: () => _toggle(item),
+                  year: item.year,
+                  count: total,
+                  expanded: _expandedYears.contains(item.year),
+                  onTap: () => _toggleYear(item.year),
+                );
+              }
+              if (item is _MonthMarker) {
+                final ym = item.yearMonth;
+                return _MonthHeader(
+                  yearMonth: ym,
+                  count: grouped[ym ~/ 100]![ym]!.length,
+                  expanded: _expandedMonths.contains(ym),
+                  onTap: () => _toggleMonth(ym),
                 );
               }
               return _FileItem(file: item as FileSummary);
@@ -124,6 +156,17 @@ class _FileListScreenState extends ConsumerState<FileListScreen> {
       ),
     );
   }
+}
+
+// 플랫 리스트에서 연도 헤더 / 월 헤더를 구분하기 위한 마커
+class _YearMarker {
+  final int year;
+  const _YearMarker(this.year);
+}
+
+class _MonthMarker {
+  final int yearMonth; // yyyymm = year*100 + month
+  const _MonthMarker(this.yearMonth);
 }
 
 class _YearHeader extends StatelessWidget {
@@ -179,6 +222,60 @@ class _YearHeader extends StatelessWidget {
   }
 }
 
+class _MonthHeader extends StatelessWidget {
+  final int yearMonth; // yyyymm = year*100 + month
+  final int count;
+  final bool expanded;
+  final VoidCallback onTap;
+
+  const _MonthHeader({
+    required this.yearMonth,
+    required this.count,
+    required this.expanded,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return InkWell(
+      onTap: onTap,
+      child: Container(
+        // 연도 헤더와 같은 스타일(파란색) — 단계는 들여쓰기로만 구분
+        padding: const EdgeInsets.only(left: 36, right: 16, top: 10, bottom: 10),
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.6),
+        child: Row(
+          children: [
+            AnimatedRotation(
+              turns: expanded ? 0.25 : 0,
+              duration: const Duration(milliseconds: 200),
+              child: Icon(Icons.chevron_right,
+                  size: 20, color: colorScheme.primary),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '${yearMonth % 100}월',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.bold,
+                color: colorScheme.primary,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '$count개',
+              style: TextStyle(
+                fontSize: 12,
+                color: colorScheme.onSurface.withValues(alpha: 0.45),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _FileItem extends ConsumerStatefulWidget {
   final FileSummary file;
   const _FileItem({required this.file});
@@ -201,7 +298,8 @@ class _FileItemState extends ConsumerState<_FileItem> {
       onLongPress: () => _showContextMenu(),
       child: Container(
         constraints: const BoxConstraints(minHeight: 64),
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        // 월 헤더(left 36) 아래 단계임을 들여쓰기로 표현
+        padding: const EdgeInsets.only(left: 48, right: 16, top: 12, bottom: 12),
         child: Row(
           children: [
             Expanded(

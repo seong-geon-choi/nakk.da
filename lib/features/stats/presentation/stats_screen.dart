@@ -5,7 +5,7 @@ import '../../search/domain/models/search_hit.dart';
 import '../domain/models/catch_stats.dart';
 import '../../../core/widgets/empty_state_view.dart';
 
-enum _Period { all, year, month }
+enum _Period { all, year, month, custom }
 
 class StatsScreen extends ConsumerStatefulWidget {
   const StatsScreen({super.key});
@@ -16,6 +16,7 @@ class StatsScreen extends ConsumerStatefulWidget {
 
 class _StatsScreenState extends ConsumerState<StatsScreen> {
   _Period _period = _Period.all;
+  DateTimeRange? _customRange;
 
   bool _inPeriod(SearchHit h) {
     final now = DateTime.now();
@@ -26,6 +27,29 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
         return h.date.year == now.year;
       case _Period.month:
         return h.date.year == now.year && h.date.month == now.month;
+      case _Period.custom:
+        final r = _customRange;
+        if (r == null) return true;
+        final d = DateTime(h.date.year, h.date.month, h.date.day);
+        final start = DateTime(r.start.year, r.start.month, r.start.day);
+        final end = DateTime(r.end.year, r.end.month, r.end.day);
+        return !d.isBefore(start) && !d.isAfter(end);
+    }
+  }
+
+  Future<void> _pickRange() async {
+    final now = DateTime.now();
+    final picked = await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2015),
+      lastDate: DateTime(now.year, now.month, now.day),
+      initialDateRange: _customRange,
+    );
+    if (picked != null) {
+      setState(() {
+        _customRange = picked;
+        _period = _Period.custom;
+      });
     }
   }
 
@@ -49,7 +73,9 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
             children: [
               _PeriodBar(
                 period: _period,
+                customRange: _customRange,
                 onChanged: (p) => setState(() => _period = p),
+                onPickRange: _pickRange,
               ),
               const Divider(height: 1),
               Expanded(
@@ -86,8 +112,17 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
 
 class _PeriodBar extends StatelessWidget {
   final _Period period;
+  final DateTimeRange? customRange;
   final ValueChanged<_Period> onChanged;
-  const _PeriodBar({required this.period, required this.onChanged});
+  final VoidCallback onPickRange;
+  const _PeriodBar({
+    required this.period,
+    required this.customRange,
+    required this.onChanged,
+    required this.onPickRange,
+  });
+
+  static String _fmt(DateTime d) => '${d.year % 100}.${d.month}.${d.day}';
 
   @override
   Widget build(BuildContext context) {
@@ -99,14 +134,25 @@ class _PeriodBar extends StatelessWidget {
             onSelected: (_) => onChanged(p),
           ),
         );
+    final r = customRange;
+    final customLabel = r == null ? '기간 설정' : '${_fmt(r.start)}~${_fmt(r.end)}';
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Row(
-        children: [
-          chip('전체', _Period.all),
-          chip('올해', _Period.year),
-          chip('이번 달', _Period.month),
-        ],
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: [
+            chip('전체', _Period.all),
+            chip('올해', _Period.year),
+            chip('이번 달', _Period.month),
+            ChoiceChip(
+              avatar: const Icon(Icons.date_range, size: 18),
+              label: Text(customLabel),
+              selected: period == _Period.custom,
+              onSelected: (_) => onPickRange(),
+            ),
+          ],
+        ),
       ),
     );
   }

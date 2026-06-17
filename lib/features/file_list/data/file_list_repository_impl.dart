@@ -1,4 +1,6 @@
 import 'dart:io';
+import 'dart:convert';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../domain/file_list_repository.dart';
 import '../domain/models/file_summary.dart';
 import '../../../core/services/saf_service.dart';
@@ -19,21 +21,56 @@ class FileListRepositoryImpl implements FileListRepository {
   Future<List<FileSummary>> _listFilesSaf(String folderUri) async {
     final names = await _saf.listMdFiles(folderUri);
     final displayPath = await _saf.getDisplayPath(folderUri);
+    final mtimes = await _saf.getFilesModifiedTimes(folderUri, names);
+    final cache = await _loadCache(folderUri);
+    final newCache = <String, _CachedSummary>{};
+
+    // 1) 수정시간이 같은(캐시 적중) 파일은 재사용, 나머지만 읽을 목록에 모은다
+    final toRead = <String>[];
+    for (final name in names) {
+      if (FileNameParser.parseDate(name) == null) continue;
+      final mtime = mtimes[name]?.millisecondsSinceEpoch ?? 0;
+      final cached = cache[name];
+      if (cached != null && mtime != 0 && cached.mtime == mtime) {
+        newCache[name] = cached;
+      } else {
+        toRead.add(name);
+      }
+    }
+
+    // 2) 변경/신규 파일만 병렬로 읽어 요약 계산 (SAF 왕복을 동시 처리)
+    final read = await Future.wait(toRead.map((name) async {
+      final content = await _saf.readFile(folderUri, name) ?? '';
+      return MapEntry(
+        name,
+        _CachedSummary(
+          mtime: mtimes[name]?.millisecondsSinceEpoch ?? 0,
+          entryCount: _countEntries(content),
+          address: _extractAddress(content),
+        ),
+      );
+    }));
+    for (final e in read) {
+      newCache[e.key] = e.value;
+    }
+
+    // 3) FileSummary 조립
     final summaries = <FileSummary>[];
     for (final name in names) {
       final date = FileNameParser.parseDate(name);
-      if (date == null) continue;
-      final content = await _saf.readFile(folderUri, name) ?? '';
+      final c = newCache[name];
+      if (date == null || c == null) continue;
       summaries.add(FileSummary(
         date: date,
         filePath: '$folderUri/$name',
         displayName: name.replaceAll('.md', ''),
-        entryCount: _countEntries(content),
+        entryCount: c.entryCount,
         displayFolderPath: displayPath,
-        address: _extractAddress(content),
+        address: c.address,
       ));
     }
     summaries.sort((a, b) => b.date.compareTo(a.date));
+    await _saveCache(folderUri, newCache);
     return summaries;
   }
 
@@ -45,23 +82,74 @@ class FileListRepositoryImpl implements FileListRepository {
         .where((e) => e is File && e.path.endsWith('.md'))
         .cast<File>()
         .toList();
+    final cache = await _loadCache(savePath);
+    final newCache = <String, _CachedSummary>{};
     final summaries = <FileSummary>[];
-    for (final file in files) {
+
+    // 파일별 요약을 병렬로 계산(수정시간이 같으면 캐시 재사용해 읽기 생략)
+    await Future.wait(files.map((file) async {
       final name = file.uri.pathSegments.last;
       final date = FileNameParser.parseDate(name);
-      if (date == null) continue;
-      final content = await file.readAsString();
+      if (date == null) return;
+      final mtime = (await file.stat()).modified.millisecondsSinceEpoch;
+      final cached = cache[name];
+      final _CachedSummary summary;
+      if (cached != null && cached.mtime == mtime) {
+        summary = cached;
+      } else {
+        final content = await file.readAsString();
+        summary = _CachedSummary(
+          mtime: mtime,
+          entryCount: _countEntries(content),
+          address: _extractAddress(content),
+        );
+      }
+      newCache[name] = summary;
       summaries.add(FileSummary(
         date: date,
         filePath: file.path,
         displayName: name.replaceAll('.md', ''),
-        entryCount: _countEntries(content),
+        entryCount: summary.entryCount,
         displayFolderPath: savePath,
-        address: _extractAddress(content),
+        address: summary.address,
       ));
-    }
+    }));
     summaries.sort((a, b) => b.date.compareTo(a.date));
+    await _saveCache(savePath, newCache);
     return summaries;
+  }
+
+  // ── 요약 캐시 (수정시간 기반) ───────────────────────────────
+  static const _cachePrefix = 'file_summary_cache_v1:';
+
+  Future<Map<String, _CachedSummary>> _loadCache(String savePath) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('$_cachePrefix$savePath');
+    if (raw == null) return {};
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return map.map((k, v) {
+        final m = v as Map<String, dynamic>;
+        return MapEntry(
+          k,
+          _CachedSummary(
+            mtime: m['m'] as int,
+            entryCount: m['c'] as int,
+            address: m['a'] as String?,
+          ),
+        );
+      });
+    } catch (_) {
+      return {};
+    }
+  }
+
+  Future<void> _saveCache(
+      String savePath, Map<String, _CachedSummary> cache) async {
+    final prefs = await SharedPreferences.getInstance();
+    final map = cache.map((k, v) =>
+        MapEntry(k, {'m': v.mtime, 'c': v.entryCount, 'a': v.address}));
+    await prefs.setString('$_cachePrefix$savePath', jsonEncode(map));
   }
 
   @override
@@ -190,4 +278,16 @@ class FileListRepositoryImpl implements FileListRepository {
       if (await photo.exists()) await photo.delete();
     }
   }
+}
+
+/// 파일 목록 요약 캐시 항목 (수정시간이 같으면 파일을 다시 읽지 않는다)
+class _CachedSummary {
+  final int mtime; // millisecondsSinceEpoch
+  final int entryCount;
+  final String? address;
+  const _CachedSummary({
+    required this.mtime,
+    required this.entryCount,
+    required this.address,
+  });
 }

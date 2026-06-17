@@ -200,7 +200,7 @@ class AppSettings {
     this.autoSaveVoice = true,
     this.showAddressInMemoName = true,
     this.showCatchInput = true,
-    this.shareEnabled = false,
+    this.shareEnabled = true,
     this.khoaApiKey,
     WatermarkSettings? watermark,
     this.showTrackingButton = true,
