@@ -4,6 +4,7 @@ import '../../search/presentation/search_provider.dart';
 import '../../search/domain/models/search_hit.dart';
 import '../domain/models/catch_stats.dart';
 import '../../../core/widgets/empty_state_view.dart';
+import '../../../core/widgets/ad_banner_slot.dart';
 
 enum _Period { all, year, month, custom }
 
@@ -59,7 +60,10 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
 
     return Scaffold(
       appBar: AppBar(title: const Text('조과 통계')),
-      body: hitsAsync.when(
+      body: Column(
+        children: [
+          Expanded(
+            child: hitsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => EmptyStateView(
           icon: Icons.error_outline,
@@ -105,6 +109,10 @@ class _StatsScreenState extends ConsumerState<StatsScreen> {
             ],
           );
         },
+      ),
+          ),
+          const AdBannerSlot(),
+        ],
       ),
     );
   }

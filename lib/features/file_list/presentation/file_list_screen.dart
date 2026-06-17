@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'file_list_provider.dart';
 import '../domain/models/file_summary.dart';
 import '../../../core/widgets/empty_state_view.dart';
+import '../../../core/widgets/ad_banner_slot.dart';
 import '../../../core/router/app_router.dart';
 import '../../settings/presentation/settings_provider.dart';
 
@@ -74,7 +75,10 @@ class _FileListScreenState extends ConsumerState<FileListScreen> {
           ),
         ],
       ),
-      body: listAsync.when(
+      body: Column(
+        children: [
+          Expanded(
+            child: listAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => EmptyStateView(
           icon: Icons.error_outline,
@@ -153,6 +157,10 @@ class _FileListScreenState extends ConsumerState<FileListScreen> {
             },
           );
         },
+      ),
+          ),
+          const AdBannerSlot(),
+        ],
       ),
     );
   }

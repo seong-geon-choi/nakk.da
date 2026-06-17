@@ -168,6 +168,7 @@ class AppSettings {
   final bool showAddressInMemoName;
   final bool showCatchInput; // 메모 작성 시 어종·길이 입력 항목 표시 여부
   final bool shareEnabled; // 메모 공유 버튼 표시 여부 (향후 유료화 대비 토글)
+  final bool adsEnabled; // 광고 노출 여부 (개발자 메뉴 토글, 기본 off)
   final String? khoaApiKey;
   final WatermarkSettings watermark;
   final bool showTrackingButton;
@@ -201,6 +202,7 @@ class AppSettings {
     this.showAddressInMemoName = true,
     this.showCatchInput = true,
     this.shareEnabled = true,
+    this.adsEnabled = false,
     this.khoaApiKey,
     WatermarkSettings? watermark,
     this.showTrackingButton = true,
@@ -235,6 +237,7 @@ class AppSettings {
     bool? showAddressInMemoName,
     bool? showCatchInput,
     bool? shareEnabled,
+    bool? adsEnabled,
     String? khoaApiKey,
     bool clearKhoaApiKey = false,
     WatermarkSettings? watermark,
@@ -263,6 +266,7 @@ class AppSettings {
       showAddressInMemoName: showAddressInMemoName ?? this.showAddressInMemoName,
       showCatchInput: showCatchInput ?? this.showCatchInput,
       shareEnabled: shareEnabled ?? this.shareEnabled,
+      adsEnabled: adsEnabled ?? this.adsEnabled,
       khoaApiKey: clearKhoaApiKey ? null : (khoaApiKey ?? this.khoaApiKey),
       watermark: watermark ?? this.watermark,
       showTrackingButton: showTrackingButton ?? this.showTrackingButton,

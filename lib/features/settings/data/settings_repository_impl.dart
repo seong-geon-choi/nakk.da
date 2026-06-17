@@ -13,6 +13,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _showAddressInMemoNameKey = 'show_address_in_memo_name';
   static const _showCatchInputKey = 'show_catch_input';
   static const _shareEnabledKey = 'share_enabled';
+  static const _adsEnabledKey = 'ads_enabled';
   static const _khoaApiKeyKey = 'khoa_api_key';
   static const _watermarkKey = 'watermark_settings';
   static const _showTrackingButtonKey = 'show_tracking_button';
@@ -46,6 +47,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final showAddressInMemoName = prefs.getBool(_showAddressInMemoNameKey) ?? true;
     final showCatchInput = prefs.getBool(_showCatchInputKey) ?? true;
     final shareEnabled = prefs.getBool(_shareEnabledKey) ?? true;
+    final adsEnabled = prefs.getBool(_adsEnabledKey) ?? false;
     final khoaApiKey = prefs.getString(_khoaApiKeyKey);
     final wmJson = prefs.getString(_watermarkKey);
     final watermark = wmJson != null
@@ -82,6 +84,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       showAddressInMemoName: showAddressInMemoName,
       showCatchInput: showCatchInput,
       shareEnabled: shareEnabled,
+      adsEnabled: adsEnabled,
       khoaApiKey: khoaApiKey,
       watermark: watermark,
       showTrackingButton: showTrackingButton,
@@ -112,6 +115,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setBool(_showAddressInMemoNameKey, settings.showAddressInMemoName);
     await prefs.setBool(_showCatchInputKey, settings.showCatchInput);
     await prefs.setBool(_shareEnabledKey, settings.shareEnabled);
+    await prefs.setBool(_adsEnabledKey, settings.adsEnabled);
     if (settings.khoaApiKey != null) {
       await prefs.setString(_khoaApiKeyKey, settings.khoaApiKey!);
     } else {

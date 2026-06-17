@@ -18,6 +18,7 @@ import '../../../core/widgets/memo_date_picker_dialog.dart';
 import '../../../core/widgets/saf_image.dart';
 import '../../../core/widgets/video_player_widget.dart';
 import '../../../core/widgets/app_toast.dart';
+import '../../../core/widgets/ad_banner_slot.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
   final String? filePath;
@@ -385,7 +386,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       appBar: AppBar(
         title: Text(DateFormatter.toDateString(_loadedDate)),
       ),
-      body: Stack(
+      body: Column(
+        children: [
+          Expanded(
+            child: Stack(
         children: [
           FlutterMap(
             key: ValueKey('${_loadedDate.toIso8601String()}#$_reloadSeq'),
@@ -730,6 +734,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               ),
             ),
           ),
+        ],
+      ),
+          ),
+          const AdBannerSlot(),
         ],
       ),
     );

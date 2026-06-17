@@ -259,15 +259,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               ),
               onTap: () => _showApiKeyDialog(context, ref, settings.khoaApiKey),
             ),
-            const SizedBox(height: 16),
-            const _SectionHeader(label: '개발자 후원'),
-            ListTile(
-              leading: const Icon(Icons.volunteer_activism_outlined),
-              title: const Text('개발자 후원하기'),
-              subtitle: const Text('카카오페이로 소액 후원할 수 있습니다'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => _showSupportSheet(context),
-            ),
+            // 후원하기 기능 숨김(광고로 대체 예정). 복원하려면 아래 블록 주석 해제.
+            // const SizedBox(height: 16),
+            // const _SectionHeader(label: '개발자 후원'),
+            // ListTile(
+            //   leading: const Icon(Icons.volunteer_activism_outlined),
+            //   title: const Text('개발자 후원하기'),
+            //   subtitle: const Text('카카오페이로 소액 후원할 수 있습니다'),
+            //   trailing: const Icon(Icons.chevron_right),
+            //   onTap: () => _showSupportSheet(context),
+            // ),
             const SizedBox(height: 16),
           ],
           ),
@@ -1008,6 +1009,8 @@ class _AboutTile extends StatefulWidget {
 class _AboutTileState extends State<_AboutTile> {
   String _version = '-';
   String _buildTime = '-';
+  int _tapCount = 0;
+  DateTime? _lastTap;
 
   @override
   void initState() {
@@ -1022,16 +1025,62 @@ class _AboutTileState extends State<_AboutTile> {
     });
   }
 
+  // 버전 항목 7회 연타 시 개발자 메뉴 진입
+  void _onTap() {
+    final now = DateTime.now();
+    if (_lastTap != null &&
+        now.difference(_lastTap!) > const Duration(seconds: 2)) {
+      _tapCount = 0; // 연타가 끊기면 리셋
+    }
+    _lastTap = now;
+    _tapCount++;
+    if (_tapCount >= 7) {
+      _tapCount = 0;
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const _DevMenuSubScreen()),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListTile(
       leading: const Icon(Icons.info_outline),
       title: Text('버전 $_version'),
       subtitle: Text('빌드: $_buildTime'),
+      onTap: _onTap,
     );
   }
 }
 
+// 버전 7회 연타로 진입하는 개발자 메뉴 (광고 노출 토글 등)
+class _DevMenuSubScreen extends ConsumerWidget {
+  const _DevMenuSubScreen();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final adsEnabled = ref.watch(
+      settingsProvider.select((s) => s.valueOrNull?.adsEnabled ?? false),
+    );
+    return Scaffold(
+      appBar: AppBar(title: const Text('개발자 메뉴')),
+      body: ListView(
+        children: [
+          SwitchListTile(
+            secondary: const Icon(Icons.ads_click_outlined),
+            title: const Text('광고 노출'),
+            subtitle: const Text('끄면 목록·통계 하단의 광고 영역이 숨겨집니다'),
+            value: adsEnabled,
+            onChanged: (v) =>
+                ref.read(settingsProvider.notifier).updateAdsEnabled(v),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ignore: unused_element
 Future<void> _showSupportSheet(BuildContext context) async {
   await showModalBottomSheet(
     context: context,
