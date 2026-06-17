@@ -25,9 +25,37 @@ import '../../core/utils/media_scanner.dart';
 import '../../core/utils/species_detector.dart';
 import '../../core/widgets/memo_date_picker_dialog.dart';
 import '../../core/services/saf_service.dart';
+import '../../core/services/memo_share_service.dart';
+import '../../core/widgets/app_toast.dart';
 import 'dart:io';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
+
+/// 하루치 메모를 시스템 공유 시트로 내보낸다(블로그/카페 등 사용자가 앱 선택).
+Future<void> _shareDayMemo(
+  BuildContext context, {
+  required List<dynamic> blocks,
+  required String displayName,
+  required String savePath,
+}) async {
+  if (blocks.isEmpty) {
+    showAppToast(context, '공유할 메모가 없습니다');
+    return;
+  }
+  // 공유 시트가 뜨는 즉시(카페 앱으로 넘어가기 직전) 안내가 보이도록 share 호출 전에 표시.
+  // 공유 시트로 배경이 어두워지므로 강조형으로 띄운다.
+  showAppToast(
+    context,
+    '본문은 클립보드에 복사됨 · 사진 위치를 조정해 주세요',
+    duration: const Duration(seconds: 3),
+    emphasized: true,
+  );
+  await MemoShareService().shareDay(
+    blocks: blocks,
+    displayName: displayName,
+    savePath: savePath,
+  );
+}
 
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
@@ -196,6 +224,17 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
           ),
         ),
         actions: [
+          if (settingsAsync.valueOrNull?.shareEnabled ?? false)
+            IconButton(
+              icon: const Icon(Icons.ios_share),
+              tooltip: '공유',
+              onPressed: () => _shareDayMemo(
+                context,
+                blocks: todayAsync.valueOrNull?.blocks ?? const [],
+                displayName: DateFormatter.toDateString(today),
+                savePath: settingsAsync.valueOrNull?.savePath ?? '',
+              ),
+            ),
           IconButton(
             icon: const Icon(Icons.add_photo_alternate_outlined),
             tooltip: '날짜별 사진 일괄 추가',
@@ -1049,7 +1088,7 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _refreshStatus();
+    _reconcileTrackingOnStart();
     _loadPosition();
     // 메모 저장 등으로 todayFileProvider가 갱신될 때 트래킹 카운트도 재조회
     ref.listenManual(todayFileProvider, (_, _) => _refreshCount());
@@ -1076,6 +1115,22 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) _refreshStatus();
+  }
+
+  /// 앱 시작 시 트래킹 상태를 정합화한다.
+  /// 프로세스가 강제 종료되면 네이티브 서비스는 죽지만 active 플래그는 true로
+  /// 남아(onDestroy 미호출) 버튼은 '기록중'인데 실제 수집은 멈춘다.
+  /// → 사용자 의도(설정)가 ON이면 서비스를 (재)시작해 수집을 보장한다
+  ///   (이미 떠 있으면 onStartCommand 재호출이라 무해, 권한 없으면 네이티브 no-op).
+  Future<void> _reconcileTrackingOnStart() async {
+    try {
+      final settings = await ref.read(settingsProvider.future);
+      if (settings.locationTrackingEnabled &&
+          await Permission.locationWhenInUse.isGranted) {
+        await TrackingService().startTracking(settings.trackingIntervalMeters);
+      }
+    } catch (_) {/* 설정/권한 조회 실패 시 아래 새로고침으로 폴백 */}
+    await _refreshStatus();
   }
 
   Future<void> _refreshStatus() async {
@@ -1316,6 +1371,17 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         actions: [
+          if (ref.watch(settingsProvider).valueOrNull?.shareEnabled ?? false)
+            IconButton(
+              icon: const Icon(Icons.ios_share),
+              tooltip: '공유',
+              onPressed: () => _shareDayMemo(
+                context,
+                blocks: asyncFile.valueOrNull?.blocks ?? const [],
+                displayName: widget.displayName,
+                savePath: ref.read(settingsProvider).valueOrNull?.savePath ?? '',
+              ),
+            ),
           TextButton(
             onPressed: () => context.go(AppRoutes.home),
             child: const Text('오늘'),

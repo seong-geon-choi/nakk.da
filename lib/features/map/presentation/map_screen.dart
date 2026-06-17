@@ -17,6 +17,7 @@ import '../../../core/services/tracking_service.dart';
 import '../../../core/widgets/memo_date_picker_dialog.dart';
 import '../../../core/widgets/saf_image.dart';
 import '../../../core/widgets/video_player_widget.dart';
+import '../../../core/widgets/app_toast.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
   final String? filePath;
@@ -34,9 +35,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   bool _showTimes = false;
   bool _showDistances = false;
   bool _showTrack = false;
-  bool _showToast = false;
-  String _toastMsg = '';
-  Timer? _toastTimer;
   Timer? _noGpsTimer;
   bool _dismissedNoGpsCard = false;
   DateTime _loadedDate = DateTime.now();
@@ -47,7 +45,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
   @override
   void dispose() {
-    _toastTimer?.cancel();
     _noGpsTimer?.cancel();
     super.dispose();
   }
@@ -312,16 +309,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     );
   }
 
-  void _showToastMessage(String msg) {
-    _toastTimer?.cancel();
-    setState(() {
-      _toastMsg = msg;
-      _showToast = true;
-    });
-    _toastTimer = Timer(const Duration(milliseconds: 1800), () {
-      if (mounted) setState(() => _showToast = false);
-    });
-  }
+  void _showToastMessage(String msg) => showAppToast(context, msg);
 
   LatLng get _initialCenter => _points.isNotEmpty
       ? LatLng(_points.first.lat, _points.first.lng)
@@ -759,33 +747,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                       ),
                     ],
                   ],
-                ),
-              ),
-            ),
-          ),
-          // 버튼 상태 토스트
-          Positioned(
-            top: 16,
-            left: 0,
-            right: 0,
-            child: IgnorePointer(
-              child: AnimatedOpacity(
-                opacity: _showToast ? 1.0 : 0.0,
-                duration: const Duration(milliseconds: 300),
-                child: Center(
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 16, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: const Color(0xCC000000),
-                      borderRadius: BorderRadius.circular(20),
-                    ),
-                    child: Text(
-                      _toastMsg,
-                      style: const TextStyle(
-                          color: Colors.white, fontSize: 13),
-                    ),
-                  ),
                 ),
               ),
             ),

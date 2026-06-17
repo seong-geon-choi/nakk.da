@@ -116,6 +116,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               onChanged: (v) =>
                   ref.read(settingsProvider.notifier).updateShowCatchInput(v),
             ),
+            SwitchListTile(
+              secondary: const Icon(Icons.ios_share),
+              title: const Text('메모 공유'),
+              subtitle:
+                  const Text('메모 화면에서 블로그 등 다른 앱으로 공유하는 버튼을 표시합니다'),
+              value: settings.shareEnabled,
+              onChanged: (v) =>
+                  ref.read(settingsProvider.notifier).updateShareEnabled(v),
+            ),
 
             // ── 어종 섹션 ─────────────────────────────
             const _SectionHeader(label: '어종'),
