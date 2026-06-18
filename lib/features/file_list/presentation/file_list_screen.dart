@@ -79,6 +79,8 @@ class _FileListScreenState extends ConsumerState<FileListScreen> {
         children: [
           Expanded(
             child: listAsync.when(
+        // 재조회(invalidate) 중에도 이전 목록을 그대로 보여 스피너 깜빡임을 없앤다
+        skipLoadingOnReload: true,
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => EmptyStateView(
           icon: Icons.error_outline,

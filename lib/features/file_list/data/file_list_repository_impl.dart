@@ -19,10 +19,14 @@ class FileListRepositoryImpl implements FileListRepository {
   }
 
   Future<List<FileSummary>> _listFilesSaf(String folderUri) async {
-    final names = await _saf.listMdFiles(folderUri);
-    final displayPath = await _saf.getDisplayPath(folderUri);
-    final mtimes = await _saf.getFilesModifiedTimes(folderUri, names);
-    final cache = await _loadCache(folderUri);
+    // 독립적인 I/O(목록·표시경로·수정시간·캐시)를 동시에 수행해 지연을 줄인다.
+    // getFilesModifiedTimes는 이제 폴더 전체 자식을 반환하므로 names가 필요 없다.
+    final (names, displayPath, mtimes, cache) = await (
+      _saf.listMdFiles(folderUri),
+      _saf.getDisplayPath(folderUri),
+      _saf.getFilesModifiedTimes(folderUri, const []),
+      _loadCache(folderUri),
+    ).wait;
     final newCache = <String, _CachedSummary>{};
 
     // 1) 수정시간이 같은(캐시 적중) 파일은 재사용, 나머지만 읽을 목록에 모은다
