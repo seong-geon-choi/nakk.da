@@ -348,14 +348,9 @@ class MainActivity : FlutterActivity() {
                     }
                     "getFilesModifiedTimes" -> {
                         val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
-                        val filenames = call.argument<List<String>>("filenames") ?: return@setMethodCallHandler result.error("ARG", "filenames missing", null)
-                        val folder = safFolder(uri)
-                        val times = mutableMapOf<String, Long>()
-                        filenames.forEach { name ->
-                            val ms = folder?.findFile(name)?.lastModified() ?: 0L
-                            if (ms > 0L) times[name] = ms
-                        }
-                        result.success(times)
+                        // 폴더를 단일 쿼리로 열거해 전체 자식의 수정시간을 한 번에 가져온다.
+                        // (파일별 findFile = 매번 폴더 전체 스캔이라 O(N^2)로 느렸음)
+                        result.success(safChildModifiedTimes(uri))
                     }
                     "ensureFolder" -> {
                         val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
@@ -787,11 +782,56 @@ class MainActivity : FlutterActivity() {
     private fun safFileExists(uriString: String, filename: String): Boolean =
         safFolder(uriString)?.findFile(filename)?.exists() == true
 
-    private fun safListMdFiles(uriString: String): List<String> =
-        safFolder(uriString)?.listFiles()
-            ?.filter { it.isFile && it.name?.endsWith(".md") == true }
-            ?.mapNotNull { it.name }
-            ?.sorted() ?: emptyList()
+    // 폴더 자식을 단일 쿼리로 열거(.md 파일명만, 정렬).
+    // DocumentFile.listFiles + 자식별 name 쿼리(O(N))보다 빠르다.
+    private fun safListMdFiles(uriString: String): List<String> {
+        val names = ArrayList<String>()
+        try {
+            val tree = Uri.parse(uriString)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                tree, DocumentsContract.getTreeDocumentId(tree))
+            contentResolver.query(
+                childrenUri,
+                arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                null, null, null
+            )?.use { c ->
+                val nameCol = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                while (c.moveToNext()) {
+                    val name = c.getString(nameCol) ?: continue
+                    if (name.endsWith(".md")) names.add(name)
+                }
+            }
+        } catch (_: Exception) {}
+        names.sort()
+        return names
+    }
+
+    // 폴더 자식 전체의 수정시간(name -> epochMillis)을 단일 쿼리로 반환.
+    private fun safChildModifiedTimes(uriString: String): Map<String, Long> {
+        val times = HashMap<String, Long>()
+        try {
+            val tree = Uri.parse(uriString)
+            val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(
+                tree, DocumentsContract.getTreeDocumentId(tree))
+            contentResolver.query(
+                childrenUri,
+                arrayOf(
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_LAST_MODIFIED
+                ),
+                null, null, null
+            )?.use { c ->
+                val nameCol = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                val modCol = c.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                while (c.moveToNext()) {
+                    val name = c.getString(nameCol) ?: continue
+                    val ms = if (c.isNull(modCol)) 0L else c.getLong(modCol)
+                    if (ms > 0L) times[name] = ms
+                }
+            }
+        } catch (_: Exception) {}
+        return times
+    }
 
     private fun safEnsureNoMedia(uriString: String) {
         val folder = safFolder(uriString) ?: return
