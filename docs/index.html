@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>낚.다 베타 테스터 모집</title>
+<meta name="description" content="낚시 조행 기록 앱 '낚.다' 비공개 베타 테스터를 모집합니다." />
+
+<!--
+  ┌─────────────────────────────────────────────────────────────┐
+  │  배포 전 아래 4곳을 본인 값으로 교체하세요 (Ctrl+F 로 검색)        │
+  │  1) GROUP_JOIN_URL  : 만든 Google 그룹 가입 주소                  │
+  │       예) https://groups.google.com/g/nakkda-testers            │
+  │  2) PLAY_OPT_IN_URL : Play 콘솔 비공개 테스트 '참여(옵트인)' 링크   │
+  │       보통 https://play.google.com/apps/testing/com.sgchoisg.nakkda │
+  │  3) PLAY_STORE_URL  : 스토어 설치 링크 (옵트인 후 동작)            │
+  │       https://play.google.com/store/apps/details?id=com.sgchoisg.nakkda │
+  │  4) CONTACT_EMAIL   : 문의 이메일                                │
+  └─────────────────────────────────────────────────────────────┘
+  설정: Play 콘솔 → 비공개 테스트 → 테스터 → 'Google 그룹'에 위 그룹 지정.
+        그룹 가입 = 테스터 자동 등록.
+-->
+
+<style>
+  :root{
+    --blue:#1E88E5; --blue-d:#1565C0; --bg:#0f1419; --card:#1b2430;
+    --text:#e9eef3; --muted:#9fb0c0; --line:#2a3744; --ok:#43a047;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+    background:var(--bg);color:var(--text);line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:560px;margin:0 auto;padding:24px 18px 64px}
+  .hero{text-align:center;padding:28px 0 8px}
+  .logo{font-size:30px;font-weight:800;letter-spacing:-.5px}
+  .logo span{color:var(--blue)}
+  .tag{color:var(--muted);margin-top:6px;font-size:15px}
+  .badge{display:inline-block;margin-top:14px;padding:6px 14px;border-radius:999px;
+    background:rgba(30,136,229,.15);color:#7db8f0;font-size:13px;font-weight:600}
+
+  .intro{background:var(--card);border:1px solid var(--line);border-radius:14px;
+    padding:18px 18px;margin:22px 0;font-size:14.5px;color:var(--muted)}
+  .intro b{color:var(--text)}
+
+  h2{font-size:15px;color:var(--muted);font-weight:700;margin:28px 0 12px;
+    text-transform:none;letter-spacing:.2px}
+
+  .step{display:flex;gap:14px;background:var(--card);border:1px solid var(--line);
+    border-radius:14px;padding:16px;margin-bottom:12px}
+  .num{flex:0 0 30px;height:30px;border-radius:50%;background:var(--blue);
+    color:#fff;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:15px}
+  .step h3{font-size:16px;margin-bottom:4px}
+  .step p{font-size:13.5px;color:var(--muted);margin-bottom:12px}
+
+  .btn{display:block;text-align:center;text-decoration:none;font-weight:700;
+    padding:13px 16px;border-radius:11px;font-size:15px;transition:.15s}
+  .btn-primary{background:var(--blue);color:#fff}
+  .btn-primary:active{background:var(--blue-d)}
+  .btn-outline{background:transparent;color:#7db8f0;border:1.5px solid var(--blue)}
+  .btn-store{background:#fff;color:#111}
+  .btn-row{display:flex;gap:8px}
+  .btn-row .btn{flex:1;padding-left:6px;padding-right:6px;font-size:14px}
+
+  .notes{background:rgba(67,160,71,.08);border:1px solid rgba(67,160,71,.3);
+    border-radius:12px;padding:16px 18px;margin:24px 0;font-size:13.5px}
+  .notes h3{font-size:14px;color:var(--ok);margin-bottom:8px}
+  .notes li{margin:6px 0 6px 18px;color:#cfe3d4}
+
+  details{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:4px 16px;margin-bottom:10px}
+  summary{cursor:pointer;font-weight:600;padding:12px 0;font-size:14.5px;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"+";float:right;color:var(--muted);font-weight:400}
+  details[open] summary::after{content:"–"}
+  details p{font-size:13.5px;color:var(--muted);padding:0 0 14px}
+
+  .foot{text-align:center;color:var(--muted);font-size:13px;margin-top:36px}
+  .foot a{color:#7db8f0}
+</style>
+</head>
+<body>
+  <div class="wrap">
+
+    <header class="hero">
+      <div class="logo">낚<span>.</span>다</div>
+      <div class="tag">낚시 조행 기록 앱 · 베타 테스터 모집</div>
+      <div class="badge">Android · 비공개 테스트</div>
+    </header>
+
+    <section class="intro">
+      <p><b>낚.다</b>는 어획 기록·사진·위치·물때를 한 번에 남기는 낚시 조행 기록 앱입니다.
+      정식 출시 전, 함께 다듬어 주실 테스터를 모십니다. 아래 <b>3단계</b>면 참여 완료!</p>
+    </section>
+
+    <h2>참여 방법 (3단계)</h2>
+
+    <div class="step">
+      <div class="num">1</div>
+      <div style="flex:1">
+        <h3>테스터 그룹 가입</h3>
+        <p>테스트에 사용할 <b>Gmail 계정</b>으로 가입해 주세요. (Play 스토어 로그인 계정과 같아야 합니다.)</p>
+        <a class="btn btn-primary" href="https://groups.google.com/g/nakkda-testers" target="_blank" rel="noopener">Google 그룹 가입하기</a>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">2</div>
+      <div style="flex:1">
+        <h3>테스트 참여(옵트인)</h3>
+        <p>그룹 가입 후 <b>참여할 기기를 선택</b>해 진행해 주세요. (가입 반영에 몇 분 걸릴 수 있어요.)</p>
+        <div class="btn-row">
+          <a class="btn btn-outline" href="https://play.google.com/apps/testing/com.sgchoisg.nakkda?hl=ko" target="_blank" rel="noopener">💻 PC에서 참여</a>
+          <a class="btn btn-primary" href="https://play.google.com/store/apps/details?id=com.sgchoisg.nakkda" target="_blank" rel="noopener">📱 Android에서 참여</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">3</div>
+      <div style="flex:1">
+        <h3>앱 설치</h3>
+        <p><b>Android</b>로 참여했다면 2번에서 열린 스토어에서 바로 설치하면 끝!
+        <b>PC</b>로 참여(테스터 되기)했다면, <b>같은 계정으로 로그인된 폰</b>의 Play 스토어에서 <b>낚.다</b>를 설치하세요.</p>
+        <a class="btn btn-store" href="https://play.google.com/store/apps/details?id=com.sgchoisg.nakkda" target="_blank" rel="noopener">Play 스토어에서 설치</a>
+      </div>
+    </div>
+
+    <div class="notes">
+      <h3>꼭 확인해 주세요</h3>
+      <ul>
+        <li><b>Android 기기</b>가 필요합니다. (iOS 미지원)</li>
+        <li>그룹 가입 <b>Gmail = Play 스토어 로그인 계정</b>이 일치해야 설치됩니다.</li>
+        <li>1단계 가입 직후엔 설치가 안 될 수 있어요. <b>몇 분~수십 분 뒤</b> 2·3단계를 진행해 주세요.</li>
+        <li>"내부 앱 공유" 같은 오류가 보이면 잠시 후 다시 시도해 주세요.</li>
+      </ul>
+    </div>
+
+    <h2>자주 묻는 질문</h2>
+
+    <details>
+      <summary>왜 그룹에 먼저 가입하나요?</summary>
+      <p>그룹 멤버가 테스터 명단으로 자동 등록되도록 설정돼 있어, 가입만 하면 별도 승인 없이 테스트에 참여할 수 있습니다.</p>
+    </details>
+    <details>
+      <summary>"이 앱은 테스트 중입니다"만 보이고 설치가 안 돼요.</summary>
+      <p>그룹 가입 반영 전이거나 옵트인(2단계)이 안 된 상태입니다. 잠시 후 2단계 링크에서 테스터 등록 → 다시 시도해 주세요. 스토어 계정이 가입 Gmail과 같은지도 확인해 주세요.</p>
+    </details>
+    <details>
+      <summary>테스트를 그만두고 싶어요.</summary>
+      <p>2단계 링크 페이지에서 "테스트 종료"를 누르거나, 그룹에서 탈퇴하시면 됩니다.</p>
+    </details>
+    <details>
+      <summary>개인정보는 어떻게 되나요?</summary>
+      <p>테스터 식별을 위한 Gmail 외 별도 수집은 없습니다. 그룹 탈퇴 시 명단에서 제외됩니다.</p>
+    </details>
+
+    <div class="foot">
+      <a href="https://docs.google.com/forms/d/e/1FAIpQLSd5Jvl7kXD31RWDuE-fKgeWh9pzpnLZosdceAxpJ8LdMR2OrA/viewform?usp=header" target="_blank" rel="noopener">💬 의견·피드백 보내기</a><br/>
+      © 낚.다 (Nakkda)
+    </div>
+
+  </div>
+</body>
+</html>
