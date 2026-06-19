@@ -8,11 +8,12 @@ import '../../../core/services/tracking_service.dart';
 export '../domain/models/app_settings.dart'
     show
         WatermarkSettings,
-        WatermarkLine,
+        WatermarkBox,
         WatermarkLineType,
         WatermarkPosition,
         WatermarkAlign,
         WatermarkFont,
+        WatermarkWeight,
         QuickLaunchMode;
 
 final settingsRepositoryProvider = Provider<SettingsRepository>(

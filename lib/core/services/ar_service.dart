@@ -13,31 +13,46 @@ Future<({String path, double? distanceCm, bool applyWatermark, double? posX, dou
   final Map<String, dynamic> args = {'watermarkEnabled': watermarkEnabled};
 
   if (wm != null) {
-    final dateVisible = wm.lines.any((l) => l.type == WatermarkLineType.date && l.visible);
-    final timeVisible = wm.lines.any((l) => l.type == WatermarkLineType.time && l.visible);
-    final customText = wm.lines
-        .where((l) =>
-            l.type == WatermarkLineType.customText &&
-            l.visible &&
-            l.customText.trim().isNotEmpty)
-        .map((l) => l.customText.trim())
+    // 신 모델(컨테이너 + 박스 3종)을 AR 네이티브 라이브 프리뷰가 쓰는
+    // 구식 단일 박스 인자로 변환한다. AR 프리뷰는 단일 스타일이라 대표 박스
+    // (보이는 첫 박스)의 폰트 설정을 사용한다.
+    // (실제 사진 워터마크는 Dart applyWatermark가 박스별로 정확히 굽는다.)
+    WatermarkBox? boxOf(WatermarkLineType t) {
+      for (final b in wm.boxes) {
+        if (b.type == t && b.visible) return b;
+      }
+      return null;
+    }
+
+    final dateBox = boxOf(WatermarkLineType.date);
+    final timeBox = boxOf(WatermarkLineType.time);
+    final customText = wm.boxes
+        .where((b) =>
+            b.type == WatermarkLineType.customText &&
+            b.visible &&
+            b.customText.trim().isNotEmpty)
+        .map((b) => b.customText.trim())
         .join('\n');
 
-    // 자유 위치(posX/posY)를 AR 라이브 프리뷰용 가장 가까운 코너로 변환
-    // (실제 사진 워터마크는 Dart applyWatermark가 정확한 위치로 굽는다)
-    final corner = wm.posX < 0.5
-        ? (wm.posY < 0.5 ? 'topLeft' : 'bottomLeft')
-        : (wm.posY < 0.5 ? 'topRight' : 'bottomRight');
+    final rep = wm.boxes.firstWhere(
+      (b) => b.visible,
+      orElse: () => wm.boxes.isNotEmpty ? wm.boxes.first : const WatermarkBox(type: WatermarkLineType.date),
+    );
+
+    // 컨테이너 위치를 AR 라이브 프리뷰용 가장 가까운 코너로 변환
+    final corner = wm.containerPosX < 0.5
+        ? (wm.containerPosY < 0.5 ? 'topLeft' : 'bottomLeft')
+        : (wm.containerPosY < 0.5 ? 'topRight' : 'bottomRight');
     args['wmPosition'] = corner;
-    args['wmPosX'] = wm.posX;
-    args['wmPosY'] = wm.posY;
-    args['wmDateFmt'] = dateVisible ? wm.dateFormat : '';
-    args['wmTimeFmt'] = timeVisible ? wm.timeFormat : '';
+    args['wmPosX'] = wm.containerPosX;
+    args['wmPosY'] = wm.containerPosY;
+    args['wmDateFmt'] = dateBox != null ? dateBox.dateFormat : '';
+    args['wmTimeFmt'] = timeBox != null ? timeBox.timeFormat : '';
     args['wmCustomText'] = customText;
-    args['wmFontSize'] = wm.fontSize.round();
-    args['wmBold'] = wm.bold;
-    args['wmBoxOpacity'] = wm.boxOpacity;
-    args['wmAlignment'] = wm.alignment.name;
+    args['wmFontSize'] = rep.fontSize.round();
+    args['wmBold'] = rep.weight != WatermarkWeight.normal;
+    args['wmBoxOpacity'] = wm.bgOpacity;
+    args['wmAlignment'] = rep.alignment.name;
   }
 
   final result = await _channel.invokeMapMethod<String, dynamic>('launchArMeasure', args);

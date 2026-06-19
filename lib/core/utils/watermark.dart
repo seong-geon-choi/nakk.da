@@ -6,7 +6,10 @@ import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:path_provider/path_provider.dart';
 import '../../features/settings/domain/models/app_settings.dart';
 
-/// 이미지에 워터마크를 적용하고 JPEG 경로를 반환.
+/// 헤비(번들) 폰트 패밀리명 — pubspec.yaml fonts 등록명과 일치해야 함.
+const String kWatermarkHeavyFont = 'BlackHanSans';
+
+/// 이미지에 워터마크(배경 컨테이너 + 독립 박스들)를 적용하고 JPEG 경로를 반환.
 /// 실패 시 원본 경로 반환.
 Future<String> applyWatermark(
     String imagePath, WatermarkSettings settings) async {
@@ -14,13 +17,11 @@ Future<String> applyWatermark(
 
   try {
     final now = DateTime.now();
-    final textLines = settings.lines
-        .where((l) => l.visible)
-        .map((l) => _lineText(l, now, settings))
-        .where((s) => s.isNotEmpty)
+    // 보이고 내용이 있는 박스만
+    final boxes = settings.boxes
+        .where((b) => b.visible && _boxText(b, now).isNotEmpty)
         .toList();
-
-    if (textLines.isEmpty) return imagePath;
+    if (boxes.isEmpty) return imagePath;
 
     final tempDir = await getTemporaryDirectory();
     final ts = DateTime.now().millisecondsSinceEpoch;
@@ -45,77 +46,97 @@ Future<String> applyWatermark(
 
     // 이미지 크기 기준 폰트 스케일링 (짧은 쪽 / 480 기준)
     final shortSide = math.min(w, h);
-    final scaledFont = settings.fontSize * shortSide / 480.0;
-    final lineH = scaledFont * 1.4;
-    final padding = scaledFont * 0.5;
 
-    final fontW = settings.bold ? ui.FontWeight.bold : ui.FontWeight.normal;
-    final fontFam = _fontFamily(settings.fontFamily);
+    // 각 박스를 측정해 그릴 파라그래프 + 위치(px)를 준비
+    final laid = <_LaidBox>[];
+    double maxFont = 0;
+    for (final b in boxes) {
+      final text = _boxText(b, now);
+      final scaledFont = b.fontSize * shortSide / 480.0;
+      maxFont = math.max(maxFont, scaledFont);
+      final fw = _fontWeight(b.weight);
+      final fam = _fontFamily(b.fontFamily);
+      final color = ui.Color(b.textColor);
 
-    // 텍스트 너비 측정 (10000 너비로 lay out 후 longestLine 사용)
-    double maxTextW = 0;
-    for (final text in textLines) {
-      final pb = ui.ParagraphBuilder(ui.ParagraphStyle(
+      // 측정용: 넓게 레이아웃 후 longestLine으로 박스 너비 확보
+      final measure = (ui.ParagraphBuilder(ui.ParagraphStyle(
         fontSize: scaledFont,
-        fontWeight: fontW,
-        fontFamily: fontFam,
+        fontWeight: fw,
+        fontFamily: fam,
       ))
-        ..pushStyle(ui.TextStyle(
-          color: const ui.Color(0xFFFFFFFF),
-          fontSize: scaledFont,
-          fontWeight: fontW,
-          fontFamily: fontFam,
-        ))
-        ..addText(text);
-      final p = pb.build()
-        ..layout(const ui.ParagraphConstraints(width: 10000));
-      maxTextW = math.max(maxTextW, p.longestLine);
+            ..pushStyle(ui.TextStyle(
+              color: color,
+              fontSize: scaledFont,
+              fontWeight: fw,
+              fontFamily: fam,
+            ))
+            ..addText(text))
+          .build()
+        ..layout(const ui.ParagraphConstraints(width: 100000));
+      final bw = measure.longestLine + 1;
+
+      // 실제 그릴 파라그래프 (정렬 반영, 박스 너비 고정)
+      final para = (ui.ParagraphBuilder(ui.ParagraphStyle(
+        textAlign: _uiTextAlign(b.alignment),
+        fontSize: scaledFont,
+        fontWeight: fw,
+        fontFamily: fam,
+      ))
+            ..pushStyle(ui.TextStyle(
+              color: color,
+              fontSize: scaledFont,
+              fontWeight: fw,
+              fontFamily: fam,
+            ))
+            ..addText(text))
+          .build()
+        ..layout(ui.ParagraphConstraints(width: bw));
+
+      laid.add(_LaidBox(
+          para, b.dx * shortSide, b.dy * shortSide, bw, para.height));
     }
 
-    final constrainedW = math.min(maxTextW + 1, w * 0.9);
-    final boxW = constrainedW + padding * 2;
-    final boxH = textLines.length * lineH + padding * 2;
-    final margin = padding;
+    // 박스 그룹의 바운딩 박스
+    double minX = double.infinity, minY = double.infinity;
+    double maxX = -double.infinity, maxY = -double.infinity;
+    for (final l in laid) {
+      minX = math.min(minX, l.x);
+      minY = math.min(minY, l.y);
+      maxX = math.max(maxX, l.x + l.w);
+      maxY = math.max(maxY, l.y + l.h);
+    }
 
-    final boxOffset = _boxOffset(settings.posX, settings.posY, w, h, boxW, boxH, margin);
+    final pad = maxFont * 0.4; // 컨테이너 안쪽 여백
+    final boxW = (maxX - minX) + pad * 2;
+    final boxH = (maxY - minY) + pad * 2;
+    final margin = maxFont * 0.5; // 사진 가장자리와의 최소 여백
+
+    final boxOffset = _boxOffset(settings.containerPosX, settings.containerPosY,
+        w, h, boxW, boxH, margin);
 
     // 캔버스 그리기
     final recorder = ui.PictureRecorder();
     final canvas = Canvas(recorder);
     canvas.drawImage(src, Offset.zero, Paint());
 
-    // 반투명 배경
+    // 컨테이너 배경 (프리셋 색 + 투명도)
     canvas.drawRRect(
       RRect.fromRectAndRadius(
         Rect.fromLTWH(boxOffset.dx, boxOffset.dy, boxW, boxH),
-        Radius.circular(scaledFont * 0.2),
+        Radius.circular(maxFont * 0.2),
       ),
-      Paint()
-        ..color = Color.fromARGB(
-            (settings.boxOpacity * 255).round().clamp(0, 255), 0, 0, 0),
+      Paint()..color = Color(settings.bgColorArgb),
     );
 
-    // 텍스트 라인 그리기
-    double textY = boxOffset.dy + padding;
-    final uiAlign = _uiTextAlign(settings.alignment);
-    for (final text in textLines) {
-      final pb = ui.ParagraphBuilder(ui.ParagraphStyle(
-        textAlign: uiAlign,
-        fontSize: scaledFont,
-        fontWeight: fontW,
-        fontFamily: fontFam,
-      ))
-        ..pushStyle(ui.TextStyle(
-          color: const ui.Color(0xFFFFFFFF),
-          fontSize: scaledFont,
-          fontWeight: fontW,
-          fontFamily: fontFam,
-        ))
-        ..addText(text);
-      final p = pb.build()
-        ..layout(ui.ParagraphConstraints(width: constrainedW));
-      canvas.drawParagraph(p, Offset(boxOffset.dx + padding, textY));
-      textY += lineH;
+    // 각 박스 텍스트 그리기
+    for (final l in laid) {
+      canvas.drawParagraph(
+        l.para,
+        Offset(
+          boxOffset.dx + pad + (l.x - minX),
+          boxOffset.dy + pad + (l.y - minY),
+        ),
+      );
     }
 
     // PNG 바이트로 렌더링
@@ -154,14 +175,24 @@ Future<String> applyWatermark(
   }
 }
 
-String _lineText(WatermarkLine line, DateTime now, WatermarkSettings s) {
-  switch (line.type) {
+/// 측정 완료된 박스 (그릴 파라그래프 + 위치/크기 px)
+class _LaidBox {
+  final ui.Paragraph para;
+  final double x;
+  final double y;
+  final double w;
+  final double h;
+  _LaidBox(this.para, this.x, this.y, this.w, this.h);
+}
+
+String _boxText(WatermarkBox b, DateTime now) {
+  switch (b.type) {
     case WatermarkLineType.date:
-      return _formatDate(now, s.dateFormat);
+      return _formatDate(now, b.dateFormat);
     case WatermarkLineType.time:
-      return s.timeFormat.isEmpty ? '' : _formatTime(now, s.timeFormat);
+      return b.timeFormat.isEmpty ? '' : _formatTime(now, b.timeFormat);
     case WatermarkLineType.customText:
-      return line.customText.trim();
+      return b.customText.trim();
   }
 }
 
@@ -207,6 +238,19 @@ String _fontFamily(WatermarkFont f) {
       return 'serif';
     case WatermarkFont.sansSerif:
       return 'sans-serif';
+    case WatermarkFont.heavy:
+      return kWatermarkHeavyFont;
+  }
+}
+
+ui.FontWeight _fontWeight(WatermarkWeight w) {
+  switch (w) {
+    case WatermarkWeight.normal:
+      return ui.FontWeight.w400;
+    case WatermarkWeight.bold:
+      return ui.FontWeight.w700;
+    case WatermarkWeight.black:
+      return ui.FontWeight.w900;
   }
 }
 

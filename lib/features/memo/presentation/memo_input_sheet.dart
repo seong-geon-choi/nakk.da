@@ -145,8 +145,8 @@ class MemoInputSheet extends ConsumerStatefulWidget {
       // AR에서 드래그한 워터마크 위치를 설정에 반영하고 굽기에 사용
       var effectiveWm = wmSettings;
       if (wmSettings != null && arResult.posX != null && arResult.posY != null) {
-        effectiveWm =
-            wmSettings.copyWith(posX: arResult.posX!, posY: arResult.posY!);
+        effectiveWm = wmSettings.copyWith(
+            containerPosX: arResult.posX!, containerPosY: arResult.posY!);
         await ref.read(settingsProvider.notifier).updateWatermark(effectiveWm);
       }
       final rawPath = (arResult.applyWatermark && effectiveWm != null)

@@ -338,7 +338,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               quarterTurns: _uiQuarterTurns,
               onMove: (x, y) => ref
                   .read(settingsProvider.notifier)
-                  .updateWatermark(wm.copyWith(posX: x, posY: y)),
+                  .updateWatermark(wm.copyWith(containerPosX: x, containerPosY: y)),
             ),
           // 녹화 중 인디케이터
           if (_isRecording)
@@ -619,7 +619,8 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
   @override
   void didUpdateWidget(covariant _WatermarkOverlay old) {
     super.didUpdateWidget(old);
-    if (old.wm.posX != widget.wm.posX || old.wm.posY != widget.wm.posY) {
+    if (old.wm.containerPosX != widget.wm.containerPosX ||
+        old.wm.containerPosY != widget.wm.containerPosY) {
       _dragX = null;
       _dragY = null;
     }
@@ -634,13 +635,11 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
   @override
   Widget build(BuildContext context) {
     final wm = widget.wm;
-    final lines = wm.lines
-        .where((l) => l.visible)
-        .map((l) => _lineText(l, wm))
-        .where((s) => s.isNotEmpty)
+    final now = _now;
+    final visible = wm.boxes
+        .where((b) => b.visible && _boxText(b, now).isNotEmpty)
         .toList();
-
-    if (lines.isEmpty) return const SizedBox.shrink();
+    if (visible.isEmpty) return const SizedBox.shrink();
 
     final mq = MediaQuery.of(context);
     final screenW = mq.size.width;
@@ -650,77 +649,109 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
     final photoAspect = math.max(sensor.width, sensor.height) /
         math.min(sensor.width, sensor.height);
 
-    final marginX = wm.fontSize * screenW / 960.0;
-    final marginY = wm.fontSize * screenH / (960.0 * photoAspect);
-
+    // 사진 px → 화면 px 스케일 (폰트·위치 공통). bake의 shortSide/480 비례와 일치.
+    final fontScale =
+        math.min(screenW / 480.0, screenH / (480.0 * photoAspect));
+    final shortSidePx = fontScale * 480.0;
     final fontMax = mq.size.shortestSide * 0.09;
-    final overlayFont = math.min(
-      wm.fontSize * screenW / 480.0,
-      wm.fontSize * screenH / (480.0 * photoAspect),
-    ).clamp(8.0, fontMax);
 
-    final boxColor = Color.fromARGB(
-        (wm.boxOpacity * 255).round().clamp(0, 255), 0, 0, 0);
+    // 각 박스 측정
+    final sizes = <Size>[];
+    final positions = <Offset>[];
+    final fonts = <double>[];
+    double maxFont = 0;
+    for (final b in visible) {
+      final f = (b.fontSize * fontScale).clamp(8.0, fontMax);
+      fonts.add(f);
+      maxFont = math.max(maxFont, f);
+      final tp = TextPainter(
+        text: TextSpan(
+          text: _boxText(b, now),
+          style: TextStyle(
+            fontSize: f,
+            fontWeight: _fontWeight(b.weight),
+            fontFamily: _fontFam(b.fontFamily),
+            height: 1.25,
+          ),
+        ),
+        textDirection: TextDirection.ltr,
+        textAlign: _align(b.alignment),
+        textScaler: TextScaler.noScaling,
+      )..layout();
+      // +2px: 시스템 글꼴 배율 무시(noScaling)와 함께 서브픽셀 줄바꿈 방지
+      sizes.add(Size(tp.width + 2, tp.height));
+      positions.add(Offset(b.dx * shortSidePx, b.dy * shortSidePx));
+    }
 
-    final crossAlign = switch (wm.alignment) {
-      WatermarkAlign.left => CrossAxisAlignment.start,
-      WatermarkAlign.center => CrossAxisAlignment.center,
-      WatermarkAlign.right => CrossAxisAlignment.end,
-    };
+    double minX = double.infinity, minY = double.infinity;
+    double maxX = -double.infinity, maxY = -double.infinity;
+    for (var i = 0; i < visible.length; i++) {
+      final p = positions[i], s = sizes[i];
+      minX = math.min(minX, p.dx);
+      minY = math.min(minY, p.dy);
+      maxX = math.max(maxX, p.dx + s.width);
+      maxY = math.max(maxY, p.dy + s.height);
+    }
 
-    final textAlign = switch (wm.alignment) {
-      WatermarkAlign.left => TextAlign.left,
-      WatermarkAlign.center => TextAlign.center,
-      WatermarkAlign.right => TextAlign.right,
-    };
+    final pad = maxFont * 0.4;
+    final containerSize =
+        Size((maxX - minX) + pad * 2, (maxY - minY) + pad * 2);
 
-    final vp = mq.viewPadding;
-    final posX = _dragX ?? wm.posX;
-    final posY = _dragY ?? wm.posY;
+    final boxColor = Color(wm.bgColorArgb);
     final draggable = widget.onMove != null;
 
+    // 컨테이너 = 배경 + 그 안에 자유 배치된 박스들. 카메라에선 컨테이너 전체만 이동.
     final box = Container(
       key: _boxKey,
-      padding: EdgeInsets.symmetric(
-        horizontal: overlayFont * 0.5,
-        vertical: overlayFont * 0.3,
-      ),
+      width: containerSize.width,
+      height: containerSize.height,
       decoration: BoxDecoration(
         color: boxColor,
-        borderRadius: BorderRadius.circular(overlayFont * 0.2),
-        // 드래그 가능함을 알리는 옅은 점선 느낌의 테두리
+        borderRadius: BorderRadius.circular(pad * 0.5),
         border: draggable
             ? Border.all(color: Colors.white.withValues(alpha: 0.5), width: 1)
             : null,
       ),
-      child: Column(
-        crossAxisAlignment: crossAlign,
-        mainAxisSize: MainAxisSize.min,
-        children: lines
-            .map((text) => Text(
-                  text,
-                  textAlign: textAlign,
+      child: Stack(
+        children: [
+          for (var i = 0; i < visible.length; i++)
+            Positioned(
+              left: pad + (positions[i].dx - minX),
+              top: pad + (positions[i].dy - minY),
+              child: SizedBox(
+                width: sizes[i].width,
+                child: Text(
+                  _boxText(visible[i], now),
+                  textAlign: _align(visible[i].alignment),
+                  textScaler: TextScaler.noScaling,
                   style: TextStyle(
-                    color: Colors.white,
-                    fontSize: overlayFont,
-                    fontWeight: wm.bold ? FontWeight.bold : FontWeight.normal,
-                    fontFamily: _fontFam(wm.fontFamily),
+                    color: Color(visible[i].textColor),
+                    fontSize: fonts[i],
+                    fontWeight: _fontWeight(visible[i].weight),
+                    fontFamily: _fontFam(visible[i].fontFamily),
                     shadows: const [Shadow(blurRadius: 2)],
-                    height: 1.35,
+                    height: 1.25,
                   ),
-                ))
-            .toList(),
+                ),
+              ),
+            ),
+        ],
       ),
     );
+
+    final vp = mq.viewPadding;
+    final margin = maxFont * 0.5;
+    final posX = _dragX ?? wm.containerPosX;
+    final posY = _dragY ?? wm.containerPosY;
 
     // 자유 위치: posX/posY(0~1) → Alignment. 여백(마진+세이프에어리어) 안쪽에 배치
     return Positioned.fill(
       child: Padding(
         padding: EdgeInsets.only(
-          top: marginY + vp.top,
-          bottom: marginY + vp.bottom,
-          left: marginX + vp.left,
-          right: marginX + vp.right,
+          top: margin + vp.top,
+          bottom: margin + vp.bottom,
+          left: margin + vp.left,
+          right: margin + vp.right,
         ),
         child: LayoutBuilder(
           builder: (context, constraints) {
@@ -739,8 +770,10 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
               final bs = _boxKey.currentContext?.size ?? Size.zero;
               final freeW = availW - bs.width;
               final freeH = availH - bs.height;
-              final curX = (_dragX ?? wm.posX) * (freeW > 0 ? freeW : 0);
-              final curY = (_dragY ?? wm.posY) * (freeH > 0 ? freeH : 0);
+              final curX =
+                  (_dragX ?? wm.containerPosX) * (freeW > 0 ? freeW : 0);
+              final curY =
+                  (_dragY ?? wm.containerPosY) * (freeH > 0 ? freeH : 0);
               _grabDX = curX - local.dx;
               _grabDY = curY - local.dy;
             }
@@ -796,16 +829,29 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
         WatermarkFont.monospace => 'monospace',
         WatermarkFont.serif => 'serif',
         WatermarkFont.sansSerif => 'sans-serif',
+        WatermarkFont.heavy => kWatermarkHeavyFont,
       };
 
-  String _lineText(WatermarkLine line, WatermarkSettings wm) {
-    switch (line.type) {
+  FontWeight _fontWeight(WatermarkWeight w) => switch (w) {
+        WatermarkWeight.normal => FontWeight.w400,
+        WatermarkWeight.bold => FontWeight.w700,
+        WatermarkWeight.black => FontWeight.w900,
+      };
+
+  TextAlign _align(WatermarkAlign a) => switch (a) {
+        WatermarkAlign.left => TextAlign.left,
+        WatermarkAlign.center => TextAlign.center,
+        WatermarkAlign.right => TextAlign.right,
+      };
+
+  String _boxText(WatermarkBox b, DateTime now) {
+    switch (b.type) {
       case WatermarkLineType.date:
-        return _fmtDate(_now, wm.dateFormat);
+        return _fmtDate(now, b.dateFormat);
       case WatermarkLineType.time:
-        return wm.timeFormat.isEmpty ? '' : _fmtTime(_now, wm.timeFormat);
+        return b.timeFormat.isEmpty ? '' : _fmtTime(now, b.timeFormat);
       case WatermarkLineType.customText:
-        return line.customText.trim();
+        return b.customText.trim();
     }
   }
 

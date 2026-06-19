@@ -6,34 +6,99 @@ import '../../../../core/constants/app_constants.dart';
 enum WatermarkPosition { topLeft, topRight, bottomLeft, bottomRight }
 enum WatermarkLineType { date, time, customText }
 enum WatermarkAlign { left, center, right }
-enum WatermarkFont { sansSerif, monospace, serif }
+enum WatermarkFont { sansSerif, monospace, serif, heavy }
+enum WatermarkWeight { normal, bold, black }
 
-// ── 워터마크 라인 ─────────────────────────────────────────────
+// ── 워터마크 박스 (날짜/시간/커스텀 각각 독립 설정·위치) ─────────
 
-class WatermarkLine {
+class WatermarkBox {
   final WatermarkLineType type;
   final bool visible;
   final String customText;
+  final double dx; // 컨테이너 내 상대 위치 (사진 shortSide 기준 정규화 오프셋)
+  final double dy;
+  final double fontSize;
+  final WatermarkWeight weight;
+  final WatermarkFont fontFamily;
+  final int textColor; // ARGB 정수 (기본 흰색)
+  final WatermarkAlign alignment;
+  final String dateFormat; // type == date 일 때 사용
+  final String timeFormat; // type == time 일 때 사용
 
-  const WatermarkLine({
+  const WatermarkBox({
     required this.type,
     this.visible = true,
     this.customText = '',
+    this.dx = 0,
+    this.dy = 0,
+    this.fontSize = 32,
+    this.weight = WatermarkWeight.normal,
+    this.fontFamily = WatermarkFont.sansSerif,
+    this.textColor = 0xFFFFFFFF,
+    this.alignment = WatermarkAlign.left,
+    this.dateFormat = 'yyyy-MM-dd',
+    this.timeFormat = 'HH:mm',
   });
 
-  WatermarkLine copyWith({bool? visible, String? customText}) => WatermarkLine(
+  WatermarkBox copyWith({
+    bool? visible,
+    String? customText,
+    double? dx,
+    double? dy,
+    double? fontSize,
+    WatermarkWeight? weight,
+    WatermarkFont? fontFamily,
+    int? textColor,
+    WatermarkAlign? alignment,
+    String? dateFormat,
+    String? timeFormat,
+  }) =>
+      WatermarkBox(
         type: type,
         visible: visible ?? this.visible,
         customText: customText ?? this.customText,
+        dx: dx ?? this.dx,
+        dy: dy ?? this.dy,
+        fontSize: fontSize ?? this.fontSize,
+        weight: weight ?? this.weight,
+        fontFamily: fontFamily ?? this.fontFamily,
+        textColor: textColor ?? this.textColor,
+        alignment: alignment ?? this.alignment,
+        dateFormat: dateFormat ?? this.dateFormat,
+        timeFormat: timeFormat ?? this.timeFormat,
       );
 
-  Map<String, dynamic> toJson() =>
-      {'type': type.name, 'visible': visible, 'customText': customText};
+  Map<String, dynamic> toJson() => {
+        'type': type.name,
+        'visible': visible,
+        'customText': customText,
+        'dx': dx,
+        'dy': dy,
+        'fontSize': fontSize,
+        'weight': weight.name,
+        'fontFamily': fontFamily.name,
+        'textColor': textColor,
+        'alignment': alignment.name,
+        'dateFormat': dateFormat,
+        'timeFormat': timeFormat,
+      };
 
-  factory WatermarkLine.fromJson(Map<String, dynamic> j) => WatermarkLine(
+  factory WatermarkBox.fromJson(Map<String, dynamic> j) => WatermarkBox(
         type: WatermarkLineType.values.byName(j['type'] as String? ?? 'date'),
         visible: j['visible'] as bool? ?? true,
         customText: j['customText'] as String? ?? '',
+        dx: (j['dx'] as num?)?.toDouble() ?? 0,
+        dy: (j['dy'] as num?)?.toDouble() ?? 0,
+        fontSize: (j['fontSize'] as num?)?.toDouble() ?? 32,
+        weight:
+            WatermarkWeight.values.byName(j['weight'] as String? ?? 'normal'),
+        fontFamily:
+            WatermarkFont.values.byName(j['fontFamily'] as String? ?? 'sansSerif'),
+        textColor: (j['textColor'] as num?)?.toInt() ?? 0xFFFFFFFF,
+        alignment:
+            WatermarkAlign.values.byName(j['alignment'] as String? ?? 'left'),
+        dateFormat: j['dateFormat'] as String? ?? 'yyyy-MM-dd',
+        timeFormat: j['timeFormat'] as String? ?? 'HH:mm',
       );
 }
 
@@ -41,23 +106,49 @@ class WatermarkLine {
 
 class WatermarkSettings {
   final bool enabled;
-  final List<WatermarkLine> lines;
-  final WatermarkPosition position;
-  final double fontSize;
-  final bool bold;
-  final WatermarkAlign alignment;
-  final WatermarkFont fontFamily;
-  final String dateFormat;
-  final String timeFormat;
-  final double boxOpacity; // 0.1 ~ 1.0
-  final double posX; // 0(좌)~1(우) 자유 위치
-  final double posY; // 0(상)~1(하) 자유 위치
+  final List<WatermarkBox> boxes;
+  final double containerPosX; // 0(좌)~1(우) 컨테이너 전체 위치
+  final double containerPosY; // 0(상)~1(하)
+  final int bgColorIndex;     // bgPresets 인덱스
+  final double bgOpacity;     // 0 ~ 1
 
-  static const List<WatermarkLine> defaultLines = [
-    WatermarkLine(type: WatermarkLineType.date),
-    WatermarkLine(type: WatermarkLineType.time),
-    WatermarkLine(type: WatermarkLineType.customText, visible: false),
+  /// 컨테이너 배경 프리셋 색상 (불투명 ARGB 기준)
+  static const List<int> bgPresets = [
+    0xFF000000, // 검정
+    0xFF424242, // 진회색
+    0xFFFFFFFF, // 흰색
+    0xFF0D47A1, // 남색
+    0xFF1B5E20, // 초록
+    0xFFB71C1C, // 빨강
   ];
+
+  /// 글자색 프리셋 (박스별 선택)
+  static const List<int> textPresets = [
+    0xFFFFFFFF, // 흰색
+    0xFF000000, // 검정
+    0xFF9E9E9E, // 회색
+    0xFFF44336, // 빨강
+    0xFFE91E63, // 핑크
+    0xFFFF9800, // 주황
+    0xFFFFEB3B, // 노랑
+    0xFFCDDC39, // 라임
+    0xFF4CAF50, // 초록
+    0xFF009688, // 청록
+    0xFF00BCD4, // 시안
+    0xFF2196F3, // 파랑
+    0xFF3F51B5, // 남색
+    0xFF9C27B0, // 보라
+    0xFF795548, // 갈색
+    0xFFFF4081, // 형광핑크
+  ];
+
+  /// 기본 박스 3종 (세로 스택)
+  static List<WatermarkBox> defaultBoxes() => const [
+        WatermarkBox(type: WatermarkLineType.date, dy: 0.0),
+        WatermarkBox(type: WatermarkLineType.time, dy: 0.12),
+        WatermarkBox(
+            type: WatermarkLineType.customText, visible: false, dy: 0.24),
+      ];
 
   /// 4코너 enum → (posX, posY) 변환 (구 설정 마이그레이션용)
   static (double, double) posFromCorner(WatermarkPosition p) => switch (p) {
@@ -69,86 +160,132 @@ class WatermarkSettings {
 
   WatermarkSettings({
     this.enabled = false,
-    List<WatermarkLine>? lines,
-    this.position = WatermarkPosition.bottomRight,
-    this.fontSize = 32,
-    this.bold = false,
-    this.alignment = WatermarkAlign.right,
-    this.fontFamily = WatermarkFont.sansSerif,
-    this.dateFormat = 'yyyy-MM-dd',
-    this.timeFormat = 'HH:mm',
-    this.boxOpacity = 0.67,
-    this.posX = 1.0,
-    this.posY = 1.0,
-  }) : lines = lines ?? defaultLines;
+    List<WatermarkBox>? boxes,
+    this.containerPosX = 1.0,
+    this.containerPosY = 1.0,
+    this.bgColorIndex = 0,
+    this.bgOpacity = 0.67,
+  }) : boxes = boxes ?? defaultBoxes();
+
+  /// 컨테이너 배경색 (투명도 적용 ARGB)
+  int get bgColorArgb {
+    final base = bgPresets[bgColorIndex.clamp(0, bgPresets.length - 1)];
+    final a = (bgOpacity * 255).round().clamp(0, 255);
+    return (a << 24) | (base & 0x00FFFFFF);
+  }
 
   WatermarkSettings copyWith({
     bool? enabled,
-    List<WatermarkLine>? lines,
-    WatermarkPosition? position,
-    double? fontSize,
-    bool? bold,
-    WatermarkAlign? alignment,
-    WatermarkFont? fontFamily,
-    String? dateFormat,
-    String? timeFormat,
-    double? boxOpacity,
-    double? posX,
-    double? posY,
+    List<WatermarkBox>? boxes,
+    double? containerPosX,
+    double? containerPosY,
+    int? bgColorIndex,
+    double? bgOpacity,
   }) =>
       WatermarkSettings(
         enabled: enabled ?? this.enabled,
-        lines: lines ?? this.lines,
-        position: position ?? this.position,
-        fontSize: fontSize ?? this.fontSize,
-        bold: bold ?? this.bold,
-        alignment: alignment ?? this.alignment,
-        fontFamily: fontFamily ?? this.fontFamily,
-        dateFormat: dateFormat ?? this.dateFormat,
-        timeFormat: timeFormat ?? this.timeFormat,
-        boxOpacity: boxOpacity ?? this.boxOpacity,
-        posX: posX ?? this.posX,
-        posY: posY ?? this.posY,
+        boxes: boxes ?? this.boxes,
+        containerPosX: containerPosX ?? this.containerPosX,
+        containerPosY: containerPosY ?? this.containerPosY,
+        bgColorIndex: bgColorIndex ?? this.bgColorIndex,
+        bgOpacity: bgOpacity ?? this.bgOpacity,
       );
 
   Map<String, dynamic> toJson() => {
         'enabled': enabled,
-        'lines': lines.map((l) => l.toJson()).toList(),
-        'position': position.name,
-        'fontSize': fontSize,
-        'bold': bold,
-        'alignment': alignment.name,
-        'fontFamily': fontFamily.name,
-        'dateFormat': dateFormat,
-        'timeFormat': timeFormat,
-        'boxOpacity': boxOpacity,
-        'posX': posX,
-        'posY': posY,
+        'boxes': boxes.map((b) => b.toJson()).toList(),
+        'containerPosX': containerPosX,
+        'containerPosY': containerPosY,
+        'bgColorIndex': bgColorIndex,
+        'bgOpacity': bgOpacity,
       };
 
   factory WatermarkSettings.fromJson(Map<String, dynamic> j) {
-    final position = WatermarkPosition.values
-        .byName(j['position'] as String? ?? 'bottomRight');
-    // 구 설정엔 posX/posY가 없으므로 코너 enum에서 유도
-    final fallback = posFromCorner(position);
+    // 신 포맷
+    if (j['boxes'] != null) {
+      return WatermarkSettings(
+        enabled: j['enabled'] as bool? ?? false,
+        boxes: (j['boxes'] as List<dynamic>)
+            .map((b) => WatermarkBox.fromJson(b as Map<String, dynamic>))
+            .toList(),
+        containerPosX: (j['containerPosX'] as num?)?.toDouble() ?? 1.0,
+        containerPosY: (j['containerPosY'] as num?)?.toDouble() ?? 1.0,
+        bgColorIndex: (j['bgColorIndex'] as num?)?.toInt() ?? 0,
+        bgOpacity: (j['bgOpacity'] as num?)?.toDouble() ?? 0.67,
+      );
+    }
+    // ── 구 포맷(단일 박스 + lines) → 신 포맷 마이그레이션 ──
+    return WatermarkSettings._fromLegacy(j);
+  }
+
+  factory WatermarkSettings._fromLegacy(Map<String, dynamic> j) {
+    final oldFontSize = (j['fontSize'] as num?)?.toDouble() ?? 32;
+    final oldWeight = (j['bold'] as bool? ?? false)
+        ? WatermarkWeight.bold
+        : WatermarkWeight.normal;
+    final oldAlign =
+        WatermarkAlign.values.byName(j['alignment'] as String? ?? 'right');
+    final oldFont =
+        WatermarkFont.values.byName(j['fontFamily'] as String? ?? 'sansSerif');
+    final oldDateFmt = j['dateFormat'] as String? ?? 'yyyy-MM-dd';
+    final oldTimeFmt = j['timeFormat'] as String? ?? 'HH:mm';
+
+    // 컨테이너 위치: posX/posY 우선, 없으면 코너 enum에서 유도
+    final position =
+        WatermarkPosition.values.byName(j['position'] as String? ?? 'bottomRight');
+    final corner = posFromCorner(position);
+    final posX = (j['posX'] as num?)?.toDouble() ?? corner.$1;
+    final posY = (j['posY'] as num?)?.toDouble() ?? corner.$2;
+
+    // 구 lines → boxes (등장 순서대로 세로 스택). 누락 타입은 비가시로 보강.
+    final byType = <WatermarkLineType, Map<String, dynamic>>{};
+    final order = <WatermarkLineType>[];
     final rawLines = j['lines'] as List<dynamic>?;
+    if (rawLines != null) {
+      for (final l in rawLines) {
+        final m = l as Map<String, dynamic>;
+        final t = WatermarkLineType.values.byName(m['type'] as String? ?? 'date');
+        if (!byType.containsKey(t)) {
+          byType[t] = m;
+          order.add(t);
+        }
+      }
+    }
+    for (final t in WatermarkLineType.values) {
+      if (!byType.containsKey(t)) {
+        byType[t] = {'type': t.name, 'visible': false, 'customText': ''};
+        order.add(t);
+      }
+    }
+
+    var dy = 0.0;
+    final boxes = <WatermarkBox>[];
+    for (final t in order) {
+      final m = byType[t]!;
+      boxes.add(WatermarkBox(
+        type: t,
+        visible: m['visible'] as bool? ?? true,
+        customText: m['customText'] as String? ?? '',
+        dx: 0,
+        dy: dy,
+        fontSize: oldFontSize,
+        weight: oldWeight,
+        fontFamily: oldFont,
+        textColor: 0xFFFFFFFF,
+        alignment: oldAlign,
+        dateFormat: oldDateFmt,
+        timeFormat: oldTimeFmt,
+      ));
+      dy += 0.12;
+    }
+
     return WatermarkSettings(
       enabled: j['enabled'] as bool? ?? false,
-      lines: rawLines
-          ?.map((l) => WatermarkLine.fromJson(l as Map<String, dynamic>))
-          .toList(),
-      position: position,
-      fontSize: (j['fontSize'] as num?)?.toDouble() ?? 32,
-      bold: j['bold'] as bool? ?? false,
-      alignment:
-          WatermarkAlign.values.byName(j['alignment'] as String? ?? 'right'),
-      fontFamily: WatermarkFont.values
-          .byName(j['fontFamily'] as String? ?? 'sansSerif'),
-      dateFormat: j['dateFormat'] as String? ?? 'yyyy-MM-dd',
-      timeFormat: j['timeFormat'] as String? ?? 'HH:mm',
-      boxOpacity: (j['boxOpacity'] as num?)?.toDouble() ?? 0.67,
-      posX: (j['posX'] as num?)?.toDouble() ?? fallback.$1,
-      posY: (j['posY'] as num?)?.toDouble() ?? fallback.$2,
+      boxes: boxes,
+      containerPosX: posX,
+      containerPosY: posY,
+      bgColorIndex: 0, // 검정
+      bgOpacity: (j['boxOpacity'] as num?)?.toDouble() ?? 0.67,
     );
   }
 }
