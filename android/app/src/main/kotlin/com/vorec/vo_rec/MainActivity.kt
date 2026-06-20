@@ -265,16 +265,7 @@ class MainActivity : FlutterActivity() {
                     startActivityForResult(
                         Intent(this, ArMeasureActivity::class.java).apply {
                             putExtra(ArMeasureActivity.EXTRA_WATERMARK_ENABLED, watermarkEnabled)
-                            call.argument<String>("wmPosition")?.let { putExtra("wmPosition", it) }
-                            call.argument<String>("wmDateFmt")?.let { putExtra("wmDateFmt", it) }
-                            call.argument<String>("wmTimeFmt")?.let { putExtra("wmTimeFmt", it) }
-                            call.argument<String>("wmCustomText")?.let { putExtra("wmCustomText", it) }
-                            call.argument<Int>("wmFontSize")?.let { putExtra("wmFontSize", it) }
-                            call.argument<Boolean>("wmBold")?.let { putExtra("wmBold", it) }
-                            call.argument<Double>("wmBoxOpacity")?.let { putExtra("wmBoxOpacity", it.toFloat()) }
-                            call.argument<String>("wmAlignment")?.let { putExtra("wmAlignment", it) }
-                            call.argument<Double>("wmPosX")?.let { putExtra(ArMeasureActivity.EXTRA_POS_X, it.toFloat()) }
-                            call.argument<Double>("wmPosY")?.let { putExtra(ArMeasureActivity.EXTRA_POS_Y, it.toFloat()) }
+                            call.argument<String>("wmJson")?.let { putExtra("wmJson", it) }
                         },
                         AR_REQUEST_CODE
                     )

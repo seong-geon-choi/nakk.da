@@ -653,7 +653,6 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
     final fontScale =
         math.min(screenW / 480.0, screenH / (480.0 * photoAspect));
     final shortSidePx = fontScale * 480.0;
-    final fontMax = mq.size.shortestSide * 0.09;
 
     // 각 박스 측정
     final sizes = <Size>[];
@@ -661,7 +660,8 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
     final fonts = <double>[];
     double maxFont = 0;
     for (final b in visible) {
-      final f = (b.fontSize * fontScale).clamp(8.0, fontMax);
+      // 클램프 없이 bake와 동일 공식: 라이브 미리보기 = 저장 사진 크기 일치
+      final f = b.fontSize * fontScale;
       fonts.add(f);
       maxFont = math.max(maxFont, f);
       final tp = TextPainter(
@@ -708,7 +708,7 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
       decoration: BoxDecoration(
         color: boxColor,
         borderRadius: BorderRadius.circular(pad * 0.5),
-        border: draggable
+        border: (draggable && !wm.hideContainerBorder)
             ? Border.all(color: Colors.white.withValues(alpha: 0.5), width: 1)
             : null,
       ),
@@ -739,84 +739,93 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
       ),
     );
 
-    final vp = mq.viewPadding;
-    final margin = maxFont * 0.5;
+    final margin = shortSidePx * 0.01;
     final posX = _dragX ?? wm.containerPosX;
     final posY = _dragY ?? wm.containerPosY;
 
-    // 자유 위치: posX/posY(0~1) → Alignment. 여백(마진+세이프에어리어) 안쪽에 배치
+    // 가로 회전 시 박스의 화면 점유 footprint는 가로/세로가 뒤바뀐다.
+    // 이를 반영하지 않으면 가로에서 한 축(사용자 기준 상하) 이동 범위가 크게 줄어든다.
+    final landscape = widget.quarterTurns.isOdd;
+    final footW = landscape ? containerSize.height : containerSize.width;
+    final footH = landscape ? containerSize.width : containerSize.height;
+
+    // 자유 위치: posX/posY(0~1). 사진 가장자리(거의 구석)까지 배치.
+    // 시스템 바 안전영역(viewPadding) 미적용 → 저장 사진과 동일하게 구석까지 이동 가능.
     return Positioned.fill(
       child: Padding(
-        padding: EdgeInsets.only(
-          top: margin + vp.top,
-          bottom: margin + vp.bottom,
-          left: margin + vp.left,
-          right: margin + vp.right,
-        ),
+        padding: EdgeInsets.all(margin),
         child: LayoutBuilder(
           builder: (context, constraints) {
             final availW = constraints.maxWidth;
             final availH = constraints.maxHeight;
-            // AR과 동일: 잡은 지점 기준 상대 이동 (점프 없음)
+            // footprint(회전 반영) 기준 자유 이동 범위
+            final freeW = (availW - footW).clamp(0.0, double.infinity);
+            final freeH = (availH - footH).clamp(0.0, double.infinity);
+
             Offset? areaLocal(Offset global) {
               final rb =
                   _areaKey.currentContext?.findRenderObject() as RenderBox?;
               return rb?.globalToLocal(global);
             }
 
+            // 잡은 지점 기준 상대 이동(점프 없음) — footprint 중심 기준
             void onStart(Offset global) {
               final local = areaLocal(global);
               if (local == null) return;
-              final bs = _boxKey.currentContext?.size ?? Size.zero;
-              final freeW = availW - bs.width;
-              final freeH = availH - bs.height;
-              final curX =
-                  (_dragX ?? wm.containerPosX) * (freeW > 0 ? freeW : 0);
-              final curY =
-                  (_dragY ?? wm.containerPosY) * (freeH > 0 ? freeH : 0);
-              _grabDX = curX - local.dx;
-              _grabDY = curY - local.dy;
+              final cx = footW / 2 + (_dragX ?? wm.containerPosX) * freeW;
+              final cy = footH / 2 + (_dragY ?? wm.containerPosY) * freeH;
+              _grabDX = cx - local.dx;
+              _grabDY = cy - local.dy;
             }
 
             void onMove(Offset global) {
               final local = areaLocal(global);
               if (local == null) return;
-              final bs = _boxKey.currentContext?.size ?? Size.zero;
-              final freeW = availW - bs.width;
-              final freeH = availH - bs.height;
+              final cx = local.dx + _grabDX;
+              final cy = local.dy + _grabDY;
               setState(() {
-                _dragX = freeW > 0
-                    ? ((local.dx + _grabDX) / freeW).clamp(0.0, 1.0)
-                    : 0.0;
-                _dragY = freeH > 0
-                    ? ((local.dy + _grabDY) / freeH).clamp(0.0, 1.0)
-                    : 0.0;
+                _dragX =
+                    freeW > 0 ? ((cx - footW / 2) / freeW).clamp(0.0, 1.0) : 0.0;
+                _dragY =
+                    freeH > 0 ? ((cy - footH / 2) / freeH).clamp(0.0, 1.0) : 0.0;
               });
             }
+
+            // footprint 중심 → 회전 전 박스 좌상단(중심 정렬 후 회전)
+            final centerX = footW / 2 + posX * freeW;
+            final centerY = footH / 2 + posY * freeH;
 
             return SizedBox(
               key: _areaKey,
               width: availW,
               height: availH,
-              child: Align(
-                alignment: Alignment(posX * 2 - 1, posY * 2 - 1),
-                child: GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onPanStart: !draggable ? null : (d) => onStart(d.globalPosition),
-                  onPanUpdate: !draggable ? null : (d) => onMove(d.globalPosition),
-                  onPanEnd: !draggable
-                      ? null
-                      : (_) {
-                          if (_dragX != null && _dragY != null) {
-                            widget.onMove!(_dragX!, _dragY!);
-                          }
-                        },
-                  child: AnimatedRotation(
-                    turns: widget.quarterTurns / 4,
-                    duration: const Duration(milliseconds: 250),
-                    child: box,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  Positioned(
+                    left: centerX - containerSize.width / 2,
+                    top: centerY - containerSize.height / 2,
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onPanStart:
+                          !draggable ? null : (d) => onStart(d.globalPosition),
+                      onPanUpdate:
+                          !draggable ? null : (d) => onMove(d.globalPosition),
+                      onPanEnd: !draggable
+                          ? null
+                          : (_) {
+                              if (_dragX != null && _dragY != null) {
+                                widget.onMove!(_dragX!, _dragY!);
+                              }
+                            },
+                      child: AnimatedRotation(
+                        turns: widget.quarterTurns / 4,
+                        duration: const Duration(milliseconds: 250),
+                        child: box,
+                      ),
+                    ),
                   ),
-                ),
+                ],
               ),
             );
           },

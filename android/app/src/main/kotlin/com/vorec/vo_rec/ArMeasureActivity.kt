@@ -74,25 +74,27 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
     private var includeLength = true
     private var applyWatermark = false
 
-    // 워터마크 오버레이
-    private var wmPosition = "bottomRight"
-    private var wmPosX = 1f   // 0(좌)~1(우) 자유 위치
-    private var wmPosY = 1f   // 0(상)~1(하) 자유 위치
+    // 워터마크 오버레이 (컨테이너 + 박스 N개)
+    private var wmPosX = 1f   // 0(좌)~1(우) 컨테이너 위치
+    private var wmPosY = 1f   // 0(상)~1(하)
     private var wmDragDX = 0f // 드래그 시작 시 터치-뷰 오프셋
     private var wmDragDY = 0f
     private var wmDragging = false
-    private var wmDateFmt = ""
-    private var wmTimeFmt = ""
-    private var wmCustomText = ""
-    private var wmFontSize = 32
-    private var wmBold = false
-    private var wmBoxOpacity = 0.67f
-    private var wmAlignment = "right"
-    private lateinit var wmOverlay: TextView
+    private var wmBgColor = Color.argb(170, 0, 0, 0)
+    private var wmHideBorder = false
+    private var wmBoxes: List<WmBox> = emptyList()
+    private var wmTextViews: List<TextView> = emptyList()
+    private lateinit var wmOverlay: FrameLayout
     private val wmHandler = Handler(Looper.getMainLooper())
     private val wmRunnable = object : Runnable {
         override fun run() { updateWmOverlay(); wmHandler.postDelayed(this, 1000) }
     }
+
+    private data class WmBox(
+        val type: String, val dateFormat: String, val timeFormat: String,
+        val customText: String, val dx: Float, val dy: Float, val fontSize: Float,
+        val weight: Int, val fontFamily: String, val color: Int, val align: String
+    )
 
     @Volatile private var currentFrame: Frame? = null
 
@@ -145,16 +147,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             )
         }
         applyWatermark = intent.getBooleanExtra(EXTRA_WATERMARK_ENABLED, false)
-        wmPosition    = intent.getStringExtra("wmPosition")  ?: "bottomRight"
-        wmPosX        = intent.getFloatExtra(EXTRA_POS_X, 1f)
-        wmPosY        = intent.getFloatExtra(EXTRA_POS_Y, 1f)
-        wmDateFmt     = intent.getStringExtra("wmDateFmt")   ?: ""
-        wmTimeFmt     = intent.getStringExtra("wmTimeFmt")   ?: ""
-        wmCustomText  = intent.getStringExtra("wmCustomText") ?: ""
-        wmFontSize    = intent.getIntExtra("wmFontSize", 32)
-        wmBold        = intent.getBooleanExtra("wmBold", false)
-        wmBoxOpacity  = intent.getFloatExtra("wmBoxOpacity", 0.67f)
-        wmAlignment   = intent.getStringExtra("wmAlignment") ?: "right"
+        parseWatermarkJson(intent.getStringExtra("wmJson"))
         displayRotationHelper = DisplayRotationHelper(this)
         setupLayout()
     }
@@ -193,6 +186,8 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         if (::sensitivitySeekBar.isInitialized) {
             sensitivitySeekBar.rotation = if (turns == 0) 270f else 90f
         }
+        // 회전으로 footprint(가로/세로)가 바뀌므로 워터마크 재배치
+        if (::wmOverlay.isInitialized && !wmDragging) positionWatermark()
     }
 
     override fun onDestroy() {
@@ -472,34 +467,89 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             .start()
     }
 
+    private fun parseWatermarkJson(json: String?) {
+        if (json.isNullOrEmpty()) return
+        try {
+            val o = org.json.JSONObject(json)
+            wmBgColor = o.optInt("bgColor", wmBgColor)
+            wmHideBorder = o.optBoolean("hideBorder", false)
+            wmPosX = o.optDouble("posX", 1.0).toFloat()
+            wmPosY = o.optDouble("posY", 1.0).toFloat()
+            val arr = o.optJSONArray("boxes")
+            val list = mutableListOf<WmBox>()
+            if (arr != null) for (i in 0 until arr.length()) {
+                val b = arr.getJSONObject(i)
+                list.add(WmBox(
+                    b.optString("type", "date"),
+                    b.optString("dateFormat", "yyyy-MM-dd"),
+                    b.optString("timeFormat", "HH:mm"),
+                    b.optString("customText", ""),
+                    b.optDouble("dx", 0.0).toFloat(),
+                    b.optDouble("dy", 0.0).toFloat(),
+                    b.optDouble("fontSize", 32.0).toFloat(),
+                    b.optInt("weight", 0),
+                    b.optString("fontFamily", "sansSerif"),
+                    b.optInt("color", Color.WHITE),
+                    b.optString("align", "left")
+                ))
+            }
+            wmBoxes = list
+        } catch (e: Exception) {
+            Log.e(TAG, "wmJson parse failed", e)
+        }
+    }
+
+    private fun loadHeavyTypeface(): Typeface? = try {
+        Typeface.createFromAsset(
+            assets, "flutter_assets/assets/fonts/BlackHanSans-Regular.ttf")
+    } catch (e: Exception) { null }
+
+    private fun typefaceFor(family: String, weight: Int, heavy: Typeface?): Typeface {
+        val base = when (family) {
+            "monospace" -> Typeface.MONOSPACE
+            "serif" -> Typeface.SERIF
+            "heavy" -> heavy ?: Typeface.DEFAULT_BOLD
+            else -> Typeface.DEFAULT
+        }
+        return if (weight >= 1) Typeface.create(base, Typeface.BOLD) else base
+    }
+
+    private fun fmtWmDate(cal: java.util.Calendar, fmt: String): String {
+        val y = cal.get(java.util.Calendar.YEAR)
+        val yy = (y % 100).toString().padStart(2, '0')
+        val mm = (cal.get(java.util.Calendar.MONTH) + 1).toString().padStart(2, '0')
+        val dd = cal.get(java.util.Calendar.DAY_OF_MONTH).toString().padStart(2, '0')
+        val hh = cal.get(java.util.Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
+        val mi = cal.get(java.util.Calendar.MINUTE).toString().padStart(2, '0')
+        val ss = cal.get(java.util.Calendar.SECOND).toString().padStart(2, '0')
+        return when (fmt) {
+            "yy/MM/dd" -> "$yy/$mm/$dd"
+            "MM/dd" -> "$mm/$dd"
+            "yyyy-MM-dd HH:mm:ss" -> "$y-$mm-$dd $hh:$mi:$ss"
+            "yyyy-MM-dd HH:mm" -> "$y-$mm-$dd $hh:$mi"
+            else -> "$y-$mm-$dd"
+        }
+    }
+
+    private fun fmtWmTime(cal: java.util.Calendar, fmt: String): String {
+        val hh = cal.get(java.util.Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
+        val mi = cal.get(java.util.Calendar.MINUTE).toString().padStart(2, '0')
+        val ss = cal.get(java.util.Calendar.SECOND).toString().padStart(2, '0')
+        return if (fmt == "HH:mm:ss") "$hh:$mi:$ss" else "$hh:$mi"
+    }
+
     private fun updateWmOverlay() {
         if (!::wmOverlay.isInitialized) return
         val cal = java.util.Calendar.getInstance()
-        val lines = mutableListOf<String>()
-        if (wmDateFmt.isNotEmpty()) {
-            val y  = cal.get(java.util.Calendar.YEAR)
-            val yy = (y % 100).toString().padStart(2, '0')
-            val mm = (cal.get(java.util.Calendar.MONTH) + 1).toString().padStart(2, '0')
-            val dd = cal.get(java.util.Calendar.DAY_OF_MONTH).toString().padStart(2, '0')
-            val dh  = cal.get(java.util.Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
-            val dmin = cal.get(java.util.Calendar.MINUTE).toString().padStart(2, '0')
-            val dsec = cal.get(java.util.Calendar.SECOND).toString().padStart(2, '0')
-            lines.add(when (wmDateFmt) {
-                "yy/MM/dd" -> "$yy/$mm/$dd"
-                "MM/dd"    -> "$mm/$dd"
-                "yyyy-MM-dd HH:mm:ss" -> "$y-$mm-$dd $dh:$dmin:$dsec"
-                "yyyy-MM-dd HH:mm"    -> "$y-$mm-$dd $dh:$dmin"
-                else       -> "$y-$mm-$dd"
-            })
+        for (i in wmBoxes.indices) {
+            if (i >= wmTextViews.size) break
+            val b = wmBoxes[i]
+            wmTextViews[i].text = when (b.type) {
+                "date" -> fmtWmDate(cal, b.dateFormat)
+                "time" -> if (b.timeFormat.isEmpty()) "" else fmtWmTime(cal, b.timeFormat)
+                else -> b.customText
+            }
         }
-        if (wmTimeFmt.isNotEmpty()) {
-            val hh  = cal.get(java.util.Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
-            val min = cal.get(java.util.Calendar.MINUTE).toString().padStart(2, '0')
-            val sec = cal.get(java.util.Calendar.SECOND).toString().padStart(2, '0')
-            lines.add(if (wmTimeFmt == "HH:mm:ss") "$hh:$min:$sec" else "$hh:$min")
-        }
-        if (wmCustomText.isNotEmpty()) lines.add(wmCustomText)
-        wmOverlay.text = lines.joinToString("\n")
         if (!wmDragging) wmOverlay.post { positionWatermark() }
     }
 
@@ -511,15 +561,18 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             wmOverlay.post { positionWatermark() }
             return
         }
-        val freeW = (parent.width - wmOverlay.width).coerceAtLeast(0)
-        val freeH = (parent.height - wmOverlay.height).coerceAtLeast(0)
-        (wmOverlay.layoutParams as FrameLayout.LayoutParams).apply {
-            gravity = Gravity.TOP or Gravity.START
-            leftMargin = (wmPosX * freeW).toInt()
-            topMargin = (wmPosY * freeH).toInt()
-            rightMargin = 0; bottomMargin = 0
-        }
-        wmOverlay.requestLayout()
+        // 위치는 translation으로만 이동(레이아웃/측정에 영향 없음 → 줄바꿈 방지).
+        // 컨테이너는 좌상단(margin 0)에 전체 폭으로 측정되어 항상 자연 너비를 가진다.
+        // 가로 회전 시 화면 점유 footprint는 가로/세로가 뒤바뀜(중심 기준 회전).
+        val landscape = uiTurns % 2 == 1
+        val fw = if (landscape) wmOverlay.height else wmOverlay.width
+        val fh = if (landscape) wmOverlay.width else wmOverlay.height
+        val freeW = (parent.width - fw).coerceAtLeast(0)
+        val freeH = (parent.height - fh).coerceAtLeast(0)
+        val footL = wmPosX * freeW
+        val footT = wmPosY * freeH
+        wmOverlay.translationX = footL + fw / 2f - wmOverlay.width / 2f
+        wmOverlay.translationY = footT + fh / 2f - wmOverlay.height / 2f
     }
 
     // ── Capture ──────────────────────────────────────────────────────
@@ -696,64 +749,92 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             gravity = Gravity.CENTER
         }
 
-        // 워터마크 오버레이 뷰 (드래그로 위치 이동 가능)
-        // Flutter와 동일한 공식으로 화면 크기 기준 폰트 크기 계산
-        val dm = resources.displayMetrics
-        val screenWDp = dm.widthPixels / dm.density
-        val screenHDp = dm.heightPixels / dm.density
-        val photoAspect = screenHDp / screenWDp  // 세로 화면: height > width
-        val fontDp = minOf(
-            wmFontSize * screenWDp / 480f,
-            wmFontSize * screenHDp / (480f * photoAspect)
-        ).coerceIn(8f, screenWDp * 0.09f)
-        wmOverlay = TextView(this).apply {
-            setTextSize(android.util.TypedValue.COMPLEX_UNIT_DIP, fontDp)
-            setTextColor(Color.WHITE)
-            typeface = if (wmBold) Typeface.DEFAULT_BOLD else Typeface.DEFAULT
-            gravity = when (wmAlignment) {
-                "left"   -> Gravity.START
-                "center" -> Gravity.CENTER_HORIZONTAL
-                else     -> Gravity.END
-            }
-            setPadding(dpToPx(10), dpToPx(5), dpToPx(10), dpToPx(5))
+        // 워터마크 컨테이너 (배경 + 독립 박스 N개) — Flutter 오버레이와 동일 스케일
+        // shortSidePx ≈ 화면 짧은 변(세로 화면 너비). 폰트/위치 모두 이 기준.
+        val shortSidePx = resources.displayMetrics.widthPixels.toFloat()
+        val fontScale = shortSidePx / 480f
+        val heavyTf = loadHeavyTypeface()
+        val pxX = wmBoxes.map { it.dx * shortSidePx }
+        val pxY = wmBoxes.map { it.dy * shortSidePx }
+        val minPxX = pxX.minOrNull() ?: 0f
+        val minPxY = pxY.minOrNull() ?: 0f
+        var maxFontPx = 0f
+        val tvs = mutableListOf<TextView>()
+        for (b in wmBoxes) {
+            val fpx = b.fontSize * fontScale
+            if (fpx > maxFontPx) maxFontPx = fpx
+            tvs.add(TextView(this).apply {
+                setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, fpx)
+                setTextColor(b.color)
+                typeface = typefaceFor(b.fontFamily, b.weight, heavyTf)
+                gravity = when (b.align) {
+                    "left" -> Gravity.START
+                    "center" -> Gravity.CENTER_HORIZONTAL
+                    else -> Gravity.END
+                }
+                includeFontPadding = false
+                setShadowLayer(2f, 0f, 0f, Color.argb(160, 0, 0, 0))
+            })
+        }
+        val wmPad = (maxFontPx * 0.4f).toInt().coerceAtLeast(1)
+        wmOverlay = FrameLayout(this).apply {
+            setPadding(wmPad, wmPad, wmPad, wmPad)
             background = GradientDrawable().apply {
-                val a = (wmBoxOpacity * 255).toInt().coerceIn(0, 255)
-                setColor(Color.argb(a, 0, 0, 0))
-                cornerRadius = dpToPx(4).toFloat()
-                // 드래그 가능 표시용 옅은 테두리
-                setStroke(dpToPx(1), Color.argb(128, 255, 255, 255))
+                setColor(wmBgColor)
+                cornerRadius = maxFontPx * 0.2f
+                if (!wmHideBorder) setStroke(dpToPx(1), Color.argb(128, 255, 255, 255))
             }
-            visibility = if (applyWatermark) View.VISIBLE else View.GONE
+            visibility = if (applyWatermark && wmBoxes.isNotEmpty()) View.VISIBLE else View.GONE
+            for (i in wmBoxes.indices) {
+                addView(tvs[i], FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    gravity = Gravity.TOP or Gravity.START
+                    leftMargin = (pxX[i] - minPxX).toInt()
+                    topMargin = (pxY[i] - minPxY).toInt()
+                })
+            }
+            // 컨테이너 전체 드래그
             setOnTouchListener { v, e ->
                 if (!applyWatermark) return@setOnTouchListener false
                 when (e.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> {
                         wmDragging = true
-                        wmDragDX = v.x - e.rawX
-                        wmDragDY = v.y - e.rawY
+                        wmDragDX = v.translationX - e.rawX
+                        wmDragDY = v.translationY - e.rawY
                         true
                     }
                     android.view.MotionEvent.ACTION_MOVE -> {
                         val parent = v.parent as? View ?: return@setOnTouchListener true
-                        val nx = (e.rawX + wmDragDX).toInt()
-                            .coerceIn(0, (parent.width - v.width).coerceAtLeast(0))
-                        val ny = (e.rawY + wmDragDY).toInt()
-                            .coerceIn(0, (parent.height - v.height).coerceAtLeast(0))
-                        (v.layoutParams as FrameLayout.LayoutParams).apply {
-                            gravity = Gravity.TOP or Gravity.START
-                            leftMargin = nx; topMargin = ny; rightMargin = 0; bottomMargin = 0
-                        }
-                        v.requestLayout()
+                        // 회전 반영 footprint로 클램프(중심 기준 회전 → 중심을 옮긴다).
+                        // 위치는 translation으로만 이동해 측정 폭이 줄지 않음(줄바꿈 방지).
+                        val landscape = uiTurns % 2 == 1
+                        val fw = if (landscape) v.height else v.width
+                        val fh = if (landscape) v.width else v.height
+                        val freeW = (parent.width - fw).coerceAtLeast(0).toFloat()
+                        val freeH = (parent.height - fh).coerceAtLeast(0).toFloat()
+                        val centerX0 = v.width / 2f + (e.rawX + wmDragDX)
+                        val centerY0 = v.height / 2f + (e.rawY + wmDragDY)
+                        val footL = (centerX0 - fw / 2f).coerceIn(0f, freeW)
+                        val footT = (centerY0 - fh / 2f).coerceIn(0f, freeH)
+                        v.translationX = footL + fw / 2f - v.width / 2f
+                        v.translationY = footT + fh / 2f - v.height / 2f
                         true
                     }
                     android.view.MotionEvent.ACTION_UP,
                     android.view.MotionEvent.ACTION_CANCEL -> {
                         val parent = v.parent as? View
                         if (parent != null) {
-                            val freeW = (parent.width - v.width).coerceAtLeast(1)
-                            val freeH = (parent.height - v.height).coerceAtLeast(1)
-                            wmPosX = (v.left.toFloat() / freeW).coerceIn(0f, 1f)
-                            wmPosY = (v.top.toFloat() / freeH).coerceIn(0f, 1f)
+                            val landscape = uiTurns % 2 == 1
+                            val fw = if (landscape) v.height else v.width
+                            val fh = if (landscape) v.width else v.height
+                            val freeW = (parent.width - fw).coerceAtLeast(1)
+                            val freeH = (parent.height - fh).coerceAtLeast(1)
+                            val footL = (v.width / 2f + v.translationX) - fw / 2f
+                            val footT = (v.height / 2f + v.translationY) - fh / 2f
+                            wmPosX = (footL / freeW).coerceIn(0f, 1f)
+                            wmPosY = (footT / freeH).coerceIn(0f, 1f)
                         }
                         wmDragging = false
                         v.performClick()
@@ -763,6 +844,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
                 }
             }
         }
+        wmTextViews = tvs
         val wmParams = FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT
         ).apply { gravity = Gravity.TOP or Gravity.START }
@@ -772,7 +854,8 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         watermarkBtn = makeIconToggleBtn(R.drawable.ic_wm_toggle) {
             applyWatermark = !applyWatermark
             updateWatermarkBtn()
-            wmOverlay.visibility = if (applyWatermark) View.VISIBLE else View.GONE
+            wmOverlay.visibility =
+                if (applyWatermark && wmBoxes.isNotEmpty()) View.VISIBLE else View.GONE
             if (applyWatermark) { updateWmOverlay(); wmHandler.post(wmRunnable) }
             else wmHandler.removeCallbacks(wmRunnable)
             showMsg(if (applyWatermark) "워터마크 표시 ON" else "워터마크 표시 OFF")

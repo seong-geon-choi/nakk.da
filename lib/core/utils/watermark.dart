@@ -109,7 +109,7 @@ Future<String> applyWatermark(
     final pad = maxFont * 0.4; // 컨테이너 안쪽 여백
     final boxW = (maxX - minX) + pad * 2;
     final boxH = (maxY - minY) + pad * 2;
-    final margin = maxFont * 0.5; // 사진 가장자리와의 최소 여백
+    final margin = shortSide * 0.01; // 사진 가장자리와의 최소 여백(거의 구석까지)
 
     final boxOffset = _boxOffset(settings.containerPosX, settings.containerPosY,
         w, h, boxW, boxH, margin);

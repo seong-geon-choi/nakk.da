@@ -111,6 +111,7 @@ class WatermarkSettings {
   final double containerPosY; // 0(상)~1(하)
   final int bgColorIndex;     // bgPresets 인덱스
   final double bgOpacity;     // 0 ~ 1
+  final bool hideContainerBorder; // 카메라 라이브 화면의 드래그 안내 테두리 숨김
 
   /// 컨테이너 배경 프리셋 색상 (불투명 ARGB 기준)
   static const List<int> bgPresets = [
@@ -165,6 +166,7 @@ class WatermarkSettings {
     this.containerPosY = 1.0,
     this.bgColorIndex = 0,
     this.bgOpacity = 0.67,
+    this.hideContainerBorder = false,
   }) : boxes = boxes ?? defaultBoxes();
 
   /// 컨테이너 배경색 (투명도 적용 ARGB)
@@ -181,6 +183,7 @@ class WatermarkSettings {
     double? containerPosY,
     int? bgColorIndex,
     double? bgOpacity,
+    bool? hideContainerBorder,
   }) =>
       WatermarkSettings(
         enabled: enabled ?? this.enabled,
@@ -189,6 +192,7 @@ class WatermarkSettings {
         containerPosY: containerPosY ?? this.containerPosY,
         bgColorIndex: bgColorIndex ?? this.bgColorIndex,
         bgOpacity: bgOpacity ?? this.bgOpacity,
+        hideContainerBorder: hideContainerBorder ?? this.hideContainerBorder,
       );
 
   Map<String, dynamic> toJson() => {
@@ -198,6 +202,7 @@ class WatermarkSettings {
         'containerPosY': containerPosY,
         'bgColorIndex': bgColorIndex,
         'bgOpacity': bgOpacity,
+        'hideContainerBorder': hideContainerBorder,
       };
 
   factory WatermarkSettings.fromJson(Map<String, dynamic> j) {
@@ -212,6 +217,7 @@ class WatermarkSettings {
         containerPosY: (j['containerPosY'] as num?)?.toDouble() ?? 1.0,
         bgColorIndex: (j['bgColorIndex'] as num?)?.toInt() ?? 0,
         bgOpacity: (j['bgOpacity'] as num?)?.toDouble() ?? 0.67,
+        hideContainerBorder: j['hideContainerBorder'] as bool? ?? false,
       );
     }
     // ── 구 포맷(단일 박스 + lines) → 신 포맷 마이그레이션 ──

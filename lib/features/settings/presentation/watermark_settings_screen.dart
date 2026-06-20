@@ -81,8 +81,6 @@ class _WatermarkSettingsScreenState
             selectedType: _selectedType,
             onToggleBg: (v) => setState(() => _darkPreview = v),
             onMoveBox: (type, x, y) => _moveBox(wm, type, x, y),
-            onMoveContainer: (x, y) =>
-                _update(wm.copyWith(containerPosX: x, containerPosY: y)),
             onSelectBox: _selectBox,
           ),
           const Divider(height: 1),
@@ -109,6 +107,14 @@ class _WatermarkSettingsScreenState
                     label: '${(wm.bgOpacity * 100).round()}%',
                     onChanged: (v) => _update(wm.copyWith(bgOpacity: v)),
                   ),
+                ),
+                CheckboxListTile(
+                  secondary: const Icon(Icons.border_outer),
+                  title: const Text('컨테이너 테두리 감추기'),
+                  subtitle: const Text('카메라 화면의 드래그 안내 테두리를 숨깁니다 (저장 사진엔 원래 표시되지 않음)'),
+                  value: wm.hideContainerBorder,
+                  onChanged: (v) =>
+                      _update(wm.copyWith(hideContainerBorder: v ?? false)),
                 ),
                 const Divider(height: 1),
 
@@ -213,7 +219,6 @@ class _PreviewSection extends StatelessWidget {
   final WatermarkLineType? selectedType;
   final void Function(bool) onToggleBg;
   final void Function(WatermarkLineType, double, double) onMoveBox;
-  final void Function(double, double) onMoveContainer;
   final void Function(WatermarkLineType) onSelectBox;
 
   const _PreviewSection({
@@ -222,7 +227,6 @@ class _PreviewSection extends StatelessWidget {
     required this.selectedType,
     required this.onToggleBg,
     required this.onMoveBox,
-    required this.onMoveContainer,
     required this.onSelectBox,
   });
 
@@ -253,7 +257,6 @@ class _PreviewSection extends StatelessWidget {
             dark: dark,
             selectedType: selectedType,
             onMoveBox: onMoveBox,
-            onMoveContainer: onMoveContainer,
             onSelectBox: onSelectBox,
           ),
           const SizedBox(height: 8),
@@ -263,7 +266,7 @@ class _PreviewSection extends StatelessWidget {
               const SizedBox(width: 4),
               Expanded(
                 child: Text(
-                  '박스를 드래그해 정렬하고(변끼리 자석 정렬), 배경을 드래그해 전체 위치를 옮기세요. 박스를 탭하면 아래 설정으로 이동합니다.',
+                  '박스를 드래그해 정렬하세요(서로 겹치지 않게 정렬됩니다). 박스를 탭하면 아래 설정으로 이동합니다. 전체 위치는 카메라 화면에서 옮깁니다.',
                   style: TextStyle(fontSize: 12, color: cs.onSurfaceVariant),
                 ),
               ),
@@ -366,8 +369,9 @@ class _Layout {
   final double pad;
   final double shortSidePx;
   final Offset groupMin;
+  final double canvasH;
   _Layout(this.boxes, this.containerOffset, this.containerSize, this.pad,
-      this.shortSidePx, this.groupMin);
+      this.shortSidePx, this.groupMin, this.canvasH);
   bool get isEmpty => boxes.isEmpty;
 }
 
@@ -378,7 +382,6 @@ class _WatermarkPreview extends StatefulWidget {
   final bool dark;
   final WatermarkLineType? selectedType;
   final void Function(WatermarkLineType, double, double) onMoveBox;
-  final void Function(double, double) onMoveContainer;
   final void Function(WatermarkLineType) onSelectBox;
 
   const _WatermarkPreview({
@@ -386,7 +389,6 @@ class _WatermarkPreview extends StatefulWidget {
     required this.dark,
     required this.selectedType,
     required this.onMoveBox,
-    required this.onMoveContainer,
     required this.onSelectBox,
   });
 
@@ -403,27 +405,22 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
   Offset _grab = Offset.zero;
   Offset? _liveTopLeft;
 
-  // 컨테이너(전체 박스) 드래그 상태
-  Offset _grabC = Offset.zero;
-  Offset? _liveCPos; // 0~1 컨테이너 위치 (드래그 중)
-
-  // 미리보기 캔버스 높이(고정). dx/dy는 이 값을 사진 shortSide처럼 사용.
-  static const double _canvasH = 240;
-
   _Layout _computeLayout(double canvasW, WatermarkSettings wm, DateTime now) {
-    const shortSidePx = _canvasH;
+    // 카메라와 동일한 스케일: shortSidePx = 캔버스 너비(≈화면 너비).
+    final shortSidePx = canvasW;
     final visible = wm.boxes
         .where((b) => b.visible && _previewBoxText(b, now).isNotEmpty)
         .toList();
     if (visible.isEmpty) {
-      return _Layout([], Offset.zero, Size.zero, 0, shortSidePx, Offset.zero);
+      return _Layout(
+          [], Offset.zero, Size.zero, 0, shortSidePx, Offset.zero, 140);
     }
 
     final sizes = <Size>[];
     final positions = <Offset>[];
     double maxFont = 0;
     for (final b in visible) {
-      final scaledFont = (b.fontSize * shortSidePx / 480.0).clamp(5.0, 40.0);
+      final scaledFont = b.fontSize * shortSidePx / 480.0;
       maxFont = maxFont > scaledFont ? maxFont : scaledFont;
       final tp = TextPainter(
         text: TextSpan(
@@ -457,12 +454,15 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
     final pad = maxFont * 0.4;
     final containerSize =
         Size((maxX - minX) + pad * 2, (maxY - minY) + pad * 2);
-    // 컨테이너(전체 박스)를 containerPos(0~1)에 따라 캔버스 안에 배치.
-    // 배경을 드래그하면 containerPos가, 박스를 드래그하면 dx/dy가 바뀐다.
-    final cpos = _liveCPos ?? Offset(wm.containerPosX, wm.containerPosY);
-    final freeW = (canvasW - containerSize.width).clamp(0.0, double.infinity);
-    final freeH = (_canvasH - containerSize.height).clamp(0.0, double.infinity);
-    final containerOffset = Offset(cpos.dx * freeW, cpos.dy * freeH);
+    // 캔버스는 컨테이너가 보일 정도만(세로로 길지 않게) — 약간의 여백만 둠
+    const vpad = 40.0;
+    final canvasH = math.max(containerSize.height + vpad * 2, 140.0);
+    // 컨테이너를 캔버스 중앙에 배치(박스 상대 배치/스타일 편집용).
+    // 컨테이너의 실제 위치는 카메라에서만 지정·기억한다.
+    final containerOffset = Offset(
+      ((canvasW - containerSize.width) / 2).clamp(0.0, double.infinity),
+      ((canvasH - containerSize.height) / 2).clamp(0.0, double.infinity),
+    );
 
     final boxes = <_BoxLayout>[];
     for (var i = 0; i < visible.length; i++) {
@@ -479,51 +479,12 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
     }
 
     return _Layout(boxes, containerOffset, containerSize, pad, shortSidePx,
-        Offset(minX, minY));
+        Offset(minX, minY), canvasH);
   }
 
   Offset? _areaLocal(Offset global) {
     final rb = _areaKey.currentContext?.findRenderObject() as RenderBox?;
     return rb?.globalToLocal(global);
-  }
-
-  /// 드래그 박스의 변을 다른 박스 변에 자석처럼 정렬
-  Offset _snap(Offset tl, Size size, _Layout frozen) {
-    final snapPx = frozen.shortSidePx * 0.03;
-    final l = tl.dx, r = tl.dx + size.width, cx = tl.dx + size.width / 2;
-    final t = tl.dy, b = tl.dy + size.height, cy = tl.dy + size.height / 2;
-    double bestDX = snapPx, adjX = 0, bestDY = snapPx, adjY = 0;
-    for (final o in frozen.boxes) {
-      if (o.type == _dragType) continue;
-      final rc = o.rect;
-      for (final pair in [
-        [l, rc.left],
-        [r, rc.right],
-        [cx, rc.center.dx],
-        [l, rc.right],
-        [r, rc.left],
-      ]) {
-        final d = (pair[0] - pair[1]).abs();
-        if (d < bestDX) {
-          bestDX = d;
-          adjX = pair[1] - pair[0];
-        }
-      }
-      for (final pair in [
-        [t, rc.top],
-        [b, rc.bottom],
-        [cy, rc.center.dy],
-        [t, rc.bottom],
-        [b, rc.top],
-      ]) {
-        final d = (pair[0] - pair[1]).abs();
-        if (d < bestDY) {
-          bestDY = d;
-          adjY = pair[1] - pair[0];
-        }
-      }
-    }
-    return Offset(tl.dx + adjX, tl.dy + adjY);
   }
 
   /// 드래그 박스가 다른 박스와 겹치면 침투가 적은 축으로 밀어내 겹침 방지
@@ -570,42 +531,10 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
         final layout = (_dragType != null && _frozen != null)
             ? _frozen!
             : _computeLayout(canvasW, wm, now);
+        final canvasH = layout.canvasH;
 
-        final csz = layout.containerSize;
-        final freeW = (canvasW - csz.width).clamp(0.0, double.infinity);
-        final freeH = (_canvasH - csz.height).clamp(0.0, double.infinity);
-
-        // 배경(캔버스) 드래그 = 컨테이너(전체 박스) 이동
         final children = <Widget>[
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onPanStart: (d) {
-                final local = _areaLocal(d.globalPosition);
-                if (local == null) return;
-                final curX = (_liveCPos?.dx ?? wm.containerPosX) * freeW;
-                final curY = (_liveCPos?.dy ?? wm.containerPosY) * freeH;
-                _grabC = Offset(curX - local.dx, curY - local.dy);
-                setState(() =>
-                    _liveCPos = Offset(wm.containerPosX, wm.containerPosY));
-              },
-              onPanUpdate: (d) {
-                final local = _areaLocal(d.globalPosition);
-                if (local == null) return;
-                setState(() => _liveCPos = Offset(
-                      freeW > 0
-                          ? ((local.dx + _grabC.dx) / freeW).clamp(0.0, 1.0)
-                          : 0.0,
-                      freeH > 0
-                          ? ((local.dy + _grabC.dy) / freeH).clamp(0.0, 1.0)
-                          : 0.0,
-                    ));
-              },
-              onPanEnd: (_) => _commitContainer(),
-              onPanCancel: _commitContainer,
-              child: Container(color: bgColor),
-            ),
-          ),
+          Container(color: bgColor),
         ];
 
         if (!layout.isEmpty) {
@@ -646,8 +575,7 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
                   textScaler: TextScaler.noScaling,
                   style: TextStyle(
                     color: Color(box.textColor),
-                    fontSize: (box.fontSize * layout.shortSidePx / 480.0)
-                        .clamp(5.0, 40.0),
+                    fontSize: box.fontSize * layout.shortSidePx / 480.0,
                     fontWeight: _fontWeight(box.weight),
                     fontFamily: _fontFamily(box.fontFamily),
                     height: 1.25,
@@ -676,7 +604,6 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
                   final local = _areaLocal(d.globalPosition);
                   if (local == null || _frozen == null) return;
                   var newTL = local + _grab;
-                  newTL = _snap(newTL, bl.rect.size, _frozen!);
                   newTL = _resolveCollisions(newTL, bl.rect.size, _frozen!);
                   setState(() => _liveTopLeft = newTL);
                 },
@@ -693,7 +620,7 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
           child: SizedBox(
             key: _areaKey,
             width: canvasW,
-            height: _canvasH,
+            height: canvasH,
             child: Stack(children: children),
           ),
         );
@@ -716,13 +643,6 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
       _frozen = null;
       _liveTopLeft = null;
     });
-  }
-
-  void _commitContainer() {
-    if (_liveCPos != null) {
-      widget.onMoveContainer(_liveCPos!.dx, _liveCPos!.dy);
-    }
-    setState(() => _liveCPos = null);
   }
 }
 
