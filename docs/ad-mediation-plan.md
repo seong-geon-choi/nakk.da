@@ -5,6 +5,8 @@
 > 배치/레이아웃 세부는 [`banner-ads-guide.md`](./banner-ads-guide.md) 참조(SDK 무관하게 유효).
 >
 > 🔄 **2026-06-18 갱신:** 배너 **자리(placeholder)·노출 토글은 이미 앱에 반영**됨(아래 §8-A). 광고 SDK 연동·전면 광고·수익 추정·정책 제약을 §8에 정리(프로덕션 착수 전 그대로 작업). **실제 광고는 아직 미연동.**
+>
+> 🔄 **2026-06-24 — AppLovin 계정 활성화 게이트 확인:** AppLovin Monetize 가입 시 신규 계정이 **비활성(disabled) 상태로 막힘** — "activation requirements" 미충족(메일/`account-approval@applovin.com` 안내). 원인은 **앱이 아직 비공개(closed) 트랙이라 "라이브 앱" 요건 미달**로 추정. AdMob은 이 게이트가 없으나, AppLovin은 막힘. **결정: 광고사 앱 등록·MAX 연동은 비공개 테스트 종료 후(프로덕션 공개 시점)에 진행**(§0과 동일). 비공개 기간엔 AdMob 계정·결제·세금 인증만 미리 준비. 가입 옵션은 **Monetize**(퍼블리셔)가 맞음(Advertise는 광고주용).
 
 ---
 
