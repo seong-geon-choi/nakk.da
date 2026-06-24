@@ -92,6 +92,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   ref.read(settingsProvider.notifier).updateShowLocationButton(v),
             ),
             SwitchListTile(
+              secondary: const Icon(Icons.my_location_outlined),
+              title: const Text('첫 기록 시 현장 정보 자동 추가'),
+              subtitle: const Text(
+                  '그날 현장 정보가 없을 때 첫 메모·사진을 추가하면 백그라운드로 1회 자동 수집·저장합니다'),
+              value: settings.autoLocationOnFirstEntry,
+              onChanged: (v) => ref
+                  .read(settingsProvider.notifier)
+                  .updateAutoLocationOnFirstEntry(v),
+            ),
+            SwitchListTile(
               secondary: const Icon(Icons.save_outlined),
               title: const Text('음성 입력 후 바로 저장'),
               subtitle: const Text('음성 텍스트 변환 완료 시 확인 없이 자동 저장합니다'),

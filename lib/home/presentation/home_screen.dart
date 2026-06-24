@@ -469,7 +469,10 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         ],
       ),
       bottomNavigationBar: _ActionBar(
-        onVoiceTap: () => _openMemoSheet(),
+        onVoiceTap: () {
+          unawaited(_maybeAutoAddLocation());
+          _openMemoSheet();
+        },
         onPhotoTap: _onPhotoTap,
         onMapTap: _onMapTap,
       ),
@@ -480,6 +483,34 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (!await _requireFolderSetup()) return;
     if (voiceMode && !await _requirePermission(Permission.microphone, '마이크')) return;
     if (mounted) MemoInputSheet.show(context, voiceMode: voiceMode);
+  }
+
+  /// 옵션이 켜져 있고 오늘 현장 정보가 한 건도 없으면, 첫 메모/사진 추가 시
+  /// 백그라운드로 현장 정보를 1회 수집·저장한다. (위치 권한이 이미 있을 때만)
+  bool _autoLocTriggered = false;
+  Future<void> _maybeAutoAddLocation() async {
+    if (_autoLocTriggered) return;
+    final settings = ref.read(settingsProvider).valueOrNull;
+    if (settings == null ||
+        !settings.autoLocationOnFirstEntry ||
+        settings.needsFolderSetup) {
+      return;
+    }
+    final blocks = ref.read(todayFileProvider).valueOrNull?.blocks ?? const [];
+    if (blocks.any((b) => b is LocationStatus)) return;
+    _autoLocTriggered = true; // 동시 탭(메모+사진) 중복 방지: await 이전에 선점
+    if (!await Permission.locationWhenInUse.status.isGranted) {
+      _autoLocTriggered = false;
+      if (mounted) {
+        showAppToast(context, '현장 정보 추가에 실패했습니다. 위치 권한을 추가해 주세요',
+            duration: const Duration(seconds: 3));
+      }
+      return;
+    }
+    final loc = await ref
+        .read(locationProvider.notifier)
+        .buildEnrichedLocation(isMove: false);
+    await ref.read(todayFileProvider.notifier).addLocationBlock(loc);
   }
 
   Future<void> _onFileListTap() async {
@@ -559,6 +590,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     if (!await _requirePermission(Permission.camera, '카메라')) return;
     if (!await _requirePermission(Permission.photos, '사진')) return;
     if (!mounted) return;
+    unawaited(_maybeAutoAddLocation());
     final result = await MemoInputSheet.pickMedia(context, ref);
     if (result == null || !mounted) return;
 
@@ -1469,11 +1501,51 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
         ],
       ),
       bottomNavigationBar: _ActionBar(
-        onVoiceTap: () => _openMemoSheet(),
+        onVoiceTap: () {
+          unawaited(_maybeAutoAddLocation());
+          _openMemoSheet();
+        },
         onPhotoTap: _onPhotoTap,
         onMapTap: () => context.push(AppRoutes.map, extra: widget.filePath),
       ),
     );
+  }
+
+  /// 옵션이 켜져 있고 이 파일(오늘 날짜)에 현장 정보가 없으면 첫 기록 시 1회 자동 수집.
+  /// 과거 날짜 파일엔 현재 위치를 넣지 않으므로 오늘 파일일 때만 동작한다.
+  bool _autoLocTriggered = false;
+  Future<void> _maybeAutoAddLocation() async {
+    if (_autoLocTriggered) return;
+    final settings = ref.read(settingsProvider).valueOrNull;
+    if (settings == null || !settings.autoLocationOnFirstEntry) return;
+    final filename = widget.filePath.replaceAll('\\', '/').split('/').last;
+    final date = FileNameParser.parseDate(filename);
+    final now = DateTime.now();
+    if (date == null ||
+        date.year != now.year ||
+        date.month != now.month ||
+        date.day != now.day) {
+      return;
+    }
+    final blocks =
+        ref.read(dayFileProvider(widget.filePath)).valueOrNull?.blocks ??
+            const [];
+    if (blocks.any((b) => b is LocationStatus)) return;
+    _autoLocTriggered = true; // 동시 탭 중복 방지: await 이전에 선점
+    if (!await Permission.locationWhenInUse.status.isGranted) {
+      _autoLocTriggered = false;
+      if (mounted) {
+        showAppToast(context, '현장 정보 추가에 실패했습니다. 위치 권한을 추가해 주세요',
+            duration: const Duration(seconds: 3));
+      }
+      return;
+    }
+    final loc = await ref
+        .read(locationProvider.notifier)
+        .buildEnrichedLocation(isMove: false);
+    await ref
+        .read(dayFileProvider(widget.filePath).notifier)
+        .addLocationBlock(loc);
   }
 
   /// 이 화면의 날짜에 촬영된 사진을 일괄 추가한다(날짜 고정 → 선택 없이 바로).
@@ -1502,6 +1574,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
   }
 
   Future<void> _onPhotoTap() async {
+    unawaited(_maybeAutoAddLocation());
     final result = await MemoInputSheet.pickMedia(context, ref);
     if (result == null || !mounted) return;
 

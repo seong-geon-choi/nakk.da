@@ -343,6 +343,7 @@ class AppSettings {
   final String saveDisplayPath; // 사람이 읽을 수 있는 경로 (UI 표시용)
   final String photoSavePath;
   final bool showLocationButton;
+  final bool autoLocationOnFirstEntry; // 첫 기록 시 현장 정보 1회 자동 추가
   final bool autoSaveVoice;
   final bool showAddressInMemoName;
   final bool showCatchInput; // 메모 작성 시 어종·길이 입력 항목 표시 여부
@@ -378,6 +379,7 @@ class AppSettings {
     this.saveDisplayPath = '',
     required this.photoSavePath,
     this.showLocationButton = true,
+    this.autoLocationOnFirstEntry = false,
     this.autoSaveVoice = true,
     this.showAddressInMemoName = true,
     this.showCatchInput = true,
@@ -414,6 +416,7 @@ class AppSettings {
     String? saveDisplayPath,
     String? photoSavePath,
     bool? showLocationButton,
+    bool? autoLocationOnFirstEntry,
     bool? autoSaveVoice,
     bool? showAddressInMemoName,
     bool? showCatchInput,
@@ -444,6 +447,8 @@ class AppSettings {
       saveDisplayPath: saveDisplayPath ?? this.saveDisplayPath,
       photoSavePath: photoSavePath ?? this.photoSavePath,
       showLocationButton: showLocationButton ?? this.showLocationButton,
+      autoLocationOnFirstEntry:
+          autoLocationOnFirstEntry ?? this.autoLocationOnFirstEntry,
       autoSaveVoice: autoSaveVoice ?? this.autoSaveVoice,
       showAddressInMemoName: showAddressInMemoName ?? this.showAddressInMemoName,
       showCatchInput: showCatchInput ?? this.showCatchInput,

@@ -113,6 +113,14 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     state = AsyncData(updated);
   }
 
+  Future<void> updateAutoLocationOnFirstEntry(bool value) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(autoLocationOnFirstEntry: value);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
   Future<void> updateShowCatchInput(bool value) async {
     final current = state.valueOrNull;
     if (current == null) return;

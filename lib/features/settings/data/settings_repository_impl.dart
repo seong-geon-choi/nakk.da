@@ -9,6 +9,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _saveDisplayPathKey = 'save_display_path';
   static const _photoSavePathKey = 'photo_save_path';
   static const _showLocationButtonKey = 'show_location_button';
+  static const _autoLocationOnFirstEntryKey = 'auto_location_on_first_entry';
   static const _autoSaveVoiceKey = 'auto_save_voice';
   static const _showAddressInMemoNameKey = 'show_address_in_memo_name';
   static const _showCatchInputKey = 'show_catch_input';
@@ -44,6 +45,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
         ? await _defaultPhotoSavePath()
         : storedPhotoPath;
     final showLocationButton = prefs.getBool(_showLocationButtonKey) ?? true;
+    final autoLocationOnFirstEntry =
+        prefs.getBool(_autoLocationOnFirstEntryKey) ?? false;
     final autoSaveVoice = prefs.getBool(_autoSaveVoiceKey) ?? true;
     final showAddressInMemoName = prefs.getBool(_showAddressInMemoNameKey) ?? true;
     final showCatchInput = prefs.getBool(_showCatchInputKey) ?? true;
@@ -82,6 +85,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       saveDisplayPath: saveDisplayPath,
       photoSavePath: photoSavePath,
       showLocationButton: showLocationButton,
+      autoLocationOnFirstEntry: autoLocationOnFirstEntry,
       autoSaveVoice: autoSaveVoice,
       showAddressInMemoName: showAddressInMemoName,
       showCatchInput: showCatchInput,
@@ -114,6 +118,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setString(_saveDisplayPathKey, settings.saveDisplayPath);
     await prefs.setString(_photoSavePathKey, settings.photoSavePath);
     await prefs.setBool(_showLocationButtonKey, settings.showLocationButton);
+    await prefs.setBool(
+        _autoLocationOnFirstEntryKey, settings.autoLocationOnFirstEntry);
     await prefs.setBool(_autoSaveVoiceKey, settings.autoSaveVoice);
     await prefs.setBool(_showAddressInMemoNameKey, settings.showAddressInMemoName);
     await prefs.setBool(_showCatchInputKey, settings.showCatchInput);
