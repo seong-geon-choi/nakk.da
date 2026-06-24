@@ -522,14 +522,22 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         val hh = cal.get(java.util.Calendar.HOUR_OF_DAY).toString().padStart(2, '0')
         val mi = cal.get(java.util.Calendar.MINUTE).toString().padStart(2, '0')
         val ss = cal.get(java.util.Calendar.SECOND).toString().padStart(2, '0')
+        val mmm = monthAbbr[cal.get(java.util.Calendar.MONTH)]
         return when (fmt) {
             "yy/MM/dd" -> "$yy/$mm/$dd"
             "MM/dd" -> "$mm/$dd"
+            "MMM/dd" -> "$mmm/$dd"
+            "yyyy MMM dd" -> "$y $mmm $dd"
             "yyyy-MM-dd HH:mm:ss" -> "$y-$mm-$dd $hh:$mi:$ss"
             "yyyy-MM-dd HH:mm" -> "$y-$mm-$dd $hh:$mi"
             else -> "$y-$mm-$dd"
         }
     }
+
+    private val monthAbbr = arrayOf(
+        "JAN", "FEB", "MAR", "APR", "MAY", "JUN",
+        "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"
+    )
 
     private fun fmtWmTime(cal: java.util.Calendar, fmt: String): String {
         val hh = cal.get(java.util.Calendar.HOUR_OF_DAY).toString().padStart(2, '0')

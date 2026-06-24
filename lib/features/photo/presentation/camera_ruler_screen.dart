@@ -876,14 +876,22 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
     final hh = dt.hour.toString().padLeft(2, '0');
     final min = dt.minute.toString().padLeft(2, '0');
     final sec = dt.second.toString().padLeft(2, '0');
+    final mmm = _monthAbbr[dt.month - 1];
     switch (fmt) {
       case 'yy/MM/dd': return '$yy/$mm/$dd';
       case 'MM/dd': return '$mm/$dd';
+      case 'MMM/dd': return '$mmm/$dd';
+      case 'yyyy MMM dd': return '$y $mmm $dd';
       case 'yyyy-MM-dd HH:mm:ss': return '$y-$mm-$dd $hh:$min:$sec';
       case 'yyyy-MM-dd HH:mm': return '$y-$mm-$dd $hh:$min';
       default: return '$y-$mm-$dd';
     }
   }
+
+  static const _monthAbbr = [
+    'JAN', 'FEB', 'MAR', 'APR', 'MAY', 'JUN',
+    'JUL', 'AUG', 'SEP', 'OCT', 'NOV', 'DEC',
+  ];
 
   String _fmtTime(DateTime dt, String fmt) {
     final hh = dt.hour.toString().padLeft(2, '0');
