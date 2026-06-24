@@ -7,6 +7,7 @@ import '../domain/models/memo_entry.dart';
 import '../../location/domain/models/location_status.dart';
 import '../../settings/presentation/settings_provider.dart';
 import '../../backup/presentation/backup_provider.dart';
+import '../../file_list/presentation/file_list_provider.dart';
 import '../../../core/utils/file_name_parser.dart';
 
 final memoRepositoryProvider = Provider<MemoRepository>(
@@ -33,6 +34,7 @@ class TodayFileNotifier extends AsyncNotifier<DayFile?> {
     final date = DateTime.now();
     await ref.read(memoRepositoryProvider).appendEntry(date, entry, settings.savePath);
     ref.invalidateSelf();
+    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
     unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
     if (entry.photoPath != null) {
       unawaited(ref.read(backupProvider.notifier).syncMediaFile(entry.photoPath!));
@@ -47,6 +49,7 @@ class TodayFileNotifier extends AsyncNotifier<DayFile?> {
     final date = DateTime.now();
     await ref.read(memoRepositoryProvider).appendLocationBlock(date, loc, settings.savePath);
     ref.invalidateSelf();
+    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
     unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
   }
 
@@ -55,6 +58,7 @@ class TodayFileNotifier extends AsyncNotifier<DayFile?> {
     final date = DateTime.now();
     await ref.read(memoRepositoryProvider).replaceBlock(date, blockIndex, newBlock, settings.savePath);
     ref.invalidateSelf();
+    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
     unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
   }
 
@@ -67,6 +71,7 @@ class TodayFileNotifier extends AsyncNotifier<DayFile?> {
         : null;
     await ref.read(memoRepositoryProvider).removeBlock(date, blockIndex, settings.savePath);
     ref.invalidateSelf();
+    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
     unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
     if (block is MemoEntry) {
       if (block.photoPath != null) {
@@ -108,6 +113,7 @@ class DayFileNotifier extends FamilyAsyncNotifier<DayFile?, String> {
     if (savePath == null) return;
     await ref.read(memoRepositoryProvider).appendEntry(_date, entry, savePath);
     ref.invalidateSelf();
+    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
     unawaited(ref.read(backupProvider.notifier).syncMdFile(_date, savePath));
     if (entry.photoPath != null) {
       unawaited(ref.read(backupProvider.notifier).syncMediaFile(entry.photoPath!));
@@ -122,6 +128,7 @@ class DayFileNotifier extends FamilyAsyncNotifier<DayFile?, String> {
     if (savePath == null) return;
     await ref.read(memoRepositoryProvider).appendLocationBlock(_date, loc, savePath);
     ref.invalidateSelf();
+    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
     unawaited(ref.read(backupProvider.notifier).syncMdFile(_date, savePath));
   }
 
@@ -130,6 +137,7 @@ class DayFileNotifier extends FamilyAsyncNotifier<DayFile?, String> {
     if (savePath == null) return;
     await ref.read(memoRepositoryProvider).replaceBlock(_date, blockIndex, newBlock, savePath);
     ref.invalidateSelf();
+    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
     unawaited(ref.read(backupProvider.notifier).syncMdFile(_date, savePath));
   }
 
@@ -142,6 +150,7 @@ class DayFileNotifier extends FamilyAsyncNotifier<DayFile?, String> {
         : null;
     await ref.read(memoRepositoryProvider).removeBlock(_date, blockIndex, savePath);
     ref.invalidateSelf();
+    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
     unawaited(ref.read(backupProvider.notifier).syncMdFile(_date, savePath));
     if (block is MemoEntry) {
       if (block.photoPath != null) {
