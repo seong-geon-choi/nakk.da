@@ -19,6 +19,7 @@ class VoiceRecordForegroundService : Service() {
         private const val RESULT_NOTIFICATION_ID = 1003
         const val ACTION_STOP = "com.sgchoisg.nakkda.STOP_VOICE_SERVICE"
         const val EXTRA_MODE  = "mode"
+        const val EXTRA_SHAKE_THRESHOLD = "shakeThresholdG"
 
         private const val VOL_CHANGED        = "android.media.VOLUME_CHANGED_ACTION"
         private const val EXTRA_STREAM_TYPE  = "android.media.EXTRA_VOLUME_STREAM_TYPE"
@@ -26,14 +27,21 @@ class VoiceRecordForegroundService : Service() {
         private const val EXTRA_PREV_STREAM_VALUE = "android.media.EXTRA_PREV_VOLUME_STREAM_VALUE"
         private const val DOUBLE_PRESS_MS    = 800L
 
-        private const val SHAKE_THRESHOLD_G      = 2.5f
+        private const val DEFAULT_SHAKE_THRESHOLD_G = 3.5f
         private const val MIN_SHAKE_INTERVAL_MS  = 250L
         private const val SHAKE_WINDOW_MS        = 1500L
         private const val REQUIRED_SHAKES        = 3
 
-        fun start(context: Context, mode: String = "shake") {
+        fun start(
+            context: Context,
+            mode: String = "shake",
+            shakeThresholdG: Float = DEFAULT_SHAKE_THRESHOLD_G,
+        ) {
             val intent = Intent(context, VoiceRecordForegroundService::class.java)
-                .apply { putExtra(EXTRA_MODE, mode) }
+                .apply {
+                    putExtra(EXTRA_MODE, mode)
+                    putExtra(EXTRA_SHAKE_THRESHOLD, shakeThresholdG)
+                }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
             } else {
@@ -92,6 +100,7 @@ class VoiceRecordForegroundService : Service() {
 
     // ── 흔들기 감지 ────────────────────────────────────────────
     private var sensorManager: SensorManager? = null
+    private var shakeThresholdG = DEFAULT_SHAKE_THRESHOLD_G
     private var lastShakeEventTime = 0L
     private var shakeCount         = 0
     private var windowStartTime    = 0L
@@ -104,7 +113,7 @@ class VoiceRecordForegroundService : Service() {
             val gForce = Math.sqrt((x * x + y * y + z * z).toDouble()).toFloat() /
                          SensorManager.GRAVITY_EARTH
 
-            if (gForce > SHAKE_THRESHOLD_G && now - lastShakeEventTime > MIN_SHAKE_INTERVAL_MS) {
+            if (gForce > shakeThresholdG && now - lastShakeEventTime > MIN_SHAKE_INTERVAL_MS) {
                 lastShakeEventTime = now
                 if (now - windowStartTime > SHAKE_WINDOW_MS) {
                     windowStartTime = now; shakeCount = 1
@@ -139,6 +148,7 @@ class VoiceRecordForegroundService : Service() {
         createResultNotificationChannel()
 
         currentMode = LocationTrackingService.getQuickLaunchMode(this)
+        shakeThresholdG = LocationTrackingService.getShakeThresholdG(this)
         applyMode(currentMode)
     }
 
@@ -150,8 +160,13 @@ class VoiceRecordForegroundService : Service() {
             return START_NOT_STICKY
         }
         val newMode = intent?.getStringExtra(EXTRA_MODE) ?: currentMode
-        if (newMode != currentMode) {
+        val newThreshold =
+            intent?.getFloatExtra(EXTRA_SHAKE_THRESHOLD, shakeThresholdG) ?: shakeThresholdG
+        // 모드가 바뀌거나, 흔들기 모드에서 임계값이 바뀌면 센서 리스너를 다시 붙인다.
+        if (newMode != currentMode ||
+            (newMode == "shake" && newThreshold != shakeThresholdG)) {
             currentMode = newMode
+            shakeThresholdG = newThreshold
             applyMode(currentMode)
         }
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)

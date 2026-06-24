@@ -20,6 +20,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _locationTrackingEnabledKey = 'location_tracking_enabled';
   static const _trackingIntervalMetersKey = 'tracking_interval_meters';
   static const _quickLaunchModeKey = 'quick_launch_mode';
+  static const _shakeThresholdGKey = 'shake_threshold_g';
   static const _driveBackupEnabledKey = 'drive_backup_enabled';
   static const _driveBackupIncludeMediaKey = 'drive_backup_include_media';
   static const _lastSyncAtKey = 'last_sync_at';
@@ -61,6 +62,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       (e) => e.name == quickLaunchModeStr,
       orElse: () => QuickLaunchMode.shake,
     );
+    final shakeThresholdG = prefs.getDouble(_shakeThresholdGKey) ?? 3.5;
     final driveBackupEnabled = prefs.getBool(_driveBackupEnabledKey) ?? false;
     final driveBackupIncludeMedia = prefs.getBool(_driveBackupIncludeMediaKey) ?? false;
     final lastSyncAtMs = prefs.getInt(_lastSyncAtKey);
@@ -91,6 +93,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       locationTrackingEnabled: locationTrackingEnabled,
       trackingIntervalMeters: trackingIntervalMeters,
       quickLaunchMode: quickLaunchMode,
+      shakeThresholdG: shakeThresholdG,
       driveBackupEnabled: driveBackupEnabled,
       driveBackupIncludeMedia: driveBackupIncludeMedia,
       lastSyncAt: lastSyncAt,
@@ -126,6 +129,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setBool(_locationTrackingEnabledKey, settings.locationTrackingEnabled);
     await prefs.setInt(_trackingIntervalMetersKey, settings.trackingIntervalMeters);
     await prefs.setString(_quickLaunchModeKey, settings.quickLaunchMode.name);
+    await prefs.setDouble(_shakeThresholdGKey, settings.shakeThresholdG);
     await prefs.setBool(_driveBackupEnabledKey, settings.driveBackupEnabled);
     await prefs.setBool(_driveBackupIncludeMediaKey, settings.driveBackupIncludeMedia);
     if (settings.lastSyncAt != null) {

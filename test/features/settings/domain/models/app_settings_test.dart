@@ -39,18 +39,26 @@ void main() {
   });
 
   group('WatermarkSettings (컨테이너 + 박스)', () {
-    test('기본값: 컨테이너 우하단(1,1), 박스 3종, 배경 검정', () {
+    test('기본값: 프리셋 레이아웃(박스 4종, 배경 투명, 테두리 숨김)', () {
       final wm = WatermarkSettings();
-      expect(wm.containerPosX, 1.0);
-      expect(wm.containerPosY, 1.0);
-      expect(wm.boxes.length, 3);
+      expect(wm.enabled, false); // 설치 시 워터마크 자체는 OFF
+      expect(wm.containerPosX, closeTo(0.6980602179600072, 1e-9));
+      expect(wm.containerPosY, closeTo(0.7945379171746418, 1e-9));
+      expect(wm.boxes.length, 4);
       expect(wm.boxes.map((b) => b.type).toSet(), {
         WatermarkLineType.date,
         WatermarkLineType.time,
         WatermarkLineType.customText,
+        WatermarkLineType.customText2,
       });
       expect(wm.bgColorIndex, 0);
-      expect(wm.bgOpacity, 0.67);
+      expect(wm.bgOpacity, 0.0);
+      expect(wm.hideContainerBorder, true);
+      // 텍스트1 기본값은 브랜드 워터마크('낚.다', 노랑)
+      final custom =
+          wm.boxes.firstWhere((b) => b.type == WatermarkLineType.customText);
+      expect(custom.customText, '낚.다');
+      expect(custom.textColor, 0xFFFFEB3B);
     });
 
     test('toJson/fromJson 왕복 시 컨테이너·박스 설정 보존', () {
@@ -60,6 +68,7 @@ void main() {
         containerPosY: 0.7,
         bgColorIndex: 3,
         bgOpacity: 0.5,
+        customColors: const [0xFF112233, 0xFF445566],
         boxes: const [
           WatermarkBox(
             type: WatermarkLineType.date,
@@ -80,7 +89,9 @@ void main() {
       expect(restored.containerPosY, closeTo(0.7, 1e-9));
       expect(restored.bgColorIndex, 3);
       expect(restored.bgOpacity, closeTo(0.5, 1e-9));
-      expect(restored.boxes.length, 1);
+      expect(restored.customColors, [0xFF112233, 0xFF445566]);
+      // 누락된 박스 타입은 비가시로 보강되어 항상 4종 유지
+      expect(restored.boxes.length, 4);
       final b = restored.boxes.first;
       expect(b.type, WatermarkLineType.date);
       expect(b.dx, closeTo(0.1, 1e-9));
@@ -125,7 +136,7 @@ void main() {
       expect(wm.containerPosY, closeTo(0.8, 1e-9));
       expect(wm.bgColorIndex, 0);
       expect(wm.bgOpacity, closeTo(0.4, 1e-9));
-      expect(wm.boxes.length, 3);
+      expect(wm.boxes.length, 4);
       // 박스별로 구 전역 폰트 설정이 이식됨
       for (final b in wm.boxes) {
         expect(b.fontSize, 48.0);

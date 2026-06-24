@@ -502,9 +502,14 @@ class MainActivity : FlutterActivity() {
                     }
                     "setQuickLaunchMode" -> {
                         val mode = call.argument<String>("mode") ?: "volume"
+                        val threshold =
+                            (call.argument<Double>("shakeThresholdG") ?: 3.5).toFloat()
                         getSharedPreferences(LocationTrackingService.PREFS_NAME, Context.MODE_PRIVATE)
-                            .edit().putString(LocationTrackingService.PREFS_QUICK_LAUNCH_MODE_KEY, mode).apply()
-                        VoiceRecordForegroundService.start(this, mode)
+                            .edit()
+                            .putString(LocationTrackingService.PREFS_QUICK_LAUNCH_MODE_KEY, mode)
+                            .putFloat(LocationTrackingService.PREFS_SHAKE_THRESHOLD_KEY, threshold)
+                            .apply()
+                        VoiceRecordForegroundService.start(this, mode, threshold)
                         result.success(null)
                     }
                     else -> result.notImplemented()
@@ -872,7 +877,8 @@ class MainActivity : FlutterActivity() {
         if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                 == android.content.pm.PackageManager.PERMISSION_GRANTED) {
             val mode = LocationTrackingService.getQuickLaunchMode(this)
-            VoiceRecordForegroundService.start(this, mode)
+            VoiceRecordForegroundService.start(
+                this, mode, LocationTrackingService.getShakeThresholdG(this))
         }
         val filter = IntentFilter(VoiceRecordAccessibilityService.BROADCAST_ACTION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

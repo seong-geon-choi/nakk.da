@@ -4,7 +4,7 @@ import '../../../../core/constants/app_constants.dart';
 // ── 워터마크 열거형 ────────────────────────────────────────────
 
 enum WatermarkPosition { topLeft, topRight, bottomLeft, bottomRight }
-enum WatermarkLineType { date, time, customText }
+enum WatermarkLineType { date, time, customText, customText2 }
 enum WatermarkAlign { left, center, right }
 enum WatermarkFont { sansSerif, monospace, serif, heavy }
 enum WatermarkWeight { normal, bold, black }
@@ -112,6 +112,7 @@ class WatermarkSettings {
   final int bgColorIndex;     // bgPresets 인덱스
   final double bgOpacity;     // 0 ~ 1
   final bool hideContainerBorder; // 카메라 라이브 화면의 드래그 안내 테두리 숨김
+  final List<int> customColors;   // 컬러피커로 선택한 사용자 색상 히스토리(최신순)
 
   /// 컨테이너 배경 프리셋 색상 (불투명 ARGB 기준)
   static const List<int> bgPresets = [
@@ -123,32 +124,50 @@ class WatermarkSettings {
     0xFFB71C1C, // 빨강
   ];
 
-  /// 글자색 프리셋 (박스별 선택)
+  /// 글자색 기본 프리셋 (박스별 선택). 그 외 색은 컬러피커로 선택.
   static const List<int> textPresets = [
     0xFFFFFFFF, // 흰색
     0xFF000000, // 검정
-    0xFF9E9E9E, // 회색
-    0xFFF44336, // 빨강
-    0xFFE91E63, // 핑크
-    0xFFFF9800, // 주황
     0xFFFFEB3B, // 노랑
-    0xFFCDDC39, // 라임
-    0xFF4CAF50, // 초록
-    0xFF009688, // 청록
-    0xFF00BCD4, // 시안
+    0xFFF44336, // 빨강
     0xFF2196F3, // 파랑
-    0xFF3F51B5, // 남색
-    0xFF9C27B0, // 보라
-    0xFF795548, // 갈색
-    0xFFFF4081, // 형광핑크
   ];
 
-  /// 기본 박스 3종 (세로 스택)
+  /// 컬러피커로 선택한 사용자 색상 히스토리 최대 개수
+  static const int maxCustomColors = 5;
+
+  /// 기본 박스 4종. 설치 시 기본 레이아웃(개발 기기에서 구성한 값을 기본값으로 채택).
   static List<WatermarkBox> defaultBoxes() => const [
-        WatermarkBox(type: WatermarkLineType.date, dy: 0.0),
-        WatermarkBox(type: WatermarkLineType.time, dy: 0.12),
         WatermarkBox(
-            type: WatermarkLineType.customText, visible: false, dy: 0.24),
+          type: WatermarkLineType.date,
+          dx: 0.14778951319252573,
+          dy: 0.19443800019054883,
+          fontSize: 24,
+          weight: WatermarkWeight.normal,
+          fontFamily: WatermarkFont.sansSerif,
+          textColor: 0xFFFFFFFF,
+        ),
+        WatermarkBox(
+          type: WatermarkLineType.time,
+          dx: -0.3018272679026534,
+          dy: 0.09612376143292686,
+          fontSize: 76,
+          weight: WatermarkWeight.black,
+          fontFamily: WatermarkFont.heavy,
+          textColor: 0xFFFFFFFF,
+        ),
+        WatermarkBox(
+          type: WatermarkLineType.customText,
+          customText: '낚.다',
+          dx: 0.3153880049542683,
+          dy: 0.1383987947789635,
+          fontSize: 20,
+          weight: WatermarkWeight.black,
+          fontFamily: WatermarkFont.sansSerif,
+          textColor: 0xFFFFEB3B,
+        ),
+        WatermarkBox(
+            type: WatermarkLineType.customText2, visible: false, dy: 0.36),
       ];
 
   /// 4코너 enum → (posX, posY) 변환 (구 설정 마이그레이션용)
@@ -162,11 +181,12 @@ class WatermarkSettings {
   WatermarkSettings({
     this.enabled = false,
     List<WatermarkBox>? boxes,
-    this.containerPosX = 1.0,
-    this.containerPosY = 1.0,
+    this.containerPosX = 0.6980602179600072,
+    this.containerPosY = 0.7945379171746418,
     this.bgColorIndex = 0,
-    this.bgOpacity = 0.67,
-    this.hideContainerBorder = false,
+    this.bgOpacity = 0.0,
+    this.hideContainerBorder = true,
+    this.customColors = const [],
   }) : boxes = boxes ?? defaultBoxes();
 
   /// 컨테이너 배경색 (투명도 적용 ARGB)
@@ -184,6 +204,7 @@ class WatermarkSettings {
     int? bgColorIndex,
     double? bgOpacity,
     bool? hideContainerBorder,
+    List<int>? customColors,
   }) =>
       WatermarkSettings(
         enabled: enabled ?? this.enabled,
@@ -193,6 +214,7 @@ class WatermarkSettings {
         bgColorIndex: bgColorIndex ?? this.bgColorIndex,
         bgOpacity: bgOpacity ?? this.bgOpacity,
         hideContainerBorder: hideContainerBorder ?? this.hideContainerBorder,
+        customColors: customColors ?? this.customColors,
       );
 
   Map<String, dynamic> toJson() => {
@@ -203,21 +225,35 @@ class WatermarkSettings {
         'bgColorIndex': bgColorIndex,
         'bgOpacity': bgOpacity,
         'hideContainerBorder': hideContainerBorder,
+        'customColors': customColors,
       };
 
   factory WatermarkSettings.fromJson(Map<String, dynamic> j) {
     // 신 포맷
     if (j['boxes'] != null) {
+      final boxes = (j['boxes'] as List<dynamic>)
+          .map((b) => WatermarkBox.fromJson(b as Map<String, dynamic>))
+          .toList();
+      // 구버전 저장본 보강: 누락된 박스 타입(예: 텍스트2)을 비가시로 추가
+      var dy = boxes.length * 0.12;
+      for (final t in WatermarkLineType.values) {
+        if (!boxes.any((b) => b.type == t)) {
+          boxes.add(WatermarkBox(type: t, visible: false, dy: dy));
+          dy += 0.12;
+        }
+      }
       return WatermarkSettings(
         enabled: j['enabled'] as bool? ?? false,
-        boxes: (j['boxes'] as List<dynamic>)
-            .map((b) => WatermarkBox.fromJson(b as Map<String, dynamic>))
-            .toList(),
+        boxes: boxes,
         containerPosX: (j['containerPosX'] as num?)?.toDouble() ?? 1.0,
         containerPosY: (j['containerPosY'] as num?)?.toDouble() ?? 1.0,
         bgColorIndex: (j['bgColorIndex'] as num?)?.toInt() ?? 0,
         bgOpacity: (j['bgOpacity'] as num?)?.toDouble() ?? 0.67,
         hideContainerBorder: j['hideContainerBorder'] as bool? ?? false,
+        customColors: (j['customColors'] as List<dynamic>?)
+                ?.map((c) => (c as num).toInt())
+                .toList() ??
+            const [],
       );
     }
     // ── 구 포맷(단일 박스 + lines) → 신 포맷 마이그레이션 ──
@@ -318,6 +354,7 @@ class AppSettings {
   final bool locationTrackingEnabled;
   final int trackingIntervalMeters;
   final QuickLaunchMode quickLaunchMode;
+  final double shakeThresholdG; // 흔들기 감지 가속도 임계값(G), 2.5~5.0
   final bool driveBackupEnabled;
   final bool driveBackupIncludeMedia;
   final DateTime? lastSyncAt;
@@ -352,6 +389,7 @@ class AppSettings {
     this.locationTrackingEnabled = false,
     this.trackingIntervalMeters = 100,
     this.quickLaunchMode = QuickLaunchMode.shake,
+    this.shakeThresholdG = 3.5,
     this.driveBackupEnabled = false,
     this.driveBackupIncludeMedia = false,
     this.lastSyncAt,
@@ -388,6 +426,7 @@ class AppSettings {
     bool? locationTrackingEnabled,
     int? trackingIntervalMeters,
     QuickLaunchMode? quickLaunchMode,
+    double? shakeThresholdG,
     bool? driveBackupEnabled,
     bool? driveBackupIncludeMedia,
     DateTime? lastSyncAt,
@@ -416,6 +455,7 @@ class AppSettings {
       locationTrackingEnabled: locationTrackingEnabled ?? this.locationTrackingEnabled,
       trackingIntervalMeters: trackingIntervalMeters ?? this.trackingIntervalMeters,
       quickLaunchMode: quickLaunchMode ?? this.quickLaunchMode,
+      shakeThresholdG: shakeThresholdG ?? this.shakeThresholdG,
       driveBackupEnabled: driveBackupEnabled ?? this.driveBackupEnabled,
       driveBackupIncludeMedia: driveBackupIncludeMedia ?? this.driveBackupIncludeMedia,
       lastSyncAt: clearLastSync ? null : (lastSyncAt ?? this.lastSyncAt),

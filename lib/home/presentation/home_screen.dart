@@ -26,6 +26,7 @@ import '../../core/utils/species_detector.dart';
 import '../../core/widgets/memo_date_picker_dialog.dart';
 import '../../core/services/saf_service.dart';
 import '../../core/services/memo_share_service.dart';
+import '../../core/services/app_update_service.dart';
 import '../../core/widgets/app_toast.dart';
 import 'dart:io';
 import 'package:geolocator/geolocator.dart';
@@ -57,6 +58,156 @@ Future<void> _shareDayMemo(
   );
 }
 
+/// 지정 날짜에 촬영된 갤러리 사진을 스캔해 그 날짜 메모에 일괄 추가한다.
+/// 진행률·확인 다이얼로그·결과 스낵바를 자체 처리하고, 추가된 장수를 반환한다(취소·없음=0).
+/// 사진 권한은 호출하는 쪽에서 먼저 확인한다.
+Future<int> _runPhotoImport(
+    BuildContext context, WidgetRef ref, DateTime date) async {
+  final settings = ref.read(settingsProvider).valueOrNull;
+  if (settings == null) return 0;
+
+  // 스캔 중 안내
+  ScaffoldMessenger.of(context).showSnackBar(
+    const SnackBar(content: Text('사진 검색 중...'), duration: Duration(minutes: 1)),
+  );
+  final photos = await scanGalleryPhotosByDate(date);
+  if (!context.mounted) return 0;
+  ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+  if (photos.isEmpty) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('해당 날짜에 촬영된 사진이 없습니다')),
+    );
+    return 0;
+  }
+
+  final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
+
+  // 50장 이상 추가 확인
+  if (photos.length >= 50) {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('사진이 많습니다'),
+        content: Text('${photos.length}장의 사진이 검색됐습니다. 모두 추가하시겠습니까?'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('추가')),
+        ],
+      ),
+    );
+    if (ok != true || !context.mounted) return 0;
+  }
+
+  // 확인 다이얼로그
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('사진 일괄 추가'),
+      content: Text('$dateStr에 촬영된 사진 ${photos.length}장을\n메모에 추가하시겠습니까?'),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
+        FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('추가')),
+      ],
+    ),
+  );
+  if (confirmed != true || !context.mounted) return 0;
+
+  final savePath = settings.savePath;
+
+  // 진행률 다이얼로그
+  final progress = ValueNotifier<int>(0);
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (_) => _ImportProgressDialog(progress: progress, total: photos.length),
+  );
+
+  // 기존 사진 타임스탬프 수집 (중복 방지) — 초 단위 비교, 구 HH:mm 형식 하위 호환
+  DateTime toSecond(DateTime dt) =>
+      DateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
+
+  final existing = await ref.read(memoRepositoryProvider).loadDayFile(date, savePath);
+  final existingPhotoSeconds = existing?.entries
+      .where((e) => e.isPhoto)
+      .map((e) => toSecond(e.timestamp))
+      .toSet() ?? <DateTime>{};
+
+  // 사진 처리
+  final entries = <MemoEntry>[];
+  int skipped = 0;
+  for (int i = 0; i < photos.length; i++) {
+    final photo = photos[i];
+    final photoSec = toSecond(photo.timestamp);
+    final photoMin = DateTime(photo.timestamp.year, photo.timestamp.month,
+        photo.timestamp.day, photo.timestamp.hour, photo.timestamp.minute);
+    if (existingPhotoSeconds.contains(photoSec) || existingPhotoSeconds.contains(photoMin)) {
+      skipped++;
+      progress.value = i + 1;
+      continue;
+    }
+    final ts = photo.timestamp.millisecondsSinceEpoch;
+    final originPath = photo.path;
+    if (originPath != null && originPath.isNotEmpty) {
+      // 갤러리 원본 경로 직접 참조 (복사 없음 — 단건 추가와 동일 방식)
+      entries.add(MemoEntry(
+        timestamp: photo.timestamp,
+        latitude: photo.lat,
+        longitude: photo.lng,
+        photoPath: originPath,
+      ));
+    } else {
+      // 절대경로를 얻지 못한 경우에만 photos/로 복사 (폴백)
+      final cachePath = await copyContentUriToCache(photo.contentUri);
+      if (cachePath != null) {
+        final ext = cachePath.contains('.') ? cachePath.split('.').last.toLowerCase() : 'jpg';
+        final dest = await MemoInputSheet.copyGalleryPhoto(
+          cachePath, savePath,
+          filenameOverride: 'import_${ts}_$i.$ext',
+        );
+        if (dest != null) {
+          entries.add(MemoEntry(
+            timestamp: photo.timestamp,
+            latitude: photo.lat,
+            longitude: photo.lng,
+            photoPath: dest,
+          ));
+        }
+      }
+    }
+    progress.value = i + 1;
+  }
+
+  // 벌크 저장
+  if (entries.isNotEmpty) {
+    await ref.read(memoRepositoryProvider).appendEntries(date, entries, savePath);
+    final today = DateTime.now();
+    if (date.year == today.year && date.month == today.month && date.day == today.day) {
+      ref.invalidate(todayFileProvider);
+    }
+    // 백업 동기화 — 단건 추가와 동일하게 md 1회 + 사진별 1회 (백그라운드)
+    final backup = ref.read(backupProvider.notifier);
+    unawaited(backup.syncMdFile(date, savePath));
+    for (final entry in entries) {
+      if (entry.photoPath != null) {
+        unawaited(backup.syncMediaFile(entry.photoPath!));
+      }
+    }
+  }
+
+  if (!context.mounted) return entries.length;
+  Navigator.of(context).pop(); // 진행률 다이얼로그 닫기
+
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(
+      content: Text(skipped > 0
+          ? '${entries.length}개 사진 추가, $skipped개 중복 건너뜀'
+          : '${entries.length}개 사진을 메모에 추가했습니다'),
+    ),
+  );
+  return entries.length;
+}
+
 class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
@@ -75,7 +226,42 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkPendingVoiceResult();
       _autoSetupSaveFolderIfNeeded();
+      _maybePromptUpdate();
     });
+  }
+
+  /// Play 스토어에 새 버전이 있으면 안내 다이얼로그를 띄운다.
+  /// 확인 → 인앱 즉시 업데이트, 취소 → 스토어 안내 토스트.
+  Future<void> _maybePromptUpdate() async {
+    if (!await AppUpdateService.isUpdateAvailable()) return;
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('업데이트 안내'),
+        content: const Text('새로운 버전이 있습니다. 지금 업데이트할까요?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('확인'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (ok == true) {
+      await AppUpdateService.performImmediateUpdate();
+    } else {
+      showAppToast(
+        context,
+        '플레이스토어에서 업데이트를 받을 수 있습니다',
+        duration: const Duration(seconds: 3),
+      );
+    }
   }
 
   Future<void> _autoSetupSaveFolderIfNeeded() async {
@@ -349,150 +535,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
     );
     if (date == null || !mounted) return;
 
-    // 스캔 중 안내
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('사진 검색 중...'), duration: Duration(minutes: 1)),
-    );
-    final photos = await scanGalleryPhotosByDate(date);
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-    if (photos.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('해당 날짜에 촬영된 사진이 없습니다')),
-      );
-      return;
-    }
-
-    final dateStr = '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
-
-    // 50장 이상 추가 확인
-    if (photos.length >= 50) {
-      final ok = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('사진이 많습니다'),
-          content: Text('${photos.length}장의 사진이 검색됐습니다. 모두 추가하시겠습니까?'),
-          actions: [
-            TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
-            FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('추가')),
-          ],
-        ),
-      );
-      if (ok != true || !mounted) return;
-    }
-
-    // 확인 다이얼로그
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('사진 일괄 추가'),
-        content: Text('$dateStr에 촬영된 사진 ${photos.length}장을\n메모에 추가하시겠습니까?'),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('취소')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('추가')),
-        ],
-      ),
-    );
-    if (confirmed != true || !mounted) return;
-
-    final savePath = settings.savePath;
-
-    // 진행률 다이얼로그
-    final progress = ValueNotifier<int>(0);
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (_) => _ImportProgressDialog(progress: progress, total: photos.length),
-    );
-
-    // 기존 사진 타임스탬프 수집 (중복 방지) — 초 단위 비교, 구 HH:mm 형식 하위 호환
-    DateTime toSecond(DateTime dt) =>
-        DateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
-
-    final existing = await ref.read(memoRepositoryProvider).loadDayFile(date, savePath);
-    final existingPhotoSeconds = existing?.entries
-        .where((e) => e.isPhoto)
-        .map((e) => toSecond(e.timestamp))
-        .toSet() ?? <DateTime>{};
-
-    // 사진 처리
-    final entries = <MemoEntry>[];
-    int skipped = 0;
-    for (int i = 0; i < photos.length; i++) {
-      final photo = photos[i];
-      final photoSec = toSecond(photo.timestamp);
-      final photoMin = DateTime(photo.timestamp.year, photo.timestamp.month,
-          photo.timestamp.day, photo.timestamp.hour, photo.timestamp.minute);
-      if (existingPhotoSeconds.contains(photoSec) || existingPhotoSeconds.contains(photoMin)) {
-        skipped++;
-        progress.value = i + 1;
-        continue;
-      }
-      final ts = photo.timestamp.millisecondsSinceEpoch;
-      final originPath = photo.path;
-      if (originPath != null && originPath.isNotEmpty) {
-        // 갤러리 원본 경로 직접 참조 (복사 없음 — 단건 추가와 동일 방식)
-        entries.add(MemoEntry(
-          timestamp: photo.timestamp,
-          latitude: photo.lat,
-          longitude: photo.lng,
-          photoPath: originPath,
-        ));
-      } else {
-        // 절대경로를 얻지 못한 경우에만 photos/로 복사 (폴백)
-        final cachePath = await copyContentUriToCache(photo.contentUri);
-        if (cachePath != null) {
-          final ext = cachePath.contains('.') ? cachePath.split('.').last.toLowerCase() : 'jpg';
-          final dest = await MemoInputSheet.copyGalleryPhoto(
-            cachePath, savePath,
-            filenameOverride: 'import_${ts}_$i.$ext',
-          );
-          if (dest != null) {
-            entries.add(MemoEntry(
-              timestamp: photo.timestamp,
-              latitude: photo.lat,
-              longitude: photo.lng,
-              photoPath: dest,
-            ));
-          }
-        }
-      }
-      progress.value = i + 1;
-    }
-
-    // 벌크 저장
-    if (entries.isNotEmpty) {
-      await ref.read(memoRepositoryProvider).appendEntries(date, entries, savePath);
-      final today = DateTime.now();
-      if (date.year == today.year && date.month == today.month && date.day == today.day) {
-        ref.invalidate(todayFileProvider);
-      }
-      // 백업 동기화 — 단건 추가와 동일하게 md 1회 + 사진별 1회 (백그라운드)
-      final backup = ref.read(backupProvider.notifier);
-      unawaited(backup.syncMdFile(date, savePath));
-      for (final entry in entries) {
-        if (entry.photoPath != null) {
-          unawaited(backup.syncMediaFile(entry.photoPath!));
-        }
-      }
-    }
-
-    if (!mounted) return;
-    Navigator.of(context).pop(); // 진행률 다이얼로그 닫기
-
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(skipped > 0
-            ? '${entries.length}개 사진 추가, $skipped개 중복 건너뜀'
-            : '${entries.length}개 사진을 메모에 추가했습니다'),
-      ),
-    );
+    final added = await _runPhotoImport(context, ref, date);
+    if (added <= 0 || !mounted) return;
 
     // 오늘이 아닌 날짜면 해당 메모로 이동
     final today = DateTime.now();
     final isToday = date.year == today.year && date.month == today.month && date.day == today.day;
-    if (!isToday && entries.isNotEmpty && mounted) {
+    if (!isToday) {
+      final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
       final y = date.year;
       final m = date.month.toString().padLeft(2, '0');
       final d = date.day.toString().padLeft(2, '0');
@@ -577,7 +627,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
               ),
             ),
             SizedBox(width: 12),
-            Text('환경 정보 수집 중...'),
+            Text('현장 정보 수집 중...'),
           ],
         ),
         duration: Duration(minutes: 1),
@@ -1052,7 +1102,7 @@ class _LocationFabState extends ConsumerState<_LocationFab> {
                 size: 22,
               ),
               Text(
-                '환경 추가',
+                '현장 정보',
                 style: TextStyle(
                   color: Theme.of(context).colorScheme.onTertiary,
                   fontSize: 9,
@@ -1366,9 +1416,12 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          widget.displayName,
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+        title: GestureDetector(
+          onTap: () => context.push(AppRoutes.fileList),
+          child: Text(
+            widget.displayName,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
         ),
         actions: [
           if (ref.watch(settingsProvider).valueOrNull?.shareEnabled ?? false)
@@ -1382,6 +1435,11 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
                 savePath: ref.read(settingsProvider).valueOrNull?.savePath ?? '',
               ),
             ),
+          IconButton(
+            icon: const Icon(Icons.add_photo_alternate_outlined),
+            tooltip: '사진 일괄 추가',
+            onPressed: _importThisDayPhotos,
+          ),
           TextButton(
             onPressed: () => context.go(AppRoutes.home),
             child: const Text('오늘'),
@@ -1416,6 +1474,22 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
         onMapTap: () => context.push(AppRoutes.map, extra: widget.filePath),
       ),
     );
+  }
+
+  /// 이 화면의 날짜에 촬영된 사진을 일괄 추가한다(날짜 고정 → 선택 없이 바로).
+  Future<void> _importThisDayPhotos() async {
+    if (!await Permission.photos.status.isGranted) {
+      final r = await Permission.photos.request();
+      if (!r.isGranted) return;
+    }
+    if (!mounted) return;
+    final filename = widget.filePath.replaceAll('\\', '/').split('/').last;
+    final date = FileNameParser.parseDate(filename);
+    if (date == null) return;
+    final added = await _runPhotoImport(context, ref, date);
+    if (added > 0 && mounted) {
+      ref.invalidate(dayFileProvider(widget.filePath));
+    }
   }
 
   void _openMemoSheet({bool voiceMode = false}) {
@@ -1497,7 +1571,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
                   strokeWidth: 2, color: Colors.white),
             ),
             SizedBox(width: 12),
-            Text('환경 정보 수집 중...'),
+            Text('현장 정보 수집 중...'),
           ],
         ),
         duration: Duration(minutes: 1),

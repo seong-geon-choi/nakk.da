@@ -37,9 +37,12 @@ class TrackingService {
     }
   }
 
-  Future<void> setQuickLaunchMode(String mode) async {
+  Future<void> setQuickLaunchMode(String mode, double shakeThresholdG) async {
     try {
-      await _channel.invokeMethod('setQuickLaunchMode', {'mode': mode});
+      await _channel.invokeMethod('setQuickLaunchMode', {
+        'mode': mode,
+        'shakeThresholdG': shakeThresholdG,
+      });
     } catch (_) {}
   }
 

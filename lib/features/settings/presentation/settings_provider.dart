@@ -29,8 +29,9 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
   Future<AppSettings> build() async {
     final repo = ref.read(settingsRepositoryProvider);
     final settings = await repo.load();
-    // 앱 시작 시 저장된 모드를 Android 서비스에 동기화
-    await TrackingService().setQuickLaunchMode(settings.quickLaunchMode.name);
+    // 앱 시작 시 저장된 모드·민감도를 Android 서비스에 동기화
+    await TrackingService()
+        .setQuickLaunchMode(settings.quickLaunchMode.name, settings.shakeThresholdG);
     return settings;
   }
 
@@ -204,7 +205,19 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     final updated = current.copyWith(quickLaunchMode: mode);
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
-    await TrackingService().setQuickLaunchMode(mode.name);
+    await TrackingService().setQuickLaunchMode(mode.name, updated.shakeThresholdG);
+  }
+
+  /// 흔들기 감지 가속도 임계값(G) 변경. 2.5~5.0으로 제한하고 즉시 네이티브에 반영.
+  Future<void> updateShakeThresholdG(double value) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final clamped = value.clamp(2.5, 5.0);
+    final updated = current.copyWith(shakeThresholdG: clamped);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+    await TrackingService()
+        .setQuickLaunchMode(updated.quickLaunchMode.name, clamped);
   }
 
   Future<void> updateTrackingIntervalMeters(int value) async {

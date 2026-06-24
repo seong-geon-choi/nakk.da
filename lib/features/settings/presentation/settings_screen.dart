@@ -85,8 +85,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             const _SectionHeader(label: '표시'),
             SwitchListTile(
               secondary: const Icon(Icons.add_location_alt_outlined),
-              title: const Text('환경 정보 추가 버튼 표시'),
-              subtitle: const Text('메인 화면 하단에 환경 정보 추가 버튼을 표시합니다'),
+              title: const Text('현장 정보 추가 버튼 표시'),
+              subtitle: const Text('메인 화면 하단에 현장 정보 추가 버튼을 표시합니다'),
               value: settings.showLocationButton,
               onChanged: (v) =>
                   ref.read(settingsProvider.notifier).updateShowLocationButton(v),
@@ -774,6 +774,8 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
                   subtitle: const Text('1.5초 내 3회 흔들면 음성 메모 시작'),
                   value: QuickLaunchMode.shake,
                 ),
+                if (mode == QuickLaunchMode.shake)
+                  _ShakeSensitivitySlider(value: settings.shakeThresholdG),
                 RadioListTile<QuickLaunchMode>(
                   secondary: const Icon(Icons.volume_up_outlined),
                   title: const Text('볼륨 버튼'),
@@ -787,6 +789,57 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// 흔들기 감지 민감도(가속도 임계값 G) 슬라이더. 2.5~5.0G, 권장 3.5G.
+/// 드래그 중에는 라벨만 갱신하고, 손을 떼는 순간(onChangeEnd) 저장·네이티브 반영.
+class _ShakeSensitivitySlider extends ConsumerStatefulWidget {
+  final double value;
+  const _ShakeSensitivitySlider({required this.value});
+
+  @override
+  ConsumerState<_ShakeSensitivitySlider> createState() =>
+      _ShakeSensitivitySliderState();
+}
+
+class _ShakeSensitivitySliderState
+    extends ConsumerState<_ShakeSensitivitySlider> {
+  late double _value = widget.value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(72, 0, 16, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            '감지 민감도: ${_value.toStringAsFixed(1)}G',
+            style: Theme.of(context).textTheme.bodyMedium,
+          ),
+          Slider(
+            value: _value,
+            min: 2.5,
+            max: 5.0,
+            divisions: 25,
+            label: '${_value.toStringAsFixed(1)}G',
+            onChanged: (v) => setState(() => _value = v),
+            onChangeEnd: (v) =>
+                ref.read(settingsProvider.notifier).updateShakeThresholdG(v),
+          ),
+          Text(
+            '값이 낮을수록 민감합니다(걷기·뛰기에 오작동 가능). 권장 3.5G',
+            style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withValues(alpha: 0.5),
+                ),
+          ),
+        ],
       ),
     );
   }
@@ -1044,11 +1097,15 @@ class _AboutTileState extends State<_AboutTile> {
 
   @override
   Widget build(BuildContext context) {
-    return ListTile(
-      leading: const Icon(Icons.info_outline),
-      title: Text('버전 $_version'),
-      subtitle: Text('빌드: $_buildTime'),
+    // 탭 물결(ripple) 등 시각 피드백을 없애 숨은 기능이 드러나지 않게 한다.
+    // 7회 연타는 GestureDetector로 감지(ListTile onTap 미사용).
+    return GestureDetector(
       onTap: _onTap,
+      child: ListTile(
+        leading: const Icon(Icons.info_outline),
+        title: Text('버전 $_version'),
+        subtitle: Text('빌드: $_buildTime'),
+      ),
     );
   }
 }

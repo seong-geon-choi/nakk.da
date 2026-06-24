@@ -192,6 +192,7 @@ String _boxText(WatermarkBox b, DateTime now) {
     case WatermarkLineType.time:
       return b.timeFormat.isEmpty ? '' : _formatTime(now, b.timeFormat);
     case WatermarkLineType.customText:
+    case WatermarkLineType.customText2:
       return b.customText.trim();
   }
 }

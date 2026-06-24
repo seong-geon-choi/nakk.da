@@ -1,13 +1,18 @@
 ﻿import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:nakkda/features/file_list/data/file_list_repository_impl.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('FileListRepositoryImpl', () {
     late FileListRepositoryImpl repository;
     late Directory tempDir;
 
     setUp(() async {
+      // 요약 캐시(_loadCache)가 SharedPreferences를 사용하므로 목을 깔아준다.
+      SharedPreferences.setMockInitialValues({});
       repository = FileListRepositoryImpl();
       tempDir = await Directory.systemTemp.createTemp('file_list_test_');
     });

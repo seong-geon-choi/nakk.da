@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import 'package:flutter_colorpicker/flutter_colorpicker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'settings_provider.dart';
 
@@ -16,7 +17,7 @@ class WatermarkSettingsScreen extends ConsumerStatefulWidget {
 
 class _WatermarkSettingsScreenState
     extends ConsumerState<WatermarkSettingsScreen> {
-  late TextEditingController _customCtrl;
+  final Map<WatermarkLineType, TextEditingController> _customCtrls = {};
   bool _darkPreview = false;
   WatermarkLineType? _selectedType; // 미리보기에서 선택된 박스
   final _scrollController = ScrollController();
@@ -28,15 +29,18 @@ class _WatermarkSettingsScreenState
   void initState() {
     super.initState();
     final wm = ref.read(settingsProvider).valueOrNull?.watermark;
-    final customBox = wm?.boxes
-        .where((b) => b.type == WatermarkLineType.customText)
-        .firstOrNull;
-    _customCtrl = TextEditingController(text: customBox?.customText ?? '');
+    for (final b in wm?.boxes ?? const <WatermarkBox>[]) {
+      if (_isCustom(b.type)) {
+        _customCtrls[b.type] = TextEditingController(text: b.customText);
+      }
+    }
   }
 
   @override
   void dispose() {
-    _customCtrl.dispose();
+    for (final c in _customCtrls.values) {
+      c.dispose();
+    }
     _scrollController.dispose();
     super.dispose();
   }
@@ -53,6 +57,22 @@ class _WatermarkSettingsScreenState
   void _moveBox(
           WatermarkSettings wm, WatermarkLineType type, double dx, double dy) =>
       _update(_updateBox(wm, type, (b) => b.copyWith(dx: dx, dy: dy)));
+
+  /// 컬러피커로 고른 색을 박스에 적용 + 사용자 색상 히스토리(최신순, 중복/프리셋 제외)에 저장
+  void _pickCustomColor(
+      WatermarkSettings wm, WatermarkLineType type, int color) {
+    final isPreset = WatermarkSettings.textPresets.contains(color);
+    final history = isPreset
+        ? wm.customColors
+        : [
+            color,
+            ...wm.customColors.where((c) => c != color),
+          ].take(WatermarkSettings.maxCustomColors).toList();
+    final boxes = wm.boxes
+        .map((b) => b.type == type ? b.copyWith(textColor: color) : b)
+        .toList();
+    _update(wm.copyWith(boxes: boxes, customColors: history));
+  }
 
   /// 미리보기에서 박스 선택 → 해당 설정 카드를 펼치고 그 위치로 스크롤
   void _selectBox(WatermarkLineType type) {
@@ -125,12 +145,14 @@ class _WatermarkSettingsScreenState
                     key: _cardKeys[box.type],
                     box: box,
                     expanded: _selectedType == box.type,
-                    customCtrl: box.type == WatermarkLineType.customText
-                        ? _customCtrl
+                    customCtrl: _isCustom(box.type)
+                        ? _customCtrls[box.type]
                         : null,
+                    customColors: wm.customColors,
                     onToggle: () => setState(() => _selectedType =
                         _selectedType == box.type ? null : box.type),
                     onUpdate: (f) => _update(_updateBox(wm, box.type, f)),
+                    onPickColor: (c) => _pickCustomColor(wm, box.type, c),
                   ),
                 const SizedBox(height: 24),
               ],
@@ -201,15 +223,22 @@ String _previewBoxText(WatermarkBox b, DateTime now) {
       return b.timeFormat.isEmpty ? '' : _formatTime(now, b.timeFormat);
     case WatermarkLineType.customText:
       final t = b.customText.trim();
-      return t.isEmpty ? '(커스텀 텍스트)' : t;
+      return t.isEmpty ? '(텍스트1)' : t;
+    case WatermarkLineType.customText2:
+      final t = b.customText.trim();
+      return t.isEmpty ? '(텍스트2)' : t;
   }
 }
 
 String _boxLabel(WatermarkLineType t) => switch (t) {
       WatermarkLineType.date => '📅 날짜',
       WatermarkLineType.time => '🕐 시간',
-      WatermarkLineType.customText => '📝 텍스트',
+      WatermarkLineType.customText => '📝 텍스트1',
+      WatermarkLineType.customText2 => '📝 텍스트2',
     };
+
+bool _isCustom(WatermarkLineType t) =>
+    t == WatermarkLineType.customText || t == WatermarkLineType.customText2;
 
 // ── 미리보기 섹션 ─────────────────────────────────────────────
 
@@ -573,6 +602,9 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
                   _previewBoxText(box, now),
                   textAlign: _textAlign(box.alignment),
                   textScaler: TextScaler.noScaling,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.visible,
                   style: TextStyle(
                     color: Color(box.textColor),
                     fontSize: box.fontSize * layout.shortSidePx / 480.0,
@@ -715,7 +747,9 @@ class _BoxCard extends StatelessWidget {
   final bool expanded;
   final VoidCallback onToggle;
   final TextEditingController? customCtrl;
+  final List<int> customColors;
   final void Function(WatermarkBox Function(WatermarkBox)) onUpdate;
+  final void Function(int color) onPickColor;
 
   const _BoxCard({
     super.key,
@@ -723,7 +757,9 @@ class _BoxCard extends StatelessWidget {
     required this.expanded,
     required this.onToggle,
     required this.customCtrl,
+    required this.customColors,
     required this.onUpdate,
+    required this.onPickColor,
   });
 
   @override
@@ -795,7 +831,7 @@ class _BoxCard extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: Column(
                 children: [
-          if (box.type == WatermarkLineType.customText && customCtrl != null)
+          if (customCtrl != null)
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: TextField(
@@ -835,19 +871,25 @@ class _BoxCard extends StatelessWidget {
               const Icon(Icons.format_bold, size: 20),
               const SizedBox(width: 8),
               const Text('굵기', style: TextStyle(fontSize: 13)),
-              const Spacer(),
-              SegmentedButton<WatermarkWeight>(
-                segments: const [
-                  ButtonSegment(value: WatermarkWeight.normal, label: Text('보통')),
-                  ButtonSegment(value: WatermarkWeight.bold, label: Text('굵게')),
-                  ButtonSegment(value: WatermarkWeight.black, label: Text('두껍게')),
-                ],
-                selected: {box.weight},
-                onSelectionChanged: (s) =>
-                    onUpdate((b) => b.copyWith(weight: s.first)),
-                style: const ButtonStyle(
-                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                  visualDensity: VisualDensity.compact,
+              const SizedBox(width: 12),
+              Expanded(
+                child: SegmentedButton<WatermarkWeight>(
+                  segments: const [
+                    ButtonSegment(
+                        value: WatermarkWeight.normal, label: Text('보통')),
+                    ButtonSegment(
+                        value: WatermarkWeight.bold, label: Text('굵게')),
+                    ButtonSegment(
+                        value: WatermarkWeight.black, label: Text('두껍게')),
+                  ],
+                  selected: {box.weight},
+                  onSelectionChanged: (s) =>
+                      onUpdate((b) => b.copyWith(weight: s.first)),
+                  showSelectedIcon: false,
+                  style: const ButtonStyle(
+                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                    visualDensity: VisualDensity.compact,
+                  ),
                 ),
               ),
             ],
@@ -934,6 +976,7 @@ class _BoxCard extends StatelessWidget {
                 child: Wrap(
                   spacing: 10,
                   runSpacing: 8,
+                  crossAxisAlignment: WrapCrossAlignment.center,
                   children: [
                     for (final c in WatermarkSettings.textPresets)
                       _Swatch(
@@ -941,6 +984,25 @@ class _BoxCard extends StatelessWidget {
                         selected: box.textColor == c,
                         onTap: () => onUpdate((b) => b.copyWith(textColor: c)),
                       ),
+                    // 사용자 색상 히스토리(최신순)
+                    for (final c in customColors)
+                      _Swatch(
+                        color: Color(c),
+                        selected: box.textColor == c,
+                        onTap: () => onUpdate((b) => b.copyWith(textColor: c)),
+                      ),
+                    // 현재 색이 프리셋/히스토리 어디에도 없으면 표시
+                    if (!WatermarkSettings.textPresets.contains(box.textColor) &&
+                        !customColors.contains(box.textColor))
+                      _Swatch(
+                        color: Color(box.textColor),
+                        selected: true,
+                        onTap: () => onPickColor(box.textColor),
+                      ),
+                    _ColorPickerButton(
+                      initial: Color(box.textColor),
+                      onPicked: onPickColor,
+                    ),
                   ],
                 ),
               ),
@@ -987,6 +1049,61 @@ class _Swatch extends StatelessWidget {
                     ? Colors.black
                     : Colors.white)
             : null,
+      ),
+    );
+  }
+}
+
+// ── 컬러피커 버튼 (휠 기반 사용자 색상 선택) ──────────────────
+
+class _ColorPickerButton extends StatelessWidget {
+  final Color initial;
+  final void Function(int color) onPicked;
+  const _ColorPickerButton({required this.initial, required this.onPicked});
+
+  /// 항상 불투명 ARGB로 정규화
+  static int _argb(Color c) => 0xFF000000 | (c.toARGB32() & 0x00FFFFFF);
+
+  Future<void> _open(BuildContext context) async {
+    var picked = initial;
+    final result = await showDialog<Color>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('색상 선택'),
+        content: SingleChildScrollView(
+          child: HueRingPicker(
+            pickerColor: initial,
+            onColorChanged: (c) => picked = c,
+            enableAlpha: false,
+            displayThumbColor: true,
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, picked),
+              child: const Text('선택')),
+        ],
+      ),
+    );
+    if (result != null) onPicked(_argb(result));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return GestureDetector(
+      onTap: () => _open(context),
+      child: Container(
+        width: 30,
+        height: 30,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          color: cs.surfaceContainerHighest,
+          border: Border.all(color: cs.primary, width: 1.5),
+        ),
+        child: Icon(Icons.colorize, size: 16, color: cs.primary),
       ),
     );
   }

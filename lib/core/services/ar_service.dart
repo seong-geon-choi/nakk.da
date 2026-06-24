@@ -23,6 +23,7 @@ Future<({String path, double? distanceCm, bool applyWatermark, double? posX, dou
         case WatermarkLineType.time:
           return b.timeFormat.isNotEmpty;
         case WatermarkLineType.customText:
+        case WatermarkLineType.customText2:
           return b.customText.trim().isNotEmpty;
       }
     }

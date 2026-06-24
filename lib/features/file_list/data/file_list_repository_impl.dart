@@ -5,6 +5,7 @@ import '../domain/file_list_repository.dart';
 import '../domain/models/file_summary.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/utils/file_name_parser.dart';
+import '../../location/data/reverse_geocoder.dart';
 
 class FileListRepositoryImpl implements FileListRepository {
   final _saf = SafService();
@@ -45,12 +46,14 @@ class FileListRepositoryImpl implements FileListRepository {
     // 2) 변경/신규 파일만 병렬로 읽어 요약 계산 (SAF 왕복을 동시 처리)
     final read = await Future.wait(toRead.map((name) async {
       final content = await _saf.readFile(folderUri, name) ?? '';
+      final (address, gps) = _extractSummaryFields(content);
       return MapEntry(
         name,
         _CachedSummary(
           mtime: mtimes[name]?.millisecondsSinceEpoch ?? 0,
           entryCount: _countEntries(content),
-          address: _extractAddress(content),
+          address: address,
+          gps: gps,
         ),
       );
     }));
@@ -70,7 +73,7 @@ class FileListRepositoryImpl implements FileListRepository {
         displayName: name.replaceAll('.md', ''),
         entryCount: c.entryCount,
         displayFolderPath: displayPath,
-        address: c.address,
+        address: c.address ?? await _regionFor(c.gps),
       ));
     }
     summaries.sort((a, b) => b.date.compareTo(a.date));
@@ -102,10 +105,12 @@ class FileListRepositoryImpl implements FileListRepository {
         summary = cached;
       } else {
         final content = await file.readAsString();
+        final (address, gps) = _extractSummaryFields(content);
         summary = _CachedSummary(
           mtime: mtime,
           entryCount: _countEntries(content),
-          address: _extractAddress(content),
+          address: address,
+          gps: gps,
         );
       }
       newCache[name] = summary;
@@ -115,7 +120,7 @@ class FileListRepositoryImpl implements FileListRepository {
         displayName: name.replaceAll('.md', ''),
         entryCount: summary.entryCount,
         displayFolderPath: savePath,
-        address: summary.address,
+        address: summary.address ?? await _regionFor(summary.gps),
       ));
     }));
     summaries.sort((a, b) => b.date.compareTo(a.date));
@@ -124,7 +129,8 @@ class FileListRepositoryImpl implements FileListRepository {
   }
 
   // ── 요약 캐시 (수정시간 기반) ───────────────────────────────
-  static const _cachePrefix = 'file_summary_cache_v1:';
+  // v2: gps 대체 좌표 필드 추가(현장 정보 없는 메모의 지역명 표시용)
+  static const _cachePrefix = 'file_summary_cache_v2:';
 
   Future<Map<String, _CachedSummary>> _loadCache(String savePath) async {
     final prefs = await SharedPreferences.getInstance();
@@ -140,6 +146,7 @@ class FileListRepositoryImpl implements FileListRepository {
             mtime: m['m'] as int,
             entryCount: m['c'] as int,
             address: m['a'] as String?,
+            gps: m['g'] as String?,
           ),
         );
       });
@@ -152,7 +159,7 @@ class FileListRepositoryImpl implements FileListRepository {
       String savePath, Map<String, _CachedSummary> cache) async {
     final prefs = await SharedPreferences.getInstance();
     final map = cache.map((k, v) =>
-        MapEntry(k, {'m': v.mtime, 'c': v.entryCount, 'a': v.address}));
+        MapEntry(k, {'m': v.mtime, 'c': v.entryCount, 'a': v.address, 'g': v.gps}));
     await prefs.setString('$_cachePrefix$savePath', jsonEncode(map));
   }
 
@@ -254,9 +261,72 @@ class FileListRepositoryImpl implements FileListRepository {
     return RegExp(r'^### ', multiLine: true).allMatches(content).length;
   }
 
-  String? _extractAddress(String content) {
-    final match = RegExp(r'- 📍 (.+)').firstMatch(content);
-    return match?.group(1)?.trim();
+  // 현장 정보의 실제 주소가 있으면 (주소, null).
+  // 없으면 지역명 역지오코딩에 쓸 대체 GPS 좌표 "lat,lng"를 (null, gps)로 반환.
+  // 우선순위: 현장 정보 좌표 → 첫 메모(🛰) → 트래킹 포인트.
+  (String?, String?) _extractSummaryFields(String content) {
+    String? fallbackGps;
+    final placeMatch = RegExp(r'- 📍 (.+)').firstMatch(content);
+    if (placeMatch != null) {
+      final raw = placeMatch.group(1)!.trim();
+      if (_gpsRe.hasMatch(raw)) {
+        fallbackGps = raw.replaceAll(' ', ''); // 현장 정보가 좌표만 가진 경우
+      } else {
+        return (raw, null); // 실제 주소
+      }
+    }
+    fallbackGps ??= _firstGps(_memoGpsRe, content);
+    fallbackGps ??= _firstGps(_trackGpsRe, content);
+    return (null, fallbackGps);
+  }
+
+  static final _gpsRe = RegExp(r'^-?\d+\.\d+,\s*-?\d+\.\d+$');
+  // 메모 헤더(신·구 공통): "### ... | 🛰 lat, lng"
+  static final _memoGpsRe =
+      RegExp(r'^### .*🛰\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)', multiLine: true);
+  // 트래킹 숨김 주석(신 포맷): "track:날짜 | 🛰 lat, lng)"
+  static final _trackGpsRe = RegExp(r'track:.*🛰\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)\)');
+
+  String? _firstGps(RegExp re, String content) {
+    final m = re.firstMatch(content);
+    if (m == null) return null;
+    return '${m.group(1)},${m.group(2)}';
+  }
+
+  // ── 좌표→지역명 캐시 (역지오코딩 재사용) ────────────────────
+  // 같은 포인트 재요청을 막고, 실패(오프라인)는 저장하지 않아 다음 기회에 재시도한다.
+  static const _regionCacheKey = 'region_cache_v1';
+  static Map<String, String>? _regionCache;
+
+  Future<String?> _regionFor(String? gps) async {
+    if (gps == null) return null;
+    final cache = await _loadRegionCache();
+    if (cache.containsKey(gps)) return cache[gps];
+    final parts = gps.split(',');
+    if (parts.length != 2) return null;
+    final lat = double.tryParse(parts[0].trim());
+    final lng = double.tryParse(parts[1].trim());
+    if (lat == null || lng == null) return null;
+    final region = await reverseGeocode(lat, lng);
+    if (region != null) {
+      cache[gps] = region;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_regionCacheKey, jsonEncode(cache));
+    }
+    return region;
+  }
+
+  Future<Map<String, String>> _loadRegionCache() async {
+    if (_regionCache != null) return _regionCache!;
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_regionCacheKey);
+    if (raw == null) return _regionCache = {};
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return _regionCache = map.map((k, v) => MapEntry(k, v as String));
+    } catch (_) {
+      return _regionCache = {};
+    }
   }
 
   Future<void> _deleteLinkedPhotosSaf(String folderUri, String filename) async {
@@ -289,9 +359,11 @@ class _CachedSummary {
   final int mtime; // millisecondsSinceEpoch
   final int entryCount;
   final String? address;
+  final String? gps; // 주소가 없을 때 지역명 역지오코딩에 쓰는 대체 좌표 "lat,lng"
   const _CachedSummary({
     required this.mtime,
     required this.entryCount,
     required this.address,
+    this.gps,
   });
 }

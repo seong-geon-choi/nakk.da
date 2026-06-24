@@ -80,7 +80,7 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      expect(find.text('환경 정보 추가 버튼 표시'), findsOneWidget);
+      expect(find.text('현장 정보 추가 버튼 표시'), findsOneWidget);
     });
 
     testWidgets('권한 항목(마이크, 위치, 카메라, 사진)이 권한 하위 화면에 표시된다', (tester) async {

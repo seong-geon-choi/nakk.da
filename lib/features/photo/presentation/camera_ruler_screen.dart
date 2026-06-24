@@ -724,6 +724,9 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
                   _boxText(visible[i], now),
                   textAlign: _align(visible[i].alignment),
                   textScaler: TextScaler.noScaling,
+                  maxLines: 1,
+                  softWrap: false,
+                  overflow: TextOverflow.visible,
                   style: TextStyle(
                     color: Color(visible[i].textColor),
                     fontSize: fonts[i],
@@ -860,6 +863,7 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
       case WatermarkLineType.time:
         return b.timeFormat.isEmpty ? '' : _fmtTime(now, b.timeFormat);
       case WatermarkLineType.customText:
+      case WatermarkLineType.customText2:
         return b.customText.trim();
     }
   }
