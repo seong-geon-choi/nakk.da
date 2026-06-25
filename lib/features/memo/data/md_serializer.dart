@@ -52,11 +52,22 @@ class MdSerializer {
         ? '[//]: # (tides:${loc.tides.map((t) => t.level != null ? '${t.type} ${t.time} ${t.level}' : '${t.type} ${t.time}').join(',')})\n'
         : '';
 
+    // 위경도·날씨코드 숨김 주석(앱 전용): 재로딩 시 일출몰/월출몰/날씨 계산용
+    final metaItems = <String>[];
+    if (loc.latitude != null && loc.longitude != null) {
+      metaItems.add(
+          'gps=${loc.latitude!.toStringAsFixed(5)},${loc.longitude!.toStringAsFixed(5)}');
+    }
+    if (loc.weatherCode != null) metaItems.add('wx=${loc.weatherCode}');
+    final metaComment =
+        metaItems.isNotEmpty ? '[//]: # (meta:${metaItems.join(';')})\n' : '';
+
     return '\n$timeLabel\n'
         '- 📍 $address\n'
         '- 🌡 기온: $temp | 💧 수온 $water\n'
         '- 관측소: $station | 🌊 $tide\n'
         '${weatherLine.isNotEmpty ? '- $weatherLine\n' : ''}'
+        '$metaComment'
         '$tidesComment';
   }
 
@@ -110,6 +121,26 @@ class MdSerializer {
           }
           if (l.startsWith('[//]: # (tides:')) {
             tides = _parseTidesComment(l);
+            i++;
+            continue;
+          }
+          if (l.startsWith('[//]: # (meta:')) {
+            final m = RegExp(r'\(meta:(.*)\)\s*$').firstMatch(l);
+            if (m != null) {
+              for (final item in m.group(1)!.split(';')) {
+                final kv = item.split('=');
+                if (kv.length != 2) continue;
+                if (kv[0] == 'gps') {
+                  final g = kv[1].split(',');
+                  if (g.length == 2) {
+                    lat = double.tryParse(g[0]) ?? lat;
+                    lng = double.tryParse(g[1]) ?? lng;
+                  }
+                } else if (kv[0] == 'wx') {
+                  weatherCode = int.tryParse(kv[1]) ?? weatherCode;
+                }
+              }
+            }
             i++;
             continue;
           }

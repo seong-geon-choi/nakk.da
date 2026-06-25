@@ -459,7 +459,14 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
                     message: '불러오기 실패',
                     subMessage: e.toString(),
                   ),
-                  data: (dayFile) => _Body(dayFile: dayFile),
+                  data: (dayFile) => _Body(
+                  dayFile: dayFile,
+                  onRefresh: () async {
+                    ref.invalidate(todayFileProvider);
+                    ref.invalidate(fileListProvider);
+                    await ref.read(todayFileProvider.future);
+                  },
+                ),
                 ),
                 if (showLocationButton)
                   _LocationFab(onTap: _onLocationTap),
@@ -498,21 +505,27 @@ class _HomeScreenState extends ConsumerState<HomeScreen>
         settings.needsFolderSetup) {
       return;
     }
-    final blocks = ref.read(todayFileProvider).valueOrNull?.blocks ?? const [];
-    if (blocks.any((b) => b is LocationStatus)) return;
-    _autoLocTriggered = true; // 동시 탭(메모+사진) 중복 방지: await 이전에 선점
-    if (!await Permission.locationWhenInUse.status.isGranted) {
-      _autoLocTriggered = false;
-      if (mounted) {
-        showAppToast(context, '현장 정보 추가에 실패했습니다. 위치 권한을 추가해 주세요',
-            duration: const Duration(seconds: 3));
+    _autoLocTriggered = true; // 동시 탭(메모+사진) 중복 방지용 in-flight 가드
+    try {
+      // 최신 상태로 확인: 삭제 직후 stale 데이터(삭제된 현황)로 인한 오판 방지
+      final dayFile = await ref.read(todayFileProvider.future);
+      final blocks = dayFile?.blocks ?? const [];
+      if (blocks.any((b) => b is LocationStatus)) return;
+      if (!await Permission.locationWhenInUse.status.isGranted) {
+        if (mounted) {
+          showAppToast(context, '현장 정보 추가에 실패했습니다. 위치 권한을 추가해 주세요',
+              duration: const Duration(seconds: 3));
+        }
+        return;
       }
-      return;
+      final loc = await ref
+          .read(locationProvider.notifier)
+          .buildEnrichedLocation(isMove: false);
+      await ref.read(todayFileProvider.notifier).addLocationBlock(loc);
+    } finally {
+      // 성공·실패 무관하게 해제 → 메모 전체 삭제 후 재추가 시 다시 동작
+      _autoLocTriggered = false;
     }
-    final loc = await ref
-        .read(locationProvider.notifier)
-        .buildEnrichedLocation(isMove: false);
-    await ref.read(todayFileProvider.notifier).addLocationBlock(loc);
   }
 
   Future<void> _onFileListTap() async {
@@ -690,12 +703,14 @@ class _Body extends ConsumerStatefulWidget {
   final Future<void> Function(int, MemoEntry)? onEditMemoSave;
   final Future<void> Function(int, LocationStatus)? onEditLocationSave;
   final Future<void> Function(int)? onRemoveBlock;
+  final Future<void> Function()? onRefresh; // 당겨서 새로고침
 
   const _Body({
     this.dayFile,
     this.onEditMemoSave,
     this.onEditLocationSave,
     this.onRemoveBlock,
+    this.onRefresh,
   });
 
   @override
@@ -741,15 +756,35 @@ class _BodyState extends ConsumerState<_Body> {
   @override
   Widget build(BuildContext context) {
     final dayFile = widget.dayFile;
+    Widget content;
     if (dayFile == null || dayFile.blocks.isEmpty) {
-      return const EmptyStateView(
-        icon: Icons.mic_none,
-        message: '오늘의 메모가 없습니다',
-        subMessage: '아래 버튼을 눌러 첫 메모를 남겨보세요',
+      // 빈 상태에서도 당겨서 새로고침 되도록 스크롤 가능하게 감쌈
+      content = LayoutBuilder(
+        builder: (context, c) => SingleChildScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: c.maxHeight),
+            child: const EmptyStateView(
+              icon: Icons.mic_none,
+              message: '오늘의 메모가 없습니다',
+              subMessage: '아래 버튼을 눌러 첫 메모를 남겨보세요',
+            ),
+          ),
+        ),
       );
+    } else {
+      content = _buildList(dayFile);
     }
+    if (widget.onRefresh != null) {
+      return RefreshIndicator(onRefresh: widget.onRefresh!, child: content);
+    }
+    return content;
+  }
+
+  Widget _buildList(DayFile dayFile) {
     return ListView.separated(
       controller: _scroll,
+      physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
       itemCount: dayFile.blocks.length,
       separatorBuilder: (context, index) => const Divider(height: 24),
@@ -1508,6 +1543,11 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
                 onEditMemoSave: (idx, entry) => notifier.editBlock(idx, entry),
                 onEditLocationSave: (idx, loc) => notifier.editBlock(idx, loc),
                 onRemoveBlock: (idx) => notifier.removeBlock(idx),
+                onRefresh: () async {
+                  ref.invalidate(dayFileProvider(widget.filePath));
+                  ref.invalidate(fileListProvider);
+                  await ref.read(dayFileProvider(widget.filePath).future);
+                },
               ),
             ),
           ),
@@ -1579,25 +1619,29 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
         date.day != now.day) {
       return;
     }
-    final blocks =
-        ref.read(dayFileProvider(widget.filePath)).valueOrNull?.blocks ??
-            const [];
-    if (blocks.any((b) => b is LocationStatus)) return;
-    _autoLocTriggered = true; // 동시 탭 중복 방지: await 이전에 선점
-    if (!await Permission.locationWhenInUse.status.isGranted) {
-      _autoLocTriggered = false;
-      if (mounted) {
-        showAppToast(context, '현장 정보 추가에 실패했습니다. 위치 권한을 추가해 주세요',
-            duration: const Duration(seconds: 3));
+    _autoLocTriggered = true; // 동시 탭 중복 방지용 in-flight 가드
+    try {
+      // 최신 상태로 확인: 삭제 직후 stale 데이터(삭제된 현황)로 인한 오판 방지
+      final dayFile = await ref.read(dayFileProvider(widget.filePath).future);
+      final blocks = dayFile?.blocks ?? const [];
+      if (blocks.any((b) => b is LocationStatus)) return;
+      if (!await Permission.locationWhenInUse.status.isGranted) {
+        if (mounted) {
+          showAppToast(context, '현장 정보 추가에 실패했습니다. 위치 권한을 추가해 주세요',
+              duration: const Duration(seconds: 3));
+        }
+        return;
       }
-      return;
+      final loc = await ref
+          .read(locationProvider.notifier)
+          .buildEnrichedLocation(isMove: false);
+      await ref
+          .read(dayFileProvider(widget.filePath).notifier)
+          .addLocationBlock(loc);
+    } finally {
+      // 성공·실패 무관하게 해제 → 메모 전체 삭제 후 재추가 시 다시 동작
+      _autoLocTriggered = false;
     }
-    final loc = await ref
-        .read(locationProvider.notifier)
-        .buildEnrichedLocation(isMove: false);
-    await ref
-        .read(dayFileProvider(widget.filePath).notifier)
-        .addLocationBlock(loc);
   }
 
   /// 이 화면의 날짜에 촬영된 사진을 일괄 추가한다(날짜 고정 → 선택 없이 바로).

@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
+import 'package:lunar/lunar.dart';
 import '../../features/location/domain/models/location_status.dart';
 import '../../features/weather/data/weather_service.dart';
+import '../../features/tide/data/astro_calc.dart';
 
-const _highTideColor = Color(0xFF1976D2); // 만조
-const _lowTideColor = Color(0xFF00796B); // 간조
+const _highTideColor = Color(0xFFD32F2F); // 만조 ▲ 빨강
+const _lowTideColor = Color(0xFF1976D2); // 간조 ▼ 파랑
 
 class LocationStatusCard extends StatelessWidget {
   final LocationStatus status;
@@ -120,52 +122,73 @@ class LocationStatusCard extends StatelessWidget {
 
   void _showTides(BuildContext context) {
     final ts = status.timestamp;
+    final day = DateTime(ts.year, ts.month, ts.day);
     final title = status.stationName != null
         ? '🌊 ${status.stationName} ${ts.month}/${ts.day} 물때'
         : '🌊 ${ts.month}/${ts.day} 물때';
+
+    // 음력·월령
+    final lunar = Solar.fromYmd(ts.year, ts.month, ts.day).getLunar();
+    final phase = moonPhase(day);
+    final summary = StringBuffer('음력 ${lunar.getMonth()}.${lunar.getDay()}');
+    if (status.tideName != null) summary.write(' · ${status.tideName}');
+    summary.write(
+        ' · ${phase.name} ${(phase.illumination * 100).round()}%');
+
+    // 일출몰·월출몰(위경도 있을 때만)
+    String? sunLine;
+    String? moonLine;
+    if (status.latitude != null && status.longitude != null) {
+      final s = sunRiseSet(day, status.latitude!, status.longitude!);
+      final m = moonRiseSet(day, status.latitude!, status.longitude!);
+      sunLine = '🌅 ${_hm(s.rise)}   🌇 ${_hm(s.set)}';
+      moonLine = '🌙 출 ${_hm(m.rise)}   몰 ${_hm(m.set)}';
+    }
+
+    // 조차(물흐름 근사)·날씨
+    final range = tidalRange(status.tides);
+    final wx = status.weatherCode != null
+        ? '⛅ ${weatherCodeToDesc(status.weatherCode!)}'
+        : null;
+    final flowWx = [
+      if (range != null) '🌊 조차 ${range.rangeCm}cm (약 ${range.percent}%)',
+      ?wx,
+    ].join('   ');
+
+    final onSurface = Theme.of(context).colorScheme.onSurface;
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(title, style: const TextStyle(fontSize: 16)),
         titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-        contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+        contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 12),
         content: SizedBox(
-          width: 280,
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              for (final t in status.tides)
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 3),
-                  child: Row(
-                    children: [
-                      SizedBox(
-                        width: 44,
-                        child: Text(
-                          t.type,
-                          style: TextStyle(
-                            fontWeight: FontWeight.w600,
-                            color: t.type == '만조'
-                                ? _highTideColor
-                                : _lowTideColor,
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      Text(t.time, style: const TextStyle(fontSize: 15)),
-                      const Spacer(),
-                      if (t.level != null)
-                        Text('${t.level}cm',
-                            style: TextStyle(
-                                fontSize: 13,
-                                color: Theme.of(ctx)
-                                    .colorScheme
-                                    .onSurface
-                                    .withValues(alpha: 0.6))),
-                    ],
-                  ),
-                ),
-            ],
+          width: 290,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(summary.toString(),
+                    style: TextStyle(
+                        fontSize: 12.5,
+                        color: onSurface.withValues(alpha: 0.75))),
+                if (sunLine != null) ...[
+                  const SizedBox(height: 4),
+                  Text(sunLine, style: const TextStyle(fontSize: 12.5)),
+                ],
+                if (moonLine != null) ...[
+                  const SizedBox(height: 2),
+                  Text(moonLine, style: const TextStyle(fontSize: 12.5)),
+                ],
+                if (flowWx.isNotEmpty) ...[
+                  const SizedBox(height: 2),
+                  Text(flowWx, style: const TextStyle(fontSize: 12.5)),
+                ],
+                const Divider(height: 16),
+                ..._tideRows(onSurface),
+              ],
+            ),
           ),
         ),
         actions: [
@@ -175,4 +198,66 @@ class LocationStatusCard extends StatelessWidget {
       ),
     );
   }
+
+  List<Widget> _tideRows(Color onSurface) {
+    final tides = status.tides;
+    final rows = <Widget>[];
+    for (var i = 0; i < tides.length; i++) {
+      final t = tides[i];
+      final isHigh = t.type == '만조';
+      final color = isHigh ? _highTideColor : _lowTideColor;
+      int? diff;
+      if (i > 0 && t.level != null && tides[i - 1].level != null) {
+        diff = t.level! - tides[i - 1].level!;
+      }
+      rows.add(Padding(
+        padding: const EdgeInsets.symmetric(vertical: 3),
+        child: Row(
+          children: [
+            SizedBox(
+              width: 52,
+              child: Text(
+                '${isHigh ? '▲' : '▼'} ${t.type}',
+                style: TextStyle(fontWeight: FontWeight.w600, color: color),
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(t.time, style: const TextStyle(fontSize: 15)),
+            const Spacer(),
+            // 조위(cm): 고정폭 우측정렬 → 행마다 정렬 일치
+            SizedBox(
+              width: 60,
+              child: Text(
+                t.level != null ? '${t.level}cm' : '-',
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                    fontSize: 13, color: onSurface.withValues(alpha: 0.6)),
+              ),
+            ),
+            const SizedBox(width: 8),
+            // 직전 대비 ±차이: 전날 정보가 없어 못 구하면 N/A
+            SizedBox(
+              width: 52,
+              child: Text(
+                diff != null ? '${diff >= 0 ? '+' : ''}$diff' : 'N/A',
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: diff != null
+                      ? color
+                      : onSurface.withValues(alpha: 0.4),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ));
+    }
+    return rows;
+  }
+
+  String _hm(DateTime? dt) => dt == null
+      ? '-'
+      : '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
 }

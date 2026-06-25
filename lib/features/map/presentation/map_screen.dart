@@ -385,6 +385,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     return Scaffold(
       appBar: AppBar(
         title: Text(DateFormatter.toDateString(_loadedDate)),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.calendar_today_outlined),
+            tooltip: '날짜 선택',
+            onPressed: _pickDate,
+          ),
+          IconButton(
+            icon: const Icon(Icons.refresh),
+            tooltip: '새로고침',
+            onPressed: _reloadCurrentDate,
+          ),
+        ],
       ),
       body: Column(
         children: [
@@ -657,10 +669,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    _toolBtn(Icons.calendar_today_outlined, null, _pickDate),
-                    _divider(),
-                    _toolBtn(Icons.refresh, null, _reloadCurrentDate),
-                    _divider(),
                     _toolBtn(Icons.my_location, null, _moveToCurrentLocation),
                     _divider(),
                     _toolBtn(

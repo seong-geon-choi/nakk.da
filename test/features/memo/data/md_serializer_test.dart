@@ -168,6 +168,23 @@ void main() {
       expect(loc.tides[2].level, isNull);
     });
 
+    test('parseBlocks: meta 숨김 주석 → 위경도·날씨코드 왕복', () {
+      final original = LocationStatus(
+        timestamp: DateTime(2026, 6, 2, 8, 0),
+        address: '인천 연안',
+        latitude: 37.45080,
+        longitude: 126.59220,
+        weatherCode: 3,
+      );
+      final serialized = MdSerializer.serializeLocationBlock(original);
+      final blocks = MdSerializer.parseBlocks(serialized, DateTime(2026, 6, 2));
+      final loc = blocks[0] as LocationStatus;
+      expect(loc.address, '인천 연안'); // 주소는 그대로
+      expect(loc.latitude, closeTo(37.45080, 1e-5));
+      expect(loc.longitude, closeTo(126.59220, 1e-5));
+      expect(loc.weatherCode, 3);
+    });
+
     test('parseBlocks: 이동 현황 블록 파싱 → isMove=true', () {
       const content = '''
 ## 현황 (11:30 이동)
