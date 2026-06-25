@@ -92,7 +92,7 @@ class MemoInputSheet extends ConsumerStatefulWidget {
   }
 
   /// 소스 선택 → 사진/동영상 촬영/선택까지 처리.
-  static Future<({String path, bool isVideo, double? length, ({double lat, double lng})? gps, DateTime? timestamp})?> pickMedia(
+  static Future<({String path, bool isVideo, double? length, ({double lat, double lng})? gps, DateTime? timestamp, List<({String path, bool isVideo})>? multi})?> pickMedia(
     BuildContext context,
     WidgetRef ref,
   ) async {
@@ -183,18 +183,28 @@ class MemoInputSheet extends ConsumerStatefulWidget {
       }
     } else {
       // gallery: 커스텀 갤러리 화면 (전체/사진/동영상 탭)
-      final picked = await Navigator.of(context).push<({String path, bool isVideo})>(
+      final picked = await Navigator.of(context).push<Object?>(
         MaterialPageRoute(builder: (_) => const GalleryPickerScreen()),
       );
       if (picked == null || !context.mounted) return null;
-      isVideo = picked.isVideo;
+      // 멀티 선택 추가: 경로 목록을 그대로 반환(호출부에서 일괄 처리)
+      if (picked is List) {
+        final items = picked.cast<({String path, bool isVideo})>();
+        if (items.isEmpty) return null;
+        return (
+          path: '', isVideo: false, length: null, gps: null,
+          timestamp: null, multi: items,
+        );
+      }
+      final single = picked as ({String path, bool isVideo});
+      isVideo = single.isVideo;
       if (isVideo) {
-        final savedPath = await MemoInputSheet.copyGalleryVideo(picked.path, settings?.savePath ?? '');
+        final savedPath = await MemoInputSheet.copyGalleryVideo(single.path, settings?.savePath ?? '');
         if (savedPath == null) return null;
         path = savedPath;
       } else {
-        exifSourcePath = picked.path;
-        path = picked.path; // 원본 경로 직접 참조 (복사 없음)
+        exifSourcePath = single.path;
+        path = single.path; // 원본 경로 직접 참조 (복사 없음)
       }
     }
 
@@ -220,7 +230,7 @@ class MemoInputSheet extends ConsumerStatefulWidget {
     }
 
     if (path == null) return null;
-    return (path: path, isVideo: isVideo, length: length, gps: gps, timestamp: timestamp);
+    return (path: path, isVideo: isVideo, length: length, gps: gps, timestamp: timestamp, multi: null);
   }
 
   /// 갤러리 사진을 savePath의 photos/ 서브폴더에 복사, 상대 경로 반환
@@ -736,6 +746,22 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
   Future<void> _pickMedia() async {
     final result = await MemoInputSheet.pickMedia(context, ref);
     if (result == null || !mounted) return;
+    // 편집 시트 안에서는 단일 사진만 다룸 — 멀티 선택은 첫 장만 사용
+    final multi = result.multi;
+    if (multi != null) {
+      if (multi.isEmpty) return;
+      final first = multi.first;
+      setState(() {
+        if (first.isVideo) {
+          _videoPath = first.path;
+          _photoPath = null;
+        } else {
+          _photoPath = first.path;
+          _videoPath = null;
+        }
+      });
+      return;
+    }
     setState(() {
       if (result.isVideo) {
         _videoPath = result.path;
@@ -889,17 +915,21 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
         fishSpecies: fishSpecies,
       );
 
+      // 콜백 미지정 시 오늘 파일에 기록(통합 화면은 항상 콜백을 넘김)
+      final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+      final todayPath = todayMemoFilePath(savePath);
       if (_isEditMode) {
         if (widget.onEditSave != null) {
           await widget.onEditSave!(widget.blockIndex!, entry);
         } else {
-          await ref.read(todayFileProvider.notifier).editBlock(widget.blockIndex!, entry);
+          await ref.read(dayFileProvider(todayPath).notifier)
+              .editBlock(widget.blockIndex!, entry);
         }
       } else {
         if (widget.onAddSave != null) {
           await widget.onAddSave!(entry);
         } else {
-          await ref.read(todayFileProvider.notifier).addEntry(entry);
+          await ref.read(dayFileProvider(todayPath).notifier).addEntry(entry);
         }
       }
       if (mounted) Navigator.of(context).pop();

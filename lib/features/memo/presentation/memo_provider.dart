@@ -14,74 +14,13 @@ final memoRepositoryProvider = Provider<MemoRepository>(
   (ref) => MemoRepositoryImpl(),
 );
 
-final todayFileProvider = AsyncNotifierProvider<TodayFileNotifier, DayFile?>(
-  TodayFileNotifier.new,
-);
-
-class TodayFileNotifier extends AsyncNotifier<DayFile?> {
-  @override
-  Future<DayFile?> build() async {
-    // savePath만 구독 — 트래킹 토글 등 무관한 설정 변경 시 재로딩(깜빡임) 방지
-    final savePath =
-        await ref.watch(settingsProvider.selectAsync((s) => s.savePath));
-    return ref
-        .read(memoRepositoryProvider)
-        .loadDayFile(DateTime.now(), savePath);
-  }
-
-  Future<void> addEntry(MemoEntry entry) async {
-    final settings = await ref.read(settingsProvider.future);
-    final date = DateTime.now();
-    await ref.read(memoRepositoryProvider).appendEntry(date, entry, settings.savePath);
-    ref.invalidateSelf();
-    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
-    unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
-    if (entry.photoPath != null) {
-      unawaited(ref.read(backupProvider.notifier).syncMediaFile(entry.photoPath!));
-    }
-    if (entry.videoPath != null) {
-      unawaited(ref.read(backupProvider.notifier).syncMediaFile(entry.videoPath!));
-    }
-  }
-
-  Future<void> addLocationBlock(LocationStatus loc) async {
-    final settings = await ref.read(settingsProvider.future);
-    final date = DateTime.now();
-    await ref.read(memoRepositoryProvider).appendLocationBlock(date, loc, settings.savePath);
-    ref.invalidateSelf();
-    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
-    unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
-  }
-
-  Future<void> editBlock(int blockIndex, dynamic newBlock) async {
-    final settings = await ref.read(settingsProvider.future);
-    final date = DateTime.now();
-    await ref.read(memoRepositoryProvider).replaceBlock(date, blockIndex, newBlock, settings.savePath);
-    ref.invalidateSelf();
-    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
-    unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
-  }
-
-  Future<void> removeBlock(int blockIndex) async {
-    final settings = await ref.read(settingsProvider.future);
-    final date = DateTime.now();
-    final dayFile = state.valueOrNull;
-    final block = (dayFile != null && blockIndex < dayFile.blocks.length)
-        ? dayFile.blocks[blockIndex]
-        : null;
-    await ref.read(memoRepositoryProvider).removeBlock(date, blockIndex, settings.savePath);
-    ref.invalidateSelf();
-    ref.invalidate(fileListProvider); // 목록의 주소·메모수 즉시 갱신(변경 파일만 재읽기)
-    unawaited(ref.read(backupProvider.notifier).syncMdFile(date, settings.savePath));
-    if (block is MemoEntry) {
-      if (block.photoPath != null) {
-        unawaited(ref.read(backupProvider.notifier).deleteMediaFile(block.photoPath!));
-      }
-      if (block.videoPath != null) {
-        unawaited(ref.read(backupProvider.notifier).deleteMediaFile(block.videoPath!));
-      }
-    }
-  }
+/// 오늘 날짜의 메모 파일 경로(savePath + yyyy-MM-dd.md).
+/// 통합 화면(DayMemoScreen)·지도·편집기에서 '오늘'을 dayFileProvider로 일원화하는 데 사용.
+String todayMemoFilePath(String savePath) {
+  final d = DateTime.now();
+  final m = d.month.toString().padLeft(2, '0');
+  final day = d.day.toString().padLeft(2, '0');
+  return '$savePath/${d.year}-$m-$day.md';
 }
 
 // ── 특정 파일을 날짜로 읽고 쓰는 family provider ───────────────

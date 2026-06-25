@@ -25,6 +25,7 @@ import '../../features/file_list/domain/models/file_summary.dart';
 import '../../core/utils/file_name_parser.dart';
 import '../../core/utils/media_scanner.dart';
 import '../../core/utils/species_detector.dart';
+import '../../core/utils/exif_utils.dart';
 import '../../core/widgets/memo_date_picker_dialog.dart';
 import '../../core/services/saf_service.dart';
 import '../../core/services/memo_share_service.dart';
@@ -60,11 +61,15 @@ Future<void> _shareDayMemo(
   );
 }
 
-/// 지정 날짜에 촬영된 갤러리 사진을 스캔해 그 날짜 메모에 일괄 추가한다.
+/// 지정 날짜(scanDate)에 촬영된 갤러리 사진을 스캔해 메모에 일괄 추가한다.
+/// targetDate를 주면 그 날짜 메모에 저장(미지정 시 scanDate와 동일).
 /// 진행률·확인 다이얼로그·결과 스낵바를 자체 처리하고, 추가된 장수를 반환한다(취소·없음=0).
 /// 사진 권한은 호출하는 쪽에서 먼저 확인한다.
 Future<int> _runPhotoImport(
-    BuildContext context, WidgetRef ref, DateTime date) async {
+    BuildContext context, WidgetRef ref, DateTime scanDate,
+    {DateTime? targetDate}) async {
+  final date = scanDate; // 스캔(촬영) 날짜
+  final target = targetDate ?? scanDate; // 저장 대상 메모 날짜
   final settings = ref.read(settingsProvider).valueOrNull;
   if (settings == null) return 0;
 
@@ -129,7 +134,7 @@ Future<int> _runPhotoImport(
   DateTime toSecond(DateTime dt) =>
       DateTime(dt.year, dt.month, dt.day, dt.hour, dt.minute, dt.second);
 
-  final existing = await ref.read(memoRepositoryProvider).loadDayFile(date, savePath);
+  final existing = await ref.read(memoRepositoryProvider).loadDayFile(target, savePath);
   final existingPhotoSeconds = existing?.entries
       .where((e) => e.isPhoto)
       .map((e) => toSecond(e.timestamp))
@@ -180,16 +185,15 @@ Future<int> _runPhotoImport(
     progress.value = i + 1;
   }
 
-  // 벌크 저장
+  // 벌크 저장 (저장 대상은 target 메모)
   if (entries.isNotEmpty) {
-    await ref.read(memoRepositoryProvider).appendEntries(date, entries, savePath);
-    final today = DateTime.now();
-    if (date.year == today.year && date.month == today.month && date.day == today.day) {
-      ref.invalidate(todayFileProvider);
-    }
+    await ref.read(memoRepositoryProvider).appendEntries(target, entries, savePath);
+    ref.invalidate(dayFileProvider('$savePath/${target.year}-'
+        '${target.month.toString().padLeft(2, '0')}-'
+        '${target.day.toString().padLeft(2, '0')}.md'));
     // 백업 동기화 — 단건 추가와 동일하게 md 1회 + 사진별 1회 (백그라운드)
     final backup = ref.read(backupProvider.notifier);
-    unawaited(backup.syncMdFile(date, savePath));
+    unawaited(backup.syncMdFile(target, savePath));
     for (final entry in entries) {
       if (entry.photoPath != null) {
         unawaited(backup.syncMediaFile(entry.photoPath!));
@@ -208,494 +212,6 @@ Future<int> _runPhotoImport(
     ),
   );
   return entries.length;
-}
-
-class HomeScreen extends ConsumerStatefulWidget {
-  const HomeScreen({super.key});
-
-  @override
-  ConsumerState<HomeScreen> createState() => _HomeScreenState();
-}
-
-class _HomeScreenState extends ConsumerState<HomeScreen>
-    with WidgetsBindingObserver {
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    setVoiceResultHandler(_handleVoiceResult);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _checkPendingVoiceResult();
-      _autoSetupSaveFolderIfNeeded();
-      _maybePromptUpdate();
-    });
-  }
-
-  /// Play 스토어에 새 버전이 있으면 안내 다이얼로그를 띄운다.
-  /// 확인 → 인앱 즉시 업데이트, 취소 → 스토어 안내 토스트.
-  Future<void> _maybePromptUpdate() async {
-    if (!await AppUpdateService.isUpdateAvailable()) return;
-    if (!mounted) return;
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('업데이트 안내'),
-        content: const Text('새로운 버전이 있습니다. 지금 업데이트할까요?'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('확인'),
-          ),
-        ],
-      ),
-    );
-    if (!mounted) return;
-    if (ok == true) {
-      await AppUpdateService.performImmediateUpdate();
-    } else {
-      showAppToast(
-        context,
-        '플레이스토어에서 업데이트를 받을 수 있습니다',
-        duration: const Duration(seconds: 3),
-      );
-    }
-  }
-
-  Future<void> _autoSetupSaveFolderIfNeeded() async {
-    final settings = ref.read(settingsProvider).valueOrNull;
-    if (settings == null || !settings.needsFolderSetup) return;
-    if (!mounted) return;
-    await ref.read(settingsProvider.notifier).pickSaveFolder();
-  }
-
-  Future<bool> _requirePermission(Permission perm, String label) async {
-    if (await perm.status.isGranted) return true;
-    final result = await perm.request();
-    if (result.isGranted) return true;
-    if (result.isPermanentlyDenied && mounted) {
-      final goSettings = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: Text('$label 권한 필요'),
-          content: Text('$label 권한이 거부되었습니다.\n설정에서 권한을 허용한 후 다시 시도해주세요.'),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('취소'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('설정 열기'),
-            ),
-          ],
-        ),
-      );
-      if (goSettings == true) openAppSettings();
-    }
-    return false;
-  }
-
-  Future<bool> _requireFolderSetup() async {
-    if (ref.read(settingsProvider).valueOrNull?.needsFolderSetup != true) return true;
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('저장 폴더 설정 필요'),
-        content: const Text('이 기능을 사용하려면 메모 저장 폴더를 먼저 설정해야 합니다.'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('폴더 설정'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true) return false;
-    await ref.read(settingsProvider.notifier).pickSaveFolder();
-    return ref.read(settingsProvider).valueOrNull?.needsFolderSetup == false;
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _checkPendingVoiceResult();
-    }
-  }
-
-  void _handleVoiceResult(String text) {
-    if (!mounted) return;
-    final autoSave = ref.read(settingsProvider).valueOrNull?.autoSaveVoice ?? false;
-    if (autoSave) {
-      _saveVoiceDirectly(text);
-    } else {
-      MemoInputSheet.show(context, initialText: text);
-    }
-  }
-
-  Future<void> _checkPendingVoiceResult() async {
-    final text = await getPendingVoiceResult();
-    if (text != null && mounted) {
-      await clearPendingVoiceResult();
-      if (!mounted) return;
-      final autoSave = ref.read(settingsProvider).valueOrNull?.autoSaveVoice ?? false;
-      if (autoSave) {
-        _saveVoiceDirectly(text);
-      } else {
-        MemoInputSheet.show(context, initialText: text);
-      }
-    }
-  }
-
-  Future<void> _saveVoiceDirectly(String text) async {
-    double? lat = ref.read(locationProvider).valueOrNull?.latitude;
-    double? lng = ref.read(locationProvider).valueOrNull?.longitude;
-    if (lat == null) {
-      final cached = ref.read(locationProvider.notifier).cached;
-      lat = cached?.latitude;
-      lng = cached?.longitude;
-    }
-    if (lat == null) {
-      try {
-        final pos = await Geolocator.getLastKnownPosition();
-        if (pos != null) { lat = pos.latitude; lng = pos.longitude; }
-      } catch (_) {}
-    }
-    await ref.read(todayFileProvider.notifier).addEntry(MemoEntry(
-      timestamp: DateTime.now(),
-      latitude: lat,
-      longitude: lng,
-      text: text,
-      fishSpecies: detectFishSpecies(
-          text, ref.read(settingsProvider).valueOrNull?.fishSpecies),
-      fishLength: detectFishLength(text),
-    ));
-    if (mounted) {
-      final preview = text.length > 30 ? '${text.substring(0, 30)}…' : text;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('저장됨: $preview'), duration: const Duration(seconds: 2)),
-      );
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final todayAsync = ref.watch(todayFileProvider);
-    final settingsAsync = ref.watch(settingsProvider);
-    final showLocationButton =
-        settingsAsync.valueOrNull?.showLocationButton ?? true;
-    final today = DateTime.now();
-
-    final needsSetup = settingsAsync.valueOrNull?.needsFolderSetup ?? false;
-
-    return Scaffold(
-      appBar: AppBar(
-        title: GestureDetector(
-          onTap: _onFileListTap,
-          child: Text(
-            DateFormatter.toDateString(today),
-            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-          ),
-        ),
-        actions: [
-          if (settingsAsync.valueOrNull?.shareEnabled ?? false)
-            IconButton(
-              icon: const Icon(Icons.ios_share),
-              tooltip: '공유',
-              onPressed: () => _shareDayMemo(
-                context,
-                blocks: todayAsync.valueOrNull?.blocks ?? const [],
-                displayName: DateFormatter.toDateString(today),
-                savePath: settingsAsync.valueOrNull?.savePath ?? '',
-              ),
-            ),
-          IconButton(
-            icon: const Icon(Icons.add_photo_alternate_outlined),
-            tooltip: '날짜별 사진 일괄 추가',
-            onPressed: _importDayPhotos,
-          ),
-          IconButton(
-            icon: const Icon(Icons.settings_outlined),
-            tooltip: '설정',
-            onPressed: () => context.push(AppRoutes.settings),
-          ),
-        ],
-      ),
-      body: Column(
-        children: [
-          if (needsSetup)
-            MaterialBanner(
-              content: const Text('메모 저장 폴더가 설정되지 않았습니다'),
-              actions: [
-                TextButton(
-                  onPressed: () async {
-                    await ref.read(settingsProvider.notifier).pickSaveFolder();
-                  },
-                  child: const Text('폴더 선택'),
-                ),
-              ],
-            ),
-          Expanded(
-            child: Stack(
-              children: [
-                todayAsync.when(
-                  loading: () => const Center(child: CircularProgressIndicator()),
-                  error: (e, _) => EmptyStateView(
-                    icon: Icons.error_outline,
-                    message: '불러오기 실패',
-                    subMessage: e.toString(),
-                  ),
-                  data: (dayFile) => _Body(
-                  dayFile: dayFile,
-                  onRefresh: () async {
-                    ref.invalidate(todayFileProvider);
-                    ref.invalidate(fileListProvider);
-                    await ref.read(todayFileProvider.future);
-                  },
-                ),
-                ),
-                if (showLocationButton)
-                  _LocationFab(onTap: _onLocationTap),
-                if (settingsAsync.valueOrNull?.showTrackingButton ?? true)
-                  const _TrackingFab(),
-              ],
-            ),
-          ),
-        ],
-      ),
-      bottomNavigationBar: _ActionBar(
-        onVoiceTap: () {
-          unawaited(_maybeAutoAddLocation());
-          _openMemoSheet();
-        },
-        onPhotoTap: _onPhotoTap,
-        onMapTap: _onMapTap,
-      ),
-    );
-  }
-
-  Future<void> _openMemoSheet({bool voiceMode = false}) async {
-    if (!await _requireFolderSetup()) return;
-    if (voiceMode && !await _requirePermission(Permission.microphone, '마이크')) return;
-    if (mounted) MemoInputSheet.show(context, voiceMode: voiceMode);
-  }
-
-  /// 옵션이 켜져 있고 오늘 현장 정보가 한 건도 없으면, 첫 메모/사진 추가 시
-  /// 백그라운드로 현장 정보를 1회 수집·저장한다. (위치 권한이 이미 있을 때만)
-  bool _autoLocTriggered = false;
-  Future<void> _maybeAutoAddLocation() async {
-    if (_autoLocTriggered) return;
-    final settings = ref.read(settingsProvider).valueOrNull;
-    if (settings == null ||
-        !settings.autoLocationOnFirstEntry ||
-        settings.needsFolderSetup) {
-      return;
-    }
-    _autoLocTriggered = true; // 동시 탭(메모+사진) 중복 방지용 in-flight 가드
-    try {
-      // 최신 상태로 확인: 삭제 직후 stale 데이터(삭제된 현황)로 인한 오판 방지
-      final dayFile = await ref.read(todayFileProvider.future);
-      final blocks = dayFile?.blocks ?? const [];
-      if (blocks.any((b) => b is LocationStatus)) return;
-      if (!await Permission.locationWhenInUse.status.isGranted) {
-        if (mounted) {
-          showAppToast(context, '현장 정보 추가에 실패했습니다. 위치 권한을 추가해 주세요',
-              duration: const Duration(seconds: 3));
-        }
-        return;
-      }
-      final loc = await ref
-          .read(locationProvider.notifier)
-          .buildEnrichedLocation(isMove: false);
-      await ref.read(todayFileProvider.notifier).addLocationBlock(loc);
-    } finally {
-      // 성공·실패 무관하게 해제 → 메모 전체 삭제 후 재추가 시 다시 동작
-      _autoLocTriggered = false;
-    }
-  }
-
-  Future<void> _onFileListTap() async {
-    if (!await _requireFolderSetup()) return;
-    if (mounted) context.push(AppRoutes.fileList);
-  }
-
-  Future<void> _onMapTap() async {
-    if (!await _requireFolderSetup()) return;
-    if (!await _requirePermission(Permission.locationWhenInUse, '위치')) return;
-    if (mounted) context.push(AppRoutes.map);
-  }
-
-  Future<Set<DateTime>> _loadMarkedDates(String savePath) async {
-    if (savePath.isEmpty) return {};
-    final dates = <DateTime>{};
-    if (SafService.isSafUri(savePath)) {
-      final names = await SafService().listMdFiles(savePath);
-      for (final name in names) {
-        final d = FileNameParser.parseDate(name);
-        if (d != null) dates.add(d);
-      }
-    } else {
-      final dir = Directory(savePath);
-      if (!await dir.exists()) return {};
-      await for (final entity in dir.list()) {
-        if (entity is File) {
-          final d = FileNameParser.parseDate(entity.uri.pathSegments.last);
-          if (d != null) dates.add(d);
-        }
-      }
-    }
-    return dates;
-  }
-
-  Future<void> _importDayPhotos() async {
-    if (!await _requireFolderSetup()) return;
-    if (!await _requirePermission(Permission.photos, '사진')) return;
-    final settings = ref.read(settingsProvider).valueOrNull;
-    if (settings == null) return;
-    final markedDates = await _loadMarkedDates(settings.savePath);
-    if (!mounted) return;
-
-    final date = await showDialog<DateTime>(
-      context: context,
-      builder: (_) => MemoDatePickerDialog(
-        initialDate: DateTime.now(),
-        firstDate: DateTime(2020),
-        lastDate: DateTime.now(),
-        markedDates: markedDates,
-        title: '사진 일괄 추가하기',
-      ),
-    );
-    if (date == null || !mounted) return;
-
-    final added = await _runPhotoImport(context, ref, date);
-    if (added <= 0 || !mounted) return;
-
-    // 오늘이 아닌 날짜면 해당 메모로 이동
-    final today = DateTime.now();
-    final isToday = date.year == today.year && date.month == today.month && date.day == today.day;
-    if (!isToday) {
-      final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
-      final y = date.year;
-      final m = date.month.toString().padLeft(2, '0');
-      final d = date.day.toString().padLeft(2, '0');
-      final filePath = '$savePath/$y-$m-$d.md';
-      // 해당 날짜 메모를 이전에 연 적 있으면 provider에 캐시가 남아
-      // 추가된 사진이 안 보임 → 이동 전 무효화해 디스크에서 다시 읽도록 함
-      ref.invalidate(dayFileProvider(filePath));
-      context.push('${AppRoutes.fileList}/${Uri.encodeComponent(filePath)}?name=${Uri.encodeComponent('$y-$m-$d')}');
-    }
-  }
-
-  Future<void> _onPhotoTap() async {
-    if (!await _requireFolderSetup()) return;
-    if (!await _requirePermission(Permission.camera, '카메라')) return;
-    if (!await _requirePermission(Permission.photos, '사진')) return;
-    if (!mounted) return;
-    unawaited(_maybeAutoAddLocation());
-    final result = await MemoInputSheet.pickMedia(context, ref);
-    if (result == null || !mounted) return;
-
-    Future<void> Function(MemoEntry)? onAddSave;
-    bool savedToPhotoDate = false;
-    String? photoFilePath;
-
-    if (!result.isVideo && result.timestamp != null) {
-      final today = DateTime.now();
-      final photoDate = result.timestamp!;
-      if (photoDate.year != today.year ||
-          photoDate.month != today.month ||
-          photoDate.day != today.day) {
-        final m = today.month.toString().padLeft(2, '0');
-        final d = today.day.toString().padLeft(2, '0');
-        final choice = await _showPhotoDateDialog(
-          context, photoDate, '오늘 (${today.year}-$m-$d)');
-        if (!mounted || choice == _PhotoDateChoice.cancel) return;
-        if (choice == _PhotoDateChoice.photoDate) {
-          final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
-          final repo = ref.read(memoRepositoryProvider);
-          final py = photoDate.year;
-          final pm = photoDate.month.toString().padLeft(2, '0');
-          final pd = photoDate.day.toString().padLeft(2, '0');
-          photoFilePath = '$savePath/$py-$pm-$pd.md';
-          onAddSave = (entry) async {
-            await repo.appendEntry(photoDate, entry, savePath);
-            savedToPhotoDate = true;
-          };
-        }
-      }
-    }
-
-    if (!mounted) return;
-    await MemoInputSheet.show(context,
-      initialPhotoPath: result.isVideo ? null : result.path,
-      initialVideoPath: result.isVideo ? result.path : null,
-      initialFishLength: result.length,
-      initialLatitude: result.gps?.lat,
-      initialLongitude: result.gps?.lng,
-      initialTimestamp: result.timestamp,
-      onAddSave: onAddSave,
-    );
-
-    if (savedToPhotoDate && photoFilePath != null && mounted) {
-      final name = photoFilePath.split('/').last.replaceAll('.md', '');
-      context.push(
-        '${AppRoutes.fileList}/${Uri.encodeComponent(photoFilePath)}?name=${Uri.encodeComponent(name)}',
-      );
-    }
-  }
-
-  Future<void> _onLocationTap() async {
-    if (!await _requirePermission(Permission.locationWhenInUse, '위치')) return;
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Row(
-          children: [
-            SizedBox(
-              width: 16,
-              height: 16,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Colors.white,
-              ),
-            ),
-            SizedBox(width: 12),
-            Text('현장 정보 수집 중...'),
-          ],
-        ),
-        duration: Duration(minutes: 1),
-      ),
-    );
-
-    final loc = await ref
-        .read(locationProvider.notifier)
-        .buildEnrichedLocation(isMove: true);
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).hideCurrentSnackBar();
-
-    final confirmed = await showModalBottomSheet<bool>(
-      context: context,
-      builder: (_) => _LocationPreviewSheet(location: loc),
-    );
-    if (confirmed == true && mounted) {
-      await ref.read(todayFileProvider.notifier).addLocationBlock(loc);
-    }
-  }
 }
 
 class _Body extends ConsumerStatefulWidget {
@@ -823,7 +339,11 @@ class _BodyState extends ConsumerState<_Body> {
               if (widget.onRemoveBlock != null) {
                 await widget.onRemoveBlock!(index);
               } else {
-                ref.read(todayFileProvider.notifier).removeBlock(index);
+                final savePath =
+                    ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+                ref
+                    .read(dayFileProvider(todayMemoFilePath(savePath)).notifier)
+                    .removeBlock(index);
               }
             }
           },
@@ -1209,8 +729,10 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     WidgetsBinding.instance.addObserver(this);
     _reconcileTrackingOnStart();
     _loadPosition();
-    // 메모 저장 등으로 todayFileProvider가 갱신될 때 트래킹 카운트도 재조회
-    ref.listenManual(todayFileProvider, (_, _) => _refreshCount());
+    // 오늘 메모 저장 등으로 갱신될 때 트래킹 카운트도 재조회
+    final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+    ref.listenManual(
+        dayFileProvider(todayMemoFilePath(savePath)), (_, _) => _refreshCount());
   }
 
   Future<void> _loadPosition() async {
@@ -1462,99 +984,437 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
 // ── 파일 목록에서 특정 날짜 파일을 홈 화면처럼 편집하는 화면 ─────
 
 class DayMemoScreen extends ConsumerStatefulWidget {
-  final String filePath;
-  final String displayName;
+  final String? filePath;   // 진입점(앱 홈)이면 null → 내부에서 오늘 경로 계산
+  final String? displayName;
 
   const DayMemoScreen({
     super.key,
-    required this.filePath,
-    required this.displayName,
+    this.filePath,
+    this.displayName,
   });
 
   @override
   ConsumerState<DayMemoScreen> createState() => _DayMemoScreenState();
 }
 
-class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
+class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
+    with WidgetsBindingObserver {
+  // ── 통합 화면: 오늘 / 특정 날짜 공용 ──────────────────────
+  /// 좌우 스와이프로 이동한 날짜 파일 경로(라우트 이동 없이 화면 안에서 전환).
+  /// null이면 widget.filePath(또는 오늘)를 사용.
+  String? _navPath;
+
+  /// 앱 진입점(라우터 '/')인지 — 홈 전용 1회성 기능은 여기서만 실행.
+  bool get _isEntryPoint => widget.filePath == null;
+
+  /// 대상 날짜가 오늘인지(UI 분기용) — 현재 표시 경로의 날짜로 판정.
+  bool get _isToday {
+    final d = FileNameParser.parseDate(
+        _filePath.replaceAll('\\', '/').split('/').last);
+    if (d == null) return false;
+    final n = DateTime.now();
+    return d.year == n.year && d.month == n.month && d.day == n.day;
+  }
+
+  /// 현재 표시 중인 파일 경로
+  /// (스와이프 이동값 > 생성자 지정값 > 진입점이면 오늘 경로)
+  String get _filePath {
+    if (_navPath != null) return _navPath!;
+    final explicit = widget.filePath;
+    if (explicit != null) return explicit;
+    final sp = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+    final d = DateTime.now();
+    final m = d.month.toString().padLeft(2, '0');
+    final day = d.day.toString().padLeft(2, '0');
+    return '$sp/${d.year}-$m-$day.md';
+  }
+
+  String get _displayName {
+    if (_navPath != null) {
+      final d = FileNameParser.parseDate(
+          _navPath!.replaceAll('\\', '/').split('/').last);
+      if (d != null) return DateFormatter.toDateString(d);
+    }
+    return widget.displayName ?? DateFormatter.toDateString(DateTime.now());
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    if (_isEntryPoint) {
+      // 홈 전용: 음성 접근성 결과 수신 + 앱 시작 시 폴더설정·업데이트 안내
+      WidgetsBinding.instance.addObserver(this);
+      setVoiceResultHandler(_handleVoiceResult);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _checkPendingVoiceResult();
+        _autoSetupSaveFolderIfNeeded();
+        _maybePromptUpdate();
+      });
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_isEntryPoint) WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (_isEntryPoint && state == AppLifecycleState.resumed) {
+      _checkPendingVoiceResult();
+    }
+  }
+
+  // ── 홈 전용 로직(isToday일 때만 호출) ─────────────────────
+  Future<void> _maybePromptUpdate() async {
+    if (!await AppUpdateService.isUpdateAvailable()) return;
+    if (!mounted) return;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('업데이트 안내'),
+        content: const Text('새로운 버전이 있습니다. 지금 업데이트할까요?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('확인'),
+          ),
+        ],
+      ),
+    );
+    if (!mounted) return;
+    if (ok == true) {
+      await AppUpdateService.performImmediateUpdate();
+    } else {
+      showAppToast(context, '플레이스토어에서 업데이트를 받을 수 있습니다',
+          duration: const Duration(seconds: 3));
+    }
+  }
+
+  Future<void> _autoSetupSaveFolderIfNeeded() async {
+    final settings = ref.read(settingsProvider).valueOrNull;
+    if (settings == null || !settings.needsFolderSetup) return;
+    if (!mounted) return;
+    await ref.read(settingsProvider.notifier).pickSaveFolder();
+  }
+
+  void _handleVoiceResult(String text) {
+    if (!mounted) return;
+    final autoSave = ref.read(settingsProvider).valueOrNull?.autoSaveVoice ?? false;
+    if (autoSave) {
+      _saveVoiceDirectly(text);
+    } else {
+      MemoInputSheet.show(context,
+          initialText: text,
+          onAddSave: (entry) =>
+              ref.read(dayFileProvider(_filePath).notifier).addEntry(entry));
+    }
+  }
+
+  Future<void> _checkPendingVoiceResult() async {
+    final text = await getPendingVoiceResult();
+    if (text != null && mounted) {
+      await clearPendingVoiceResult();
+      if (!mounted) return;
+      _handleVoiceResult(text);
+    }
+  }
+
+  Future<void> _saveVoiceDirectly(String text) async {
+    double? lat = ref.read(locationProvider).valueOrNull?.latitude;
+    double? lng = ref.read(locationProvider).valueOrNull?.longitude;
+    if (lat == null) {
+      final cached = ref.read(locationProvider.notifier).cached;
+      lat = cached?.latitude;
+      lng = cached?.longitude;
+    }
+    if (lat == null) {
+      try {
+        final pos = await Geolocator.getLastKnownPosition();
+        if (pos != null) { lat = pos.latitude; lng = pos.longitude; }
+      } catch (_) {}
+    }
+    await ref.read(dayFileProvider(_filePath).notifier).addEntry(MemoEntry(
+          timestamp: DateTime.now(),
+          latitude: lat,
+          longitude: lng,
+          text: text,
+          fishSpecies: detectFishSpecies(
+              text, ref.read(settingsProvider).valueOrNull?.fishSpecies),
+          fishLength: detectFishLength(text),
+        ));
+    if (mounted) {
+      final preview = text.length > 30 ? '${text.substring(0, 30)}…' : text;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('저장됨: $preview'), duration: const Duration(seconds: 2)),
+      );
+    }
+  }
+
+  // ── 공통 헬퍼 ────────────────────────────────────────────
+  Future<bool> _requirePermission(Permission perm, String label) async {
+    if (await perm.status.isGranted) return true;
+    final result = await perm.request();
+    if (result.isGranted) return true;
+    if (result.isPermanentlyDenied && mounted) {
+      final goSettings = await showDialog<bool>(
+        context: context,
+        builder: (_) => AlertDialog(
+          title: Text('$label 권한 필요'),
+          content: Text('$label 권한이 거부되었습니다.\n설정에서 권한을 허용한 후 다시 시도해주세요.'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('취소'),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: const Text('설정 열기'),
+            ),
+          ],
+        ),
+      );
+      if (goSettings == true) openAppSettings();
+    }
+    return false;
+  }
+
+  Future<bool> _requireFolderSetup() async {
+    if (ref.read(settingsProvider).valueOrNull?.needsFolderSetup != true) return true;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('저장 폴더 설정 필요'),
+        content: const Text('이 기능을 사용하려면 메모 저장 폴더를 먼저 설정해야 합니다.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('폴더 설정'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return false;
+    await ref.read(settingsProvider.notifier).pickSaveFolder();
+    return ref.read(settingsProvider).valueOrNull?.needsFolderSetup == false;
+  }
+
+  Future<void> _onFileListTap() async {
+    if (!await _requireFolderSetup()) return;
+    if (mounted) context.push(AppRoutes.fileList);
+  }
+
+  Future<void> _onMapTap() async {
+    if (!await _requireFolderSetup()) return;
+    if (!await _requirePermission(Permission.locationWhenInUse, '위치')) return;
+    if (mounted) context.push(AppRoutes.map, extra: _isToday ? null : _filePath);
+  }
+
+  Future<Set<DateTime>> _loadMarkedDates(String savePath) async {
+    if (savePath.isEmpty) return {};
+    final dates = <DateTime>{};
+    if (SafService.isSafUri(savePath)) {
+      final names = await SafService().listMdFiles(savePath);
+      for (final name in names) {
+        final d = FileNameParser.parseDate(name);
+        if (d != null) dates.add(d);
+      }
+    } else {
+      final dir = Directory(savePath);
+      if (!await dir.exists()) return {};
+      await for (final entity in dir.list()) {
+        if (entity is File) {
+          final d = FileNameParser.parseDate(entity.uri.pathSegments.last);
+          if (d != null) dates.add(d);
+        }
+      }
+    }
+    return dates;
+  }
+
+  /// 날짜 선택 후 사진 일괄 추가(오늘 화면 전용 진입점).
+  Future<void> _importPickDayPhotos() async {
+    if (!await _requireFolderSetup()) return;
+    if (!await _requirePermission(Permission.photos, '사진')) return;
+    final settings = ref.read(settingsProvider).valueOrNull;
+    if (settings == null) return;
+    final markedDates = await _loadMarkedDates(settings.savePath);
+    if (!mounted) return;
+    final now = DateTime.now();
+    final screenName = _filePath.replaceAll('\\', '/').split('/').last;
+    final screenDate = FileNameParser.parseDate(screenName) ?? now;
+    final date = await showDialog<DateTime>(
+      context: context,
+      builder: (_) => MemoDatePickerDialog(
+        initialDate: screenDate.isAfter(now) ? now : screenDate,
+        firstDate: DateTime(2020),
+        lastDate: now,
+        markedDates: markedDates,
+        title: '사진 일괄 추가하기',
+      ),
+    );
+    if (date == null || !mounted) return;
+
+    // 저장 위치 선택: 선택한 날짜(D)가 현재 화면 날짜와 다르면
+    // "D 날짜 메모 vs 현재 메모" 중 선택 (같으면 바로 추가)
+    final sameDay = date.year == screenDate.year &&
+        date.month == screenDate.month &&
+        date.day == screenDate.day;
+    DateTime targetDate = date;
+    if (!sameDay) {
+      final choice = await _showPhotoDateDialog(context, date, _displayName);
+      if (!mounted || choice == _PhotoDateChoice.cancel) return;
+      targetDate = choice == _PhotoDateChoice.photoDate ? date : screenDate;
+    }
+
+    final added =
+        await _runPhotoImport(context, ref, date, targetDate: targetDate);
+    if (added <= 0 || !mounted) return;
+
+    // 저장 대상이 현재 화면과 다른 날짜면 그 메모로 이동
+    final toCurrent = targetDate.year == screenDate.year &&
+        targetDate.month == screenDate.month &&
+        targetDate.day == screenDate.day;
+    if (toCurrent) {
+      ref.invalidate(dayFileProvider(_filePath));
+    } else {
+      final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+      final y = targetDate.year;
+      final m = targetDate.month.toString().padLeft(2, '0');
+      final d = targetDate.day.toString().padLeft(2, '0');
+      final filePath = '$savePath/$y-$m-$d.md';
+      ref.invalidate(dayFileProvider(filePath));
+      context.push(
+          '${AppRoutes.fileList}/${Uri.encodeComponent(filePath)}?name=${Uri.encodeComponent('$y-$m-$d')}');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    final asyncFile = ref.watch(dayFileProvider(widget.filePath));
+    final path = _filePath;
+    final asyncFile = ref.watch(dayFileProvider(path));
+    final settingsAsync = ref.watch(settingsProvider);
     final showLocationButton =
-        ref.watch(settingsProvider).valueOrNull?.showLocationButton ?? true;
-    final notifier = ref.read(dayFileProvider(widget.filePath).notifier);
+        settingsAsync.valueOrNull?.showLocationButton ?? true;
+    final notifier = ref.read(dayFileProvider(path).notifier);
     ref.watch(fileListProvider); // 날짜 스와이프 이동용 목록 미리 로드
+    final needsSetup =
+        _isToday && (settingsAsync.valueOrNull?.needsFolderSetup ?? false);
+
+    final content = asyncFile.when(
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (e, _) => EmptyStateView(
+        icon: Icons.error_outline,
+        message: '불러오기 실패',
+        subMessage: e.toString(),
+      ),
+      data: (dayFile) => GestureDetector(
+        // 카드가 없는 빈 영역 가로 스와이프 → 이전/이후 날짜 메모 이동
+        // (카드 위 가로 스와이프는 자식 _SwipeItem이 우선 처리: 편집/삭제)
+        behavior: HitTestBehavior.translucent,
+        onHorizontalDragEnd: (details) {
+          final v = details.primaryVelocity;
+          if (v == null) return;
+          if (v < -250) {
+            _navigateDay(1); // 왼쪽 스와이프 → 이후(미래) 날짜
+          } else if (v > 250) {
+            _navigateDay(-1); // 오른쪽 스와이프 → 이전(과거) 날짜
+          }
+        },
+        child: _Body(
+          dayFile: dayFile,
+          onEditMemoSave: (idx, entry) => notifier.editBlock(idx, entry),
+          onEditLocationSave: (idx, loc) => notifier.editBlock(idx, loc),
+          onRemoveBlock: (idx) => notifier.removeBlock(idx),
+          onRefresh: () async {
+            ref.invalidate(dayFileProvider(path));
+            ref.invalidate(fileListProvider);
+            await ref.read(dayFileProvider(path).future);
+          },
+        ),
+      ),
+    );
 
     return Scaffold(
       appBar: AppBar(
         title: GestureDetector(
-          onTap: () => context.push(AppRoutes.fileList),
+          onTap: _onFileListTap,
           child: Text(
-            widget.displayName,
+            _displayName,
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
           ),
         ),
         actions: [
-          if (ref.watch(settingsProvider).valueOrNull?.shareEnabled ?? false)
+          if (settingsAsync.valueOrNull?.shareEnabled ?? false)
             IconButton(
               icon: const Icon(Icons.ios_share),
               tooltip: '공유',
               onPressed: () => _shareDayMemo(
                 context,
                 blocks: asyncFile.valueOrNull?.blocks ?? const [],
-                displayName: widget.displayName,
-                savePath: ref.read(settingsProvider).valueOrNull?.savePath ?? '',
+                displayName: _displayName,
+                savePath: settingsAsync.valueOrNull?.savePath ?? '',
               ),
             ),
           IconButton(
             icon: const Icon(Icons.add_photo_alternate_outlined),
             tooltip: '사진 일괄 추가',
-            onPressed: _importThisDayPhotos,
+            onPressed: _importPickDayPhotos,
           ),
-          TextButton(
-            onPressed: () => context.go(AppRoutes.home),
-            child: const Text('오늘'),
-          ),
-        ],
-      ),
-      body: Stack(
-        children: [
-          asyncFile.when(
-            loading: () => const Center(child: CircularProgressIndicator()),
-            error: (e, _) => EmptyStateView(
-              icon: Icons.error_outline,
-              message: '불러오기 실패',
-              subMessage: e.toString(),
-            ),
-            data: (dayFile) => GestureDetector(
-              // 카드가 없는 빈 영역 가로 스와이프 → 이전/이후 날짜 메모 이동
-              // (카드 위 가로 스와이프는 자식 _SwipeItem이 우선 처리: 편집/삭제)
-              behavior: HitTestBehavior.translucent,
-              onHorizontalDragEnd: (details) {
-                final v = details.primaryVelocity;
-                if (v == null) return;
-                if (v < -250) {
-                  _navigateDay(1); // 왼쪽으로 스와이프 → 이후(미래) 날짜
-                } else if (v > 250) {
-                  _navigateDay(-1); // 오른쪽으로 스와이프 → 이전(과거) 날짜
+          if (_isToday)
+            IconButton(
+              icon: const Icon(Icons.settings_outlined),
+              tooltip: '설정',
+              onPressed: () => context.push(AppRoutes.settings),
+            )
+          else
+            TextButton(
+              // 진입점(홈)에서 스와이프로 과거를 보는 중이면 화면 안에서 오늘로 복귀,
+              // 목록에서 진입한 화면이면 홈으로 이동
+              onPressed: () {
+                if (_isEntryPoint) {
+                  setState(() => _navPath = null);
+                } else {
+                  context.go(AppRoutes.home);
                 }
               },
-              child: _Body(
-                dayFile: dayFile,
-                onEditMemoSave: (idx, entry) => notifier.editBlock(idx, entry),
-                onEditLocationSave: (idx, loc) => notifier.editBlock(idx, loc),
-                onRemoveBlock: (idx) => notifier.removeBlock(idx),
-                onRefresh: () async {
-                  ref.invalidate(dayFileProvider(widget.filePath));
-                  ref.invalidate(fileListProvider);
-                  await ref.read(dayFileProvider(widget.filePath).future);
-                },
-              ),
+              child: const Text('오늘'),
+            ),
+        ],
+      ),
+      body: Column(
+        children: [
+          if (needsSetup)
+            MaterialBanner(
+              content: const Text('메모 저장 폴더가 설정되지 않았습니다'),
+              actions: [
+                TextButton(
+                  onPressed: () async {
+                    await ref.read(settingsProvider.notifier).pickSaveFolder();
+                  },
+                  child: const Text('폴더 선택'),
+                ),
+              ],
+            ),
+          Expanded(
+            child: Stack(
+              children: [
+                content,
+                if (showLocationButton) _LocationFab(onTap: _onLocationTap),
+                if (settingsAsync.valueOrNull?.showTrackingButton ?? true)
+                  const _TrackingFab(),
+              ],
             ),
           ),
-          if (showLocationButton)
-            _LocationFab(onTap: _onLocationTap),
-          if (ref.watch(settingsProvider).valueOrNull?.showTrackingButton ?? true)
-            const _TrackingFab(),
         ],
       ),
       bottomNavigationBar: _ActionBar(
@@ -1563,7 +1423,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
           _openMemoSheet();
         },
         onPhotoTap: _onPhotoTap,
-        onMapTap: () => context.push(AppRoutes.map, extra: widget.filePath),
+        onMapTap: _onMapTap,
       ),
     );
   }
@@ -1573,7 +1433,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
   void _navigateDay(int direction) {
     final files = ref.read(fileListProvider).valueOrNull;
     if (files == null || files.isEmpty) return;
-    final currentName = widget.filePath.replaceAll('\\', '/').split('/').last;
+    final currentName = _filePath.replaceAll('\\', '/').split('/').last;
     final currentDate = FileNameParser.parseDate(currentName);
     if (currentDate == null) return;
     final sorted = [...files]..sort((a, b) => a.date.compareTo(b.date));
@@ -1597,10 +1457,8 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
       showAppToast(context, direction > 0 ? '다음 메모가 없습니다' : '이전 메모가 없습니다');
       return;
     }
-    final encoded = Uri.encodeComponent(target.filePath);
-    context.replace(
-      '${AppRoutes.fileList}/$encoded?name=${Uri.encodeComponent(target.displayName)}',
-    );
+    // 라우트 이동 없이 화면 안에서 표시 날짜만 전환(뒤로가기 스택 영향 없음)
+    setState(() => _navPath = target!.filePath);
   }
 
   /// 옵션이 켜져 있고 이 파일(오늘 날짜)에 현장 정보가 없으면 첫 기록 시 1회 자동 수집.
@@ -1610,7 +1468,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
     if (_autoLocTriggered) return;
     final settings = ref.read(settingsProvider).valueOrNull;
     if (settings == null || !settings.autoLocationOnFirstEntry) return;
-    final filename = widget.filePath.replaceAll('\\', '/').split('/').last;
+    final filename = _filePath.replaceAll('\\', '/').split('/').last;
     final date = FileNameParser.parseDate(filename);
     final now = DateTime.now();
     if (date == null ||
@@ -1622,7 +1480,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
     _autoLocTriggered = true; // 동시 탭 중복 방지용 in-flight 가드
     try {
       // 최신 상태로 확인: 삭제 직후 stale 데이터(삭제된 현황)로 인한 오판 방지
-      final dayFile = await ref.read(dayFileProvider(widget.filePath).future);
+      final dayFile = await ref.read(dayFileProvider(_filePath).future);
       final blocks = dayFile?.blocks ?? const [];
       if (blocks.any((b) => b is LocationStatus)) return;
       if (!await Permission.locationWhenInUse.status.isGranted) {
@@ -1636,7 +1494,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
           .read(locationProvider.notifier)
           .buildEnrichedLocation(isMove: false);
       await ref
-          .read(dayFileProvider(widget.filePath).notifier)
+          .read(dayFileProvider(_filePath).notifier)
           .addLocationBlock(loc);
     } finally {
       // 성공·실패 무관하게 해제 → 메모 전체 삭제 후 재추가 시 다시 동작
@@ -1645,27 +1503,12 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
   }
 
   /// 이 화면의 날짜에 촬영된 사진을 일괄 추가한다(날짜 고정 → 선택 없이 바로).
-  Future<void> _importThisDayPhotos() async {
-    if (!await Permission.photos.status.isGranted) {
-      final r = await Permission.photos.request();
-      if (!r.isGranted) return;
-    }
-    if (!mounted) return;
-    final filename = widget.filePath.replaceAll('\\', '/').split('/').last;
-    final date = FileNameParser.parseDate(filename);
-    if (date == null) return;
-    final added = await _runPhotoImport(context, ref, date);
-    if (added > 0 && mounted) {
-      ref.invalidate(dayFileProvider(widget.filePath));
-    }
-  }
-
   void _openMemoSheet({bool voiceMode = false}) {
     MemoInputSheet.show(
       context,
       voiceMode: voiceMode,
       onAddSave: (entry) =>
-          ref.read(dayFileProvider(widget.filePath).notifier).addEntry(entry),
+          ref.read(dayFileProvider(_filePath).notifier).addEntry(entry),
     );
   }
 
@@ -1674,13 +1517,19 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
     final result = await MemoInputSheet.pickMedia(context, ref);
     if (result == null || !mounted) return;
 
+    // 갤러리 멀티 선택: 편집 시트 없이 현재 메모에 일괄 추가
+    if (result.multi != null) {
+      await _addMultiToCurrent(result.multi!);
+      return;
+    }
+
     Future<void> Function(MemoEntry) addSave =
-        (entry) => ref.read(dayFileProvider(widget.filePath).notifier).addEntry(entry);
+        (entry) => ref.read(dayFileProvider(_filePath).notifier).addEntry(entry);
     bool savedToPhotoDate = false;
     String? photoFilePath;
 
     if (!result.isVideo && result.timestamp != null) {
-      final filename = widget.filePath.replaceAll('\\', '/').split('/').last;
+      final filename = _filePath.replaceAll('\\', '/').split('/').last;
       final screenDate = FileNameParser.parseDate(filename);
       final photoDate = result.timestamp!;
       if (screenDate != null &&
@@ -1728,6 +1577,51 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
     }
   }
 
+  /// 갤러리에서 멀티 선택한 사진/동영상을 현재 보는 메모에 일괄 추가한다.
+  /// 사진 시각·GPS는 각 파일 EXIF에서 읽고(없으면 현재시각), 편집 시트는 거치지 않는다.
+  Future<void> _addMultiToCurrent(
+      List<({String path, bool isVideo})> items) async {
+    final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+    if (savePath.isEmpty) return;
+    final screenName = _filePath.replaceAll('\\', '/').split('/').last;
+    final screenDate = FileNameParser.parseDate(screenName) ?? DateTime.now();
+    final repo = ref.read(memoRepositoryProvider);
+
+    final entries = <MemoEntry>[];
+    for (final it in items) {
+      DateTime ts = DateTime.now();
+      double? lat;
+      double? lng;
+      if (!it.isVideo) {
+        ts = await readExifTimestamp(it.path) ?? ts;
+        final gps = await readExifGps(it.path);
+        lat = gps?.lat;
+        lng = gps?.lng;
+      }
+      entries.add(MemoEntry(
+        timestamp: ts,
+        latitude: lat,
+        longitude: lng,
+        photoPath: it.isVideo ? null : it.path,
+        videoPath: it.isVideo ? it.path : null,
+      ));
+    }
+    if (entries.isEmpty) return;
+
+    await repo.appendEntries(screenDate, entries, savePath);
+    ref.invalidate(dayFileProvider(_filePath));
+    ref.invalidate(fileListProvider);
+    final backup = ref.read(backupProvider.notifier);
+    unawaited(backup.syncMdFile(screenDate, savePath));
+    for (final e in entries) {
+      if (e.photoPath != null) unawaited(backup.syncMediaFile(e.photoPath!));
+      if (e.videoPath != null) unawaited(backup.syncMediaFile(e.videoPath!));
+    }
+    if (mounted) {
+      showAppToast(context, '${entries.length}장을 추가했습니다');
+    }
+  }
+
   Future<void> _onLocationTap() async {
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
@@ -1760,7 +1654,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
     );
     if (confirmed == true && mounted) {
       await ref
-          .read(dayFileProvider(widget.filePath).notifier)
+          .read(dayFileProvider(_filePath).notifier)
           .addLocationBlock(loc);
     }
   }

@@ -69,7 +69,7 @@ class LocationNotifier extends AsyncNotifier<LocationStatus?> {
       longitude: lng,
       address: address,
       temperature: weather.temperature,
-      tideName: tideResult != null ? '${tideResult.mulTae}물' : null,
+      tideName: tideResult?.mulTaeLabel,
       tideTime: tideResult?.nextTideTime != null
           ? '${tideResult!.nextTideType} ${tideResult.nextTideTime}'
           : null,

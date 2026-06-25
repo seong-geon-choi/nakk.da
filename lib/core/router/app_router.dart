@@ -27,7 +27,7 @@ GoRouter buildAppRouter({bool firstLaunch = false}) => GoRouter(
     ),
     GoRoute(
       path: AppRoutes.home,
-      builder: (context, state) => const HomeScreen(),
+      builder: (context, state) => const DayMemoScreen(),
     ),
     GoRoute(
       path: AppRoutes.fileList,

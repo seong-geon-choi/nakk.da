@@ -460,6 +460,20 @@ class MainActivity : FlutterActivity() {
                             result.success(null)
                         }
                     }
+                    "readExifDateTime" -> {
+                        val path = call.argument<String>("path")
+                            ?: return@setMethodCallHandler result.error("ARG", "path missing", null)
+                        try {
+                            val exif = android.media.ExifInterface(path)
+                            val dt = exif.getAttribute(
+                                android.media.ExifInterface.TAG_DATETIME_ORIGINAL)
+                                ?: exif.getAttribute(
+                                    android.media.ExifInterface.TAG_DATETIME)
+                            result.success(dt)
+                        } catch (e: Exception) {
+                            result.success(null)
+                        }
+                    }
                     else -> result.notImplemented()
                 }
             }

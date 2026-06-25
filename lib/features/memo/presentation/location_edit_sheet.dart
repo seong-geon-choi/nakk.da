@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../location/domain/models/location_status.dart';
+import '../../settings/presentation/settings_provider.dart';
 import 'memo_provider.dart';
 
 class LocationEditSheet extends ConsumerStatefulWidget {
@@ -187,7 +188,10 @@ class _LocationEditSheetState extends ConsumerState<LocationEditSheet> {
       if (widget.onEditSave != null) {
         await widget.onEditSave!(widget.blockIndex, updated);
       } else {
-        await ref.read(todayFileProvider.notifier).editBlock(widget.blockIndex, updated);
+        final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+        await ref
+            .read(dayFileProvider(todayMemoFilePath(savePath)).notifier)
+            .editBlock(widget.blockIndex, updated);
       }
       if (mounted) Navigator.of(context).pop();
     } catch (_) {

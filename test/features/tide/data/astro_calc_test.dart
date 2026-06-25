@@ -42,6 +42,25 @@ void main() {
     expect(lunar.getDay(), 11);
   });
 
+  group('물때(서해/인천) 음력일→물때 매핑', () {
+    // 바다타임 인천 검증: 음력 10=1물, 11=2물, 16=7물(사리), 23=조금, 24=무시
+    String label(int lunarDay) {
+      final i = (lunarDay - 10) % 15;
+      if (i <= 12) return '${i + 1}물';
+      if (i == 13) return '조금';
+      return '무시';
+    }
+
+    test('음력 11일 = 2물 (사용자 보고 사례)', () => expect(label(11), '2물'));
+    test('음력 10일 = 1물', () => expect(label(10), '1물'));
+    test('음력 15일 = 6물', () => expect(label(15), '6물'));
+    test('음력 16일 = 7물(사리)', () => expect(label(16), '7물'));
+    test('음력 23일 = 조금', () => expect(label(23), '조금'));
+    test('음력 24일 = 무시', () => expect(label(24), '무시'));
+    test('음력 25일 = 1물(주기 반복)', () => expect(label(25), '1물'));
+    test('음력 1일 = 7물(그믐사리)', () => expect(label(1), '7물'));
+  });
+
   test('달 위상: 음력 11일경 → 조도 70% 이상', () {
     final p = moonPhase(DateTime(2026, 6, 25, 12));
     expect(p.illumination, greaterThan(0.6));

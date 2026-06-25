@@ -104,6 +104,17 @@ class SafService {
     return (lat: lat, lng: lng);
   }
 
+  /// 로컬 파일 경로에서 EXIF 촬영일시 문자열("yyyy:MM:dd HH:mm:ss") 읽기
+  /// (Android native ExifInterface 사용 — Dart exif 패키지보다 OEM 신뢰성 높음)
+  Future<String?> readExifDateTimeFromPath(String filePath) async {
+    try {
+      return await _channel
+          .invokeMethod<String>('readExifDateTime', {'path': filePath});
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// SAF 폴더 내 subpath(예: "photos/photo_123.jpg")의 이미지 bytes 반환
   Future<Uint8List?> readSafImage(String folderUri, String subpath) async {
     final bytes = await _channel.invokeMethod<Uint8List>('readSafImage', {

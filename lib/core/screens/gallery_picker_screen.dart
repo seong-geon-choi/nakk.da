@@ -208,6 +208,22 @@ class _GalleryPickerScreenState extends State<GalleryPickerScreen>
     });
   }
 
+  /// 선택한 사진/동영상들을 메모에 일괄 추가 — 경로 목록을 호출부로 반환.
+  Future<void> _addSelected() async {
+    final picked = <({String path, bool isVideo})>[];
+    for (final a in _assets.where((a) => _selected.contains(a.id))) {
+      if (a.type == AssetType.video) {
+        final uri = await a.getMediaUrl();
+        if (uri != null) picked.add((path: uri, isVideo: true));
+      } else {
+        final f = await a.file;
+        if (f != null) picked.add((path: f.path, isVideo: false));
+      }
+    }
+    if (!mounted || picked.isEmpty) return;
+    Navigator.of(context).pop<List<({String path, bool isVideo})>>(picked);
+  }
+
   Future<void> _deleteSelected() async {
     final count = _selected.length;
     final confirmed = await showDialog<bool>(
@@ -258,7 +274,13 @@ class _GalleryPickerScreenState extends State<GalleryPickerScreen>
         actions: _selectMode
             ? [
                 IconButton(
+                  icon: const Icon(Icons.add),
+                  tooltip: '메모에 추가',
+                  onPressed: _selected.isNotEmpty ? _addSelected : null,
+                ),
+                IconButton(
                   icon: const Icon(Icons.delete_outline),
+                  tooltip: '삭제',
                   onPressed: _selected.isNotEmpty ? _deleteSelected : null,
                 ),
               ]

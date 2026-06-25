@@ -2,7 +2,6 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'memo_provider.dart';
-import '../../settings/presentation/settings_provider.dart';
 import '../../../core/services/saf_service.dart';
 
 class MemoEditorScreen extends ConsumerStatefulWidget {
@@ -89,13 +88,8 @@ class _MemoEditorScreenState extends ConsumerState<MemoEditorScreen> {
   }
 
   void _invalidateTodayIfNeeded() {
-    final settings = ref.read(settingsProvider).valueOrNull;
-    if (settings == null) return;
-    final today = DateTime.now();
-    final m = today.month.toString().padLeft(2, '0');
-    final d = today.day.toString().padLeft(2, '0');
-    final todayPath = '${settings.savePath}/${today.year}-$m-$d.md';
-    if (widget.filePath == todayPath) ref.invalidate(todayFileProvider);
+    // 편집된 파일의 보기 화면 캐시를 무효화해 변경을 반영
+    ref.invalidate(dayFileProvider(widget.filePath));
   }
 
   Future<bool> _confirmDiscard() async {

@@ -1,13 +1,14 @@
 import 'dart:convert';
 import 'dart:math';
 import 'package:http/http.dart' as http;
+import 'package:lunar/lunar.dart';
 import '../domain/models/tide_station.dart';
 import 'tide_station_data.dart';
 
 class TideResult {
   final TideStation station;
   final double distanceKm;
-  final int mulTae; // 1-15
+  final String mulTaeLabel; // '2물', '조금', '무시' 등
   final String? nextTideType; // '만조' or '간조'
   final String? nextTideTime; // 'HH:mm'
   final double? waterTemp;
@@ -16,7 +17,7 @@ class TideResult {
   const TideResult({
     required this.station,
     required this.distanceKm,
-    required this.mulTae,
+    required this.mulTaeLabel,
     this.nextTideType,
     this.nextTideTime,
     this.waterTemp,
@@ -39,7 +40,7 @@ class TideService {
   ) async {
     final station = _nearestStation(lat, lng);
     final distKm = _haversine(lat, lng, station.latitude, station.longitude);
-    final mulTae = _calcMulTae(DateTime.now());
+    final mulTaeLabel = _calcMulTaeLabel(DateTime.now());
 
     final dateStr = _dateStr(DateTime.now());
     final tideData = await _fetchTidePrediction(station.code, dateStr, apiKey);
@@ -67,7 +68,7 @@ class TideService {
     return TideResult(
       station: station,
       distanceKm: distKm,
-      mulTae: mulTae,
+      mulTaeLabel: mulTaeLabel,
       nextTideType: nextType,
       nextTideTime: nextTime,
       waterTemp: waterTemp,
@@ -100,15 +101,16 @@ class TideService {
     return r * 2 * atan2(sqrt(a), sqrt(1 - a));
   }
 
-  // 음력 기반 물때 계산 (근사값)
-  int _calcMulTae(DateTime date) {
-    final ref = DateTime(2000, 1, 6);
-    final days = date.difference(ref).inDays;
-    const lunarMonth = 29.53059;
-    final lunarAge = days % lunarMonth;
-    final halfAge = lunarAge < 15 ? lunarAge : lunarAge - 15;
-    final mulTae = (halfAge.round() % 15) + 1;
-    return mulTae.clamp(1, 15);
+  // 음력일 기반 물때 계산 (서해/인천식 7물때 체계)
+  // 음력 10일=1물 … 22일=13물, 23일=조금, 24일=무시, 25일=다시 1물.
+  // 음력 16일(보름)=7물 사리, 음력 1일=7물 사리. (바다타임 인천 기준 검증)
+  String _calcMulTaeLabel(DateTime date) {
+    final lunarDay =
+        Solar.fromYmd(date.year, date.month, date.day).getLunar().getDay();
+    final i = (lunarDay - 10) % 15; // Dart의 %는 음수 피제수에도 0~14 반환
+    if (i <= 12) return '${i + 1}물';
+    if (i == 13) return '조금';
+    return '무시';
   }
 
   String _dateStr(DateTime d) =>

@@ -67,7 +67,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       final date = FileNameParser.parseDate(fp.split('/').last.split('\\').last) ?? DateTime.now();
       _applyBlocks(file?.blocks ?? [], date);
     } else {
-      final file = ref.read(todayFileProvider).valueOrNull;
+      final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+      final file =
+          ref.read(dayFileProvider(todayMemoFilePath(savePath))).valueOrNull;
       _applyBlocks(file?.blocks ?? [], DateTime.now());
     }
   }
