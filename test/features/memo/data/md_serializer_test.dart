@@ -2,6 +2,7 @@
 import 'package:nakkda/features/memo/data/md_serializer.dart';
 import 'package:nakkda/features/memo/domain/models/memo_entry.dart';
 import 'package:nakkda/features/location/domain/models/location_status.dart';
+import 'package:nakkda/features/tide/domain/models/tide_station.dart';
 import 'package:nakkda/core/services/tracking_service.dart';
 
 void main() {
@@ -38,27 +39,42 @@ void main() {
       expect(result, contains('![](photos/20260602_100000.jpg)'));
     });
 
-    test('serializeLocationBlock: 최초 현황 → ## 현황 포함, 주소 표시', () {
+    test('serializeLocationBlock: 자동(isMove=false) 현황도 시각 표기로 통일', () {
       final loc = LocationStatus(
         timestamp: DateTime(2026, 6, 2, 8, 0),
         address: '경기도 가평군',
         isMove: false,
       );
       final result = MdSerializer.serializeLocationBlock(loc);
-      expect(result, contains('## 현황'));
-      expect(result, isNot(contains('이동')));
+      expect(result, contains('## 현황 (08:00)'));
+      expect(result, isNot(contains('장소')));
       expect(result, contains('경기도 가평군'));
     });
 
-    test('serializeLocationBlock: 이동 현황 → ## 현황 (HH:mm 장소) 포함', () {
+    test('serializeLocationBlock: 수동(isMove=true) 현황도 동일 포맷(장소 단어 없음)', () {
       final loc = LocationStatus(
         timestamp: DateTime(2026, 6, 2, 11, 30),
         address: '강원도 춘천시',
         isMove: true,
       );
       final result = MdSerializer.serializeLocationBlock(loc);
-      expect(result, contains('## 현황 (11:30 장소)'));
+      expect(result, contains('## 현황 (11:30)'));
+      expect(result, isNot(contains('장소')));
       expect(result, contains('강원도 춘천시'));
+    });
+
+    test('serializeLocationBlock: 당일 물때 → tides 숨김 주석으로 보존', () {
+      final loc = LocationStatus(
+        timestamp: DateTime(2026, 6, 2, 8, 0),
+        address: '인천 연안',
+        tides: const [
+          TideEvent(type: '만조', time: '06:12', level: 721),
+          TideEvent(type: '간조', time: '12:30', level: 123),
+        ],
+      );
+      final result = MdSerializer.serializeLocationBlock(loc);
+      expect(result,
+          contains('[//]: # (tides:만조 06:12 721,간조 12:30 123)'));
     });
 
     test('fileHeader: # 2026-06-02 포함', () {
@@ -113,6 +129,43 @@ void main() {
       final loc = blocks[0] as LocationStatus;
       expect(loc.isMove, isFalse);
       expect(loc.address, '경기도 가평군');
+    });
+
+    test('parseBlocks: 통일 포맷(## 현황 (HH:mm)) → timestamp 복원', () {
+      const content = '''
+## 현황 (08:15)
+- 📍 인천 연안
+- 관측소: 인천 (50.3km) | 🌊 5물 (만조 18:03)
+''';
+      final blocks = MdSerializer.parseBlocks(content, DateTime(2026, 6, 2));
+      expect(blocks.length, 1);
+      final loc = blocks[0] as LocationStatus;
+      expect(loc.timestamp, DateTime(2026, 6, 2, 8, 15));
+      expect(loc.address, '인천 연안');
+    });
+
+    test('parseBlocks: tides 숨김 주석 → 당일 물때 왕복', () {
+      final original = LocationStatus(
+        timestamp: DateTime(2026, 6, 2, 8, 0),
+        address: '인천 연안',
+        stationName: '인천',
+        stationDistance: 50.3,
+        tides: const [
+          TideEvent(type: '만조', time: '06:12', level: 721),
+          TideEvent(type: '간조', time: '12:30', level: 123),
+          TideEvent(type: '만조', time: '18:03'),
+        ],
+      );
+      final serialized = MdSerializer.serializeLocationBlock(original);
+      final blocks = MdSerializer.parseBlocks(serialized, DateTime(2026, 6, 2));
+      expect(blocks.length, 1);
+      final loc = blocks[0] as LocationStatus;
+      expect(loc.tides.length, 3);
+      expect(loc.tides[0].type, '만조');
+      expect(loc.tides[0].time, '06:12');
+      expect(loc.tides[0].level, 721);
+      expect(loc.tides[2].time, '18:03');
+      expect(loc.tides[2].level, isNull);
     });
 
     test('parseBlocks: 이동 현황 블록 파싱 → isMove=true', () {

@@ -182,6 +182,7 @@ class _LocationEditSheetState extends ConsumerState<LocationEditSheet> {
         waterTemp: double.tryParse(_waterTemp.text.trim()),
         stationName: _stationName.text.trim().isEmpty ? null : _stationName.text.trim(),
         stationDistance: double.tryParse(_stationDist.text.trim()),
+        tides: e.tides,
       );
       if (widget.onEditSave != null) {
         await widget.onEditSave!(widget.blockIndex, updated);

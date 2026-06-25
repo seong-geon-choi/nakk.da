@@ -82,6 +82,7 @@ class LocationNotifier extends AsyncNotifier<LocationStatus?> {
       windSpeed: weather.windSpeed,
       windDeg: weather.windDeg,
       weatherCode: weather.weatherCode,
+      tides: tideResult?.tides ?? const [],
     );
   }
 }

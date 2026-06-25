@@ -1,3 +1,5 @@
+import '../../../tide/domain/models/tide_station.dart';
+
 class LocationStatus {
   final DateTime timestamp;
   final double? latitude;
@@ -14,6 +16,7 @@ class LocationStatus {
   final double? windSpeed;
   final int? windDeg;
   final int? weatherCode;
+  final List<TideEvent> tides; // 당일 만조/간조 전체(팝업용)
 
   const LocationStatus({
     required this.timestamp,
@@ -30,5 +33,6 @@ class LocationStatus {
     this.windSpeed,
     this.windDeg,
     this.weatherCode,
+    this.tides = const [],
   });
 }

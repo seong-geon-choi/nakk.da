@@ -20,6 +20,8 @@ import '../../features/memo/presentation/memo_input_sheet.dart';
 import '../../features/memo/presentation/location_edit_sheet.dart';
 import '../../features/settings/presentation/settings_provider.dart';
 import '../../features/location/presentation/location_provider.dart';
+import '../../features/file_list/presentation/file_list_provider.dart';
+import '../../features/file_list/domain/models/file_summary.dart';
 import '../../core/utils/file_name_parser.dart';
 import '../../core/utils/media_scanner.dart';
 import '../../core/utils/species_detector.dart';
@@ -1445,6 +1447,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
     final showLocationButton =
         ref.watch(settingsProvider).valueOrNull?.showLocationButton ?? true;
     final notifier = ref.read(dayFileProvider(widget.filePath).notifier);
+    ref.watch(fileListProvider); // 날짜 스와이프 이동용 목록 미리 로드
 
     return Scaffold(
       appBar: AppBar(
@@ -1487,11 +1490,25 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
               message: '불러오기 실패',
               subMessage: e.toString(),
             ),
-            data: (dayFile) => _Body(
-              dayFile: dayFile,
-              onEditMemoSave: (idx, entry) => notifier.editBlock(idx, entry),
-              onEditLocationSave: (idx, loc) => notifier.editBlock(idx, loc),
-              onRemoveBlock: (idx) => notifier.removeBlock(idx),
+            data: (dayFile) => GestureDetector(
+              // 카드가 없는 빈 영역 가로 스와이프 → 이전/이후 날짜 메모 이동
+              // (카드 위 가로 스와이프는 자식 _SwipeItem이 우선 처리: 편집/삭제)
+              behavior: HitTestBehavior.translucent,
+              onHorizontalDragEnd: (details) {
+                final v = details.primaryVelocity;
+                if (v == null) return;
+                if (v < -250) {
+                  _navigateDay(1); // 왼쪽으로 스와이프 → 이후(미래) 날짜
+                } else if (v > 250) {
+                  _navigateDay(-1); // 오른쪽으로 스와이프 → 이전(과거) 날짜
+                }
+              },
+              child: _Body(
+                dayFile: dayFile,
+                onEditMemoSave: (idx, entry) => notifier.editBlock(idx, entry),
+                onEditLocationSave: (idx, loc) => notifier.editBlock(idx, loc),
+                onRemoveBlock: (idx) => notifier.removeBlock(idx),
+              ),
             ),
           ),
           if (showLocationButton)
@@ -1508,6 +1525,41 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen> {
         onPhotoTap: _onPhotoTap,
         onMapTap: () => context.push(AppRoutes.map, extra: widget.filePath),
       ),
+    );
+  }
+
+  /// 빈 영역 가로 스와이프로 이전/이후 날짜의 기존 메모 파일로 이동.
+  /// direction: +1 = 이후(미래), -1 = 이전(과거). 빈 날짜는 건너뛰고 다음 파일로.
+  void _navigateDay(int direction) {
+    final files = ref.read(fileListProvider).valueOrNull;
+    if (files == null || files.isEmpty) return;
+    final currentName = widget.filePath.replaceAll('\\', '/').split('/').last;
+    final currentDate = FileNameParser.parseDate(currentName);
+    if (currentDate == null) return;
+    final sorted = [...files]..sort((a, b) => a.date.compareTo(b.date));
+    FileSummary? target;
+    if (direction > 0) {
+      for (final f in sorted) {
+        if (f.date.isAfter(currentDate)) {
+          target = f;
+          break;
+        }
+      }
+    } else {
+      for (final f in sorted.reversed) {
+        if (f.date.isBefore(currentDate)) {
+          target = f;
+          break;
+        }
+      }
+    }
+    if (target == null) {
+      showAppToast(context, direction > 0 ? '다음 메모가 없습니다' : '이전 메모가 없습니다');
+      return;
+    }
+    final encoded = Uri.encodeComponent(target.filePath);
+    context.replace(
+      '${AppRoutes.fileList}/$encoded?name=${Uri.encodeComponent(target.displayName)}',
     );
   }
 

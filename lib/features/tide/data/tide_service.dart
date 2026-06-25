@@ -11,6 +11,7 @@ class TideResult {
   final String? nextTideType; // '만조' or '간조'
   final String? nextTideTime; // 'HH:mm'
   final double? waterTemp;
+  final List<TideEvent> tides; // 당일 만조/간조 전체
 
   const TideResult({
     required this.station,
@@ -19,6 +20,7 @@ class TideResult {
     this.nextTideType,
     this.nextTideTime,
     this.waterTemp,
+    this.tides = const [],
   });
 }
 
@@ -46,10 +48,20 @@ class TideService {
 
     String? nextType;
     String? nextTime;
+    final tides = <TideEvent>[];
     if (tideData != null) {
       final next = _nextTide(tideData);
       nextType = next?.$1;
       nextTime = next?.$2;
+      for (final e in tideData) {
+        final t = _extractTime(e);
+        if (t.isEmpty) continue;
+        tides.add(TideEvent(
+          type: _extractTideType(e),
+          time: t,
+          level: _extractLevel(e),
+        ));
+      }
     }
 
     return TideResult(
@@ -59,6 +71,7 @@ class TideService {
       nextTideType: nextType,
       nextTideTime: nextTime,
       waterTemp: waterTemp,
+      tides: tides,
     );
   }
 
@@ -198,6 +211,13 @@ class TideService {
     return (entry['tideTime'] ?? entry['hl_time'] ?? entry['fcstTime'])
             ?.toString() ??
         '';
+  }
+
+  // 조위(cm) 추출: KHOA 응답 필드 predcTdlvVl(예: 704.0), 정수 반올림
+  int? _extractLevel(Map<String, dynamic> entry) {
+    final raw = (entry['predcTdlvVl'] ?? entry['tphLevel'])?.toString();
+    if (raw == null) return null;
+    return double.tryParse(raw)?.round();
   }
 
   // extrSe: "1"/"3"=고조, "2"/"4"=저조

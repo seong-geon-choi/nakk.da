@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import '../../features/location/domain/models/location_status.dart';
 import '../../features/weather/data/weather_service.dart';
 
+const _highTideColor = Color(0xFF1976D2); // 만조
+const _lowTideColor = Color(0xFF00796B); // 간조
+
 class LocationStatusCard extends StatelessWidget {
   final LocationStatus status;
 
@@ -22,16 +25,14 @@ class LocationStatusCard extends StatelessWidget {
         children: [
           Row(
             children: [
-              if (status.isMove) ...[
-                Text(
-                  '장소 (${_time(status.timestamp)})  ',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: colorScheme.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
+              Text(
+                '${_time(status.timestamp)}  ',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: colorScheme.primary,
+                  fontWeight: FontWeight.w600,
                 ),
-              ],
+              ),
               const Icon(Icons.location_on, size: 16),
               const SizedBox(width: 4),
               Expanded(child: Text(_address, style: const TextStyle(fontSize: 14))),
@@ -43,9 +44,24 @@ class LocationStatusCard extends StatelessWidget {
             style: const TextStyle(fontSize: 13),
           ),
           const SizedBox(height: 2),
-          Text(
-            '관측소: $_station | 🌊 $_tide',
-            style: TextStyle(fontSize: 12, color: colorScheme.onSurface.withValues(alpha: 0.6)),
+          GestureDetector(
+            onTap: status.tides.isNotEmpty ? () => _showTides(context) : null,
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    '관측소: $_station | 🌊 $_tide',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: colorScheme.onSurface.withValues(alpha: 0.6)),
+                  ),
+                ),
+                if (status.tides.isNotEmpty)
+                  Icon(Icons.unfold_more,
+                      size: 16,
+                      color: colorScheme.onSurface.withValues(alpha: 0.6)),
+              ],
+            ),
           ),
           if (_weather != null) ...[
             const SizedBox(height: 2),
@@ -100,5 +116,63 @@ class LocationStatusCard extends StatelessWidget {
     final h = dt.hour.toString().padLeft(2, '0');
     final m = dt.minute.toString().padLeft(2, '0');
     return '$h:$m';
+  }
+
+  void _showTides(BuildContext context) {
+    final ts = status.timestamp;
+    final title = status.stationName != null
+        ? '🌊 ${status.stationName} ${ts.month}/${ts.day} 물때'
+        : '🌊 ${ts.month}/${ts.day} 물때';
+    showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title, style: const TextStyle(fontSize: 16)),
+        titlePadding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+        contentPadding: const EdgeInsets.fromLTRB(20, 0, 20, 0),
+        content: SizedBox(
+          width: 280,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (final t in status.tides)
+                Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 3),
+                  child: Row(
+                    children: [
+                      SizedBox(
+                        width: 44,
+                        child: Text(
+                          t.type,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w600,
+                            color: t.type == '만조'
+                                ? _highTideColor
+                                : _lowTideColor,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(t.time, style: const TextStyle(fontSize: 15)),
+                      const Spacer(),
+                      if (t.level != null)
+                        Text('${t.level}cm',
+                            style: TextStyle(
+                                fontSize: 13,
+                                color: Theme.of(ctx)
+                                    .colorScheme
+                                    .onSurface
+                                    .withValues(alpha: 0.6))),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('닫기')),
+        ],
+      ),
+    );
   }
 }

@@ -1,5 +1,6 @@
 import '../domain/models/memo_entry.dart';
 import '../../location/domain/models/location_status.dart';
+import '../../tide/domain/models/tide_station.dart';
 import '../../weather/data/weather_service.dart';
 import '../../../core/services/tracking_service.dart';
 
@@ -22,9 +23,8 @@ class MdSerializer {
   }
 
   static String serializeLocationBlock(LocationStatus loc) {
-    final timeLabel = loc.isMove
-        ? '## 현황 (${_time(loc.timestamp)} 장소)'
-        : '## 현황';
+    // 자동·수동 동일: 항상 시각 표기로 통일
+    final timeLabel = '## 현황 (${_time(loc.timestamp)})';
     final address = loc.address ??
         (loc.hasGps
             ? '${_fmt(loc.latitude!)}, ${_fmt(loc.longitude!)}'
@@ -47,11 +47,17 @@ class MdSerializer {
         loc.weatherCode != null ? '⛅ ${weatherCodeToDesc(loc.weatherCode!)}' : null;
     final weatherLine = [windPart, weatherPart].whereType<String>().join(' | ');
 
+    // 당일 만조/간조 전체는 숨김 주석으로 보존(앱 전용, 팝업에서 사용)
+    final tidesComment = loc.tides.isNotEmpty
+        ? '[//]: # (tides:${loc.tides.map((t) => t.level != null ? '${t.type} ${t.time} ${t.level}' : '${t.type} ${t.time}').join(',')})\n'
+        : '';
+
     return '\n$timeLabel\n'
         '- 📍 $address\n'
         '- 🌡 기온: $temp | 💧 수온 $water\n'
         '- 관측소: $station | 🌊 $tide\n'
-        '${weatherLine.isNotEmpty ? '- $weatherLine\n' : ''}';
+        '${weatherLine.isNotEmpty ? '- $weatherLine\n' : ''}'
+        '$tidesComment';
   }
 
   static String fileHeader(DateTime date) {
@@ -75,15 +81,15 @@ class MdSerializer {
       // 현황 블록
       if (line == '## 현황' || line.startsWith('## 현황 (')) {
         final isMove = line.startsWith('## 현황 (');
+        // 자동·수동 통일: 헤더에 시각이 있으면 항상 복원
         DateTime timestamp = DateTime.now();
-        if (isMove) {
-          final timeMatch = RegExp(r'\((\d{2}:\d{2})').firstMatch(line);
-          if (timeMatch != null) {
-            final parts = timeMatch.group(1)!.split(':');
-            timestamp = DateTime(date.year, date.month, date.day,
-                int.parse(parts[0]), int.parse(parts[1]));
-          }
+        final timeMatch = RegExp(r'\((\d{2}:\d{2})').firstMatch(line);
+        if (timeMatch != null) {
+          final parts = timeMatch.group(1)!.split(':');
+          timestamp = DateTime(date.year, date.month, date.day,
+              int.parse(parts[0]), int.parse(parts[1]));
         }
+        List<TideEvent> tides = const [];
         double? lat, lng;
         String? address;
         double? temperature;
@@ -95,12 +101,19 @@ class MdSerializer {
         int? windDeg;
         int? weatherCode;
         i++;
-        while (i < lines.length &&
-            !lines[i].trim().startsWith('---') &&
-            !lines[i].trim().startsWith('## ') &&
-            !lines[i].trim().startsWith('# ') &&
-            !lines[i].trim().startsWith('[//]: # (')) {
+        while (i < lines.length) {
           final l = lines[i].trim();
+          if (l.startsWith('---') ||
+              l.startsWith('## ') ||
+              l.startsWith('# ')) {
+            break;
+          }
+          if (l.startsWith('[//]: # (tides:')) {
+            tides = _parseTidesComment(l);
+            i++;
+            continue;
+          }
+          if (l.startsWith('[//]: # (')) break; // track 등 다른 숨김 주석 → 블록 종료
           if (l.startsWith('- 📍 ')) {
             final raw = l.substring('- 📍 '.length);
             final gpsMatch = RegExp(r'^(-?\d+\.\d+),\s*(-?\d+\.\d+)$').firstMatch(raw);
@@ -189,6 +202,7 @@ class MdSerializer {
           windSpeed: windSpeed,
           windDeg: windDeg,
           weatherCode: weatherCode,
+          tides: tides,
         ));
         continue;
       }
@@ -408,6 +422,24 @@ class MdSerializer {
     final mi = dt.minute.toString().padLeft(2, '0');
     final s = dt.second.toString().padLeft(2, '0');
     return '${dt.year}-$mo-$d $h:$mi:$s';
+  }
+
+  // 숨김 주석 "[//]: # (tides:만조 06:12 721,간조 12:30 123)" → TideEvent 목록
+  static List<TideEvent> _parseTidesComment(String line) {
+    final m = RegExp(r'\(tides:(.*)\)\s*$').firstMatch(line.trim());
+    if (m == null) return const [];
+    final out = <TideEvent>[];
+    for (final part in m.group(1)!.split(',')) {
+      final toks = part.trim().split(' ');
+      if (toks.length >= 2) {
+        out.add(TideEvent(
+          type: toks[0],
+          time: toks[1],
+          level: toks.length >= 3 ? int.tryParse(toks[2]) : null,
+        ));
+      }
+    }
+    return out;
   }
 
   // ── 헬퍼 ──────────────────────────────────────────────
