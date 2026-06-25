@@ -46,6 +46,20 @@ class TrackingService {
     } catch (_) {}
   }
 
+  /// 출퇴근 알림 설정을 네이티브에 동기화(활성 시 스케줄/서비스 갱신).
+  Future<void> commuteSync(Map<String, dynamic> config) async {
+    try {
+      await _channel.invokeMethod('commuteSync', config);
+    } catch (_) {}
+  }
+
+  /// 출퇴근 알림 중지(스케줄·서비스 해제).
+  Future<void> commuteStop() async {
+    try {
+      await _channel.invokeMethod('commuteStop');
+    } catch (_) {}
+  }
+
   Future<List<TrackPoint>> getAndClearTrackPoints() async {
     try {
       final list =

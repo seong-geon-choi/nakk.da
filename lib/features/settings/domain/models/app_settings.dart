@@ -338,6 +338,25 @@ enum QuickLaunchMode { none, shake, volume }
 
 // ── 앱 전체 설정 ───────────────────────────────────────────────
 
+/// 출퇴근 알림음 모드
+enum CommuteSoundMode { vibrateOnly, vibrateBell, bell, silent, systemDefault }
+
+/// 출퇴근 알림 지점(지도에서 길게 눌러 지정)
+class CommutePin {
+  final double lat;
+  final double lng;
+  final String label;
+  const CommutePin({required this.lat, required this.lng, this.label = ''});
+
+  Map<String, dynamic> toJson() => {'lat': lat, 'lng': lng, 'label': label};
+
+  factory CommutePin.fromJson(Map<String, dynamic> j) => CommutePin(
+        lat: (j['lat'] as num).toDouble(),
+        lng: (j['lng'] as num).toDouble(),
+        label: j['label'] as String? ?? '',
+      );
+}
+
 class AppSettings {
   final String savePath;       // SAF URI (content://) 또는 빈 문자열
   final String saveDisplayPath; // 사람이 읽을 수 있는 경로 (UI 표시용)
@@ -366,8 +385,28 @@ class AppSettings {
   final double locationFabBottom; // 홈 '환경 추가' FAB 위치 (bottom)
   final double trackingFabRight;  // 홈 트래킹 FAB 위치 (right)
   final double trackingFabBottom; // 홈 트래킹 FAB 위치 (bottom)
+  // ── 지하철 출퇴근 알림 ──────────────────────────────
+  final bool commuteAlarmEnabled;
+  final int commuteRadius; // 반경(m), 50~2000, 기본 200
+  final CommuteSoundMode commuteSoundMode;
+  final List<CommutePin> commutePins; // 최대 3개
+  final int commuteAmStart; // 출근 창 시작(자정 기준 분), 기본 420(07:00)
+  final int commuteAmEnd;   // 출근 창 종료, 기본 540(09:00)
+  final int commutePmStart; // 퇴근 창 시작, 기본 1080(18:00)
+  final int commutePmEnd;   // 퇴근 창 종료, 기본 1200(20:00)
+  final int commuteCustomStart; // 사용자지정 창 시작, 기본 600(10:00)
+  final int commuteCustomEnd;   // 사용자지정 창 종료, 기본 720(12:00)
+  final bool commuteAmEnabled;     // 출근 시간대 활성
+  final bool commutePmEnabled;     // 퇴근 시간대 활성
+  final bool commuteCustomEnabled; // 사용자지정 시간대 활성
+  final bool commuteWeekdaysOnly; // 평일만 감시
+  final bool commuteAlarmActive; // 지도에서 빠르게 켜고/끄는 추적 활성 상태
 
   bool get needsFolderSetup => savePath.isEmpty;
+
+  /// 실제 추적 동작 여부(마스터 ON + 활성 + 지점 있음)
+  bool get commuteTracking =>
+      commuteAlarmEnabled && commuteAlarmActive && commutePins.isNotEmpty;
 
   /// 메모 작성 드롭다운에 노출할 어종 (숨김 제외).
   /// 주의: 음성/메모 텍스트 어종 탐지는 항상 전체 [fishSpecies]를 사용한다.
@@ -402,6 +441,21 @@ class AppSettings {
     this.locationFabBottom = 100,
     this.trackingFabRight = 16,
     this.trackingFabBottom = 172,
+    this.commuteAlarmEnabled = false,
+    this.commuteRadius = 200,
+    this.commuteSoundMode = CommuteSoundMode.systemDefault,
+    this.commutePins = const [],
+    this.commuteAmStart = 420,
+    this.commuteAmEnd = 540,
+    this.commutePmStart = 1080,
+    this.commutePmEnd = 1200,
+    this.commuteCustomStart = 600,
+    this.commuteCustomEnd = 720,
+    this.commuteAmEnabled = true,
+    this.commutePmEnabled = true,
+    this.commuteCustomEnabled = false,
+    this.commuteWeekdaysOnly = true,
+    this.commuteAlarmActive = true,
   })  : watermark = watermark ?? WatermarkSettings(),
         fishSpecies = fishSpecies ?? kCommonFishSpecies,
         hiddenFishSpecies = hiddenFishSpecies ?? const [];
@@ -441,6 +495,21 @@ class AppSettings {
     double? locationFabBottom,
     double? trackingFabRight,
     double? trackingFabBottom,
+    bool? commuteAlarmEnabled,
+    int? commuteRadius,
+    CommuteSoundMode? commuteSoundMode,
+    List<CommutePin>? commutePins,
+    int? commuteAmStart,
+    int? commuteAmEnd,
+    int? commutePmStart,
+    int? commutePmEnd,
+    int? commuteCustomStart,
+    int? commuteCustomEnd,
+    bool? commuteAmEnabled,
+    bool? commutePmEnabled,
+    bool? commuteCustomEnabled,
+    bool? commuteWeekdaysOnly,
+    bool? commuteAlarmActive,
   }) {
     return AppSettings(
       savePath: savePath ?? this.savePath,
@@ -471,6 +540,21 @@ class AppSettings {
       locationFabBottom: locationFabBottom ?? this.locationFabBottom,
       trackingFabRight: trackingFabRight ?? this.trackingFabRight,
       trackingFabBottom: trackingFabBottom ?? this.trackingFabBottom,
+      commuteAlarmEnabled: commuteAlarmEnabled ?? this.commuteAlarmEnabled,
+      commuteRadius: commuteRadius ?? this.commuteRadius,
+      commuteSoundMode: commuteSoundMode ?? this.commuteSoundMode,
+      commutePins: commutePins ?? this.commutePins,
+      commuteAmStart: commuteAmStart ?? this.commuteAmStart,
+      commuteAmEnd: commuteAmEnd ?? this.commuteAmEnd,
+      commutePmStart: commutePmStart ?? this.commutePmStart,
+      commutePmEnd: commutePmEnd ?? this.commutePmEnd,
+      commuteCustomStart: commuteCustomStart ?? this.commuteCustomStart,
+      commuteCustomEnd: commuteCustomEnd ?? this.commuteCustomEnd,
+      commuteAmEnabled: commuteAmEnabled ?? this.commuteAmEnabled,
+      commutePmEnabled: commutePmEnabled ?? this.commutePmEnabled,
+      commuteCustomEnabled: commuteCustomEnabled ?? this.commuteCustomEnabled,
+      commuteWeekdaysOnly: commuteWeekdaysOnly ?? this.commuteWeekdaysOnly,
+      commuteAlarmActive: commuteAlarmActive ?? this.commuteAlarmActive,
     );
   }
 }

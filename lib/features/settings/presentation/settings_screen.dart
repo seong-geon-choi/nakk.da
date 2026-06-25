@@ -1126,9 +1126,10 @@ class _DevMenuSubScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final adsEnabled = ref.watch(
-      settingsProvider.select((s) => s.valueOrNull?.adsEnabled ?? false),
-    );
+    final settings = ref.watch(settingsProvider).valueOrNull;
+    final adsEnabled = settings?.adsEnabled ?? false;
+    final commuteOn = settings?.commuteAlarmEnabled ?? false;
+    final notifier = ref.read(settingsProvider.notifier);
     return Scaffold(
       appBar: AppBar(title: const Text('개발자 메뉴')),
       body: ListView(
@@ -1138,12 +1139,240 @@ class _DevMenuSubScreen extends ConsumerWidget {
             title: const Text('광고 노출'),
             subtitle: const Text('끄면 목록·통계 하단의 광고 영역이 숨겨집니다'),
             value: adsEnabled,
-            onChanged: (v) =>
-                ref.read(settingsProvider.notifier).updateAdsEnabled(v),
+            onChanged: (v) => notifier.updateAdsEnabled(v),
+          ),
+          const Divider(),
+          // 마스터 토글은 스위치에만 반응. 행을 탭하면 상세 설정 화면으로 이동.
+          ListTile(
+            leading: const Icon(Icons.train_outlined),
+            title: const Text('지하철 출퇴근 알림'),
+            subtitle: const Text('탭하여 반경·시간대·지점 등 상세 설정'),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const _CommuteSettingsScreen())),
+            trailing: Switch(
+              value: commuteOn,
+              onChanged: (v) async {
+                if (v) {
+                  // 이미 승인된 권한은 다시 묻지 않음(경로기록과 위치 권한 공유)
+                  if (!await Permission.locationWhenInUse.isGranted) {
+                    await Permission.locationWhenInUse.request();
+                  }
+                  if (!await Permission.notification.isGranted) {
+                    await Permission.notification.request();
+                  }
+                }
+                await notifier.updateCommuteEnabled(v);
+              },
+            ),
           ),
         ],
       ),
     );
+  }
+}
+
+// 지하철 출퇴근 알림 상세 설정 (하위 화면)
+class _CommuteSettingsScreen extends ConsumerWidget {
+  const _CommuteSettingsScreen();
+
+  static String _hhmm(int minutes) =>
+      '${(minutes ~/ 60).toString().padLeft(2, '0')}:${(minutes % 60).toString().padLeft(2, '0')}';
+
+  static const _soundLabels = {
+    CommuteSoundMode.vibrateOnly: '진동만',
+    CommuteSoundMode.vibrateBell: '진동+벨',
+    CommuteSoundMode.bell: '벨',
+    CommuteSoundMode.silent: '무음',
+    CommuteSoundMode.systemDefault: '안드로이드 설정 따름',
+  };
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final s = ref.watch(settingsProvider).valueOrNull;
+    final notifier = ref.read(settingsProvider.notifier);
+    if (s == null) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+
+    Future<void> pickRange(
+        int start, int end, void Function(int, int) onPicked) async {
+      final st = await showTimePicker(
+        context: context,
+        helpText: '시작 시간',
+        initialTime: TimeOfDay(hour: start ~/ 60, minute: start % 60),
+      );
+      if (st == null) return;
+      if (!context.mounted) return;
+      final en = await showTimePicker(
+        context: context,
+        helpText: '종료 시간',
+        initialTime: TimeOfDay(hour: end ~/ 60, minute: end % 60),
+      );
+      if (en == null) return;
+      onPicked(st.hour * 60 + st.minute, en.hour * 60 + en.minute);
+    }
+
+    Widget windowTile({
+      required String name,
+      required IconData icon,
+      required bool enabled,
+      required int start,
+      required int end,
+      required ValueChanged<bool> onToggle,
+      required void Function(int, int) onTime,
+    }) {
+      return ListTile(
+        leading: Icon(icon),
+        title: Text(name),
+        subtitle: Text('${_hhmm(start)} ~ ${_hhmm(end)}'),
+        onTap: () => pickRange(start, end, onTime),
+        trailing: Switch(value: enabled, onChanged: onToggle),
+      );
+    }
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('지하철 출퇴근 알림')),
+      body: ListView(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            child: Text('반경: ${s.commuteRadius}m',
+                style: Theme.of(context).textTheme.bodyMedium),
+          ),
+          Slider(
+            min: 50,
+            max: 2000,
+            divisions: 39, // 50m 단위
+            value: s.commuteRadius.toDouble().clamp(50, 2000),
+            label: '${s.commuteRadius}m',
+            onChanged: (v) => notifier.updateCommuteRadius(v.round()),
+          ),
+          ListTile(
+            leading: const Icon(Icons.volume_up_outlined),
+            title: const Text('알림음'),
+            trailing: DropdownButton<CommuteSoundMode>(
+              value: s.commuteSoundMode,
+              onChanged: (m) {
+                if (m != null) notifier.updateCommuteSound(m);
+              },
+              items: CommuteSoundMode.values
+                  .map((m) =>
+                      DropdownMenuItem(value: m, child: Text(_soundLabels[m]!)))
+                  .toList(),
+            ),
+          ),
+          SwitchListTile(
+            secondary: const Icon(Icons.calendar_today_outlined),
+            title: const Text('평일만 감시'),
+            value: s.commuteWeekdaysOnly,
+            onChanged: (v) => notifier.updateCommuteWeekdaysOnly(v),
+          ),
+          const Divider(),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 0),
+            child: Text('감시 시간대 (각각 켜고/끄기, 탭하여 시간 변경)',
+                style: TextStyle(fontWeight: FontWeight.w600)),
+          ),
+          windowTile(
+            name: '출근',
+            icon: Icons.wb_sunny_outlined,
+            enabled: s.commuteAmEnabled,
+            start: s.commuteAmStart,
+            end: s.commuteAmEnd,
+            onToggle: (v) => notifier.updateCommuteWindowEnabled(am: v),
+            onTime: (a, b) => notifier.updateCommuteWindow(amStart: a, amEnd: b),
+          ),
+          windowTile(
+            name: '퇴근',
+            icon: Icons.nightlight_outlined,
+            enabled: s.commutePmEnabled,
+            start: s.commutePmStart,
+            end: s.commutePmEnd,
+            onToggle: (v) => notifier.updateCommuteWindowEnabled(pm: v),
+            onTime: (a, b) => notifier.updateCommuteWindow(pmStart: a, pmEnd: b),
+          ),
+          windowTile(
+            name: '사용자지정',
+            icon: Icons.more_time_outlined,
+            enabled: s.commuteCustomEnabled,
+            start: s.commuteCustomStart,
+            end: s.commuteCustomEnd,
+            onToggle: (v) => notifier.updateCommuteWindowEnabled(custom: v),
+            onTime: (a, b) =>
+                notifier.updateCommuteWindow(customStart: a, customEnd: b),
+          ),
+          const Divider(),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 8, 16, 4),
+            child: Text('알림 지점 (최대 3개)',
+                style: TextStyle(fontWeight: FontWeight.w600)),
+          ),
+          if (s.commutePins.isEmpty)
+            const Padding(
+              padding: EdgeInsets.fromLTRB(16, 0, 16, 12),
+              child: Text('지도 화면에서 위치를 길게 눌러 지점을 추가하세요.',
+                  style: TextStyle(fontSize: 13, color: Colors.grey)),
+            )
+          else
+            ...List.generate(s.commutePins.length, (i) {
+              final p = s.commutePins[i];
+              return ListTile(
+                dense: true,
+                leading: const Icon(Icons.place_outlined),
+                title: Text(p.label.isNotEmpty ? p.label : '지점 ${i + 1}'),
+                subtitle: Text(
+                    '${p.lat.toStringAsFixed(5)}, ${p.lng.toStringAsFixed(5)}'),
+                onTap: () => _editPinLabel(context, ref, i, p.label),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.edit_outlined),
+                      tooltip: '명칭 수정',
+                      onPressed: () => _editPinLabel(context, ref, i, p.label),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      tooltip: '삭제',
+                      onPressed: () => notifier.removeCommutePin(i),
+                    ),
+                  ],
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _editPinLabel(
+      BuildContext context, WidgetRef ref, int index, String current) async {
+    final ctrl = TextEditingController(text: current);
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('지점 명칭'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '예: 집, 회사, 강남역',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('저장')),
+        ],
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => ctrl.dispose());
+    if (result != null) {
+      await ref.read(settingsProvider.notifier).updateCommutePinLabel(index, result);
+    }
   }
 }
 

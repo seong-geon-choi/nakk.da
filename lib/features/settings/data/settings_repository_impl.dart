@@ -32,6 +32,21 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _locationFabBottomKey = 'location_fab_bottom';
   static const _trackingFabRightKey = 'tracking_fab_right';
   static const _trackingFabBottomKey = 'tracking_fab_bottom';
+  static const _commuteEnabledKey = 'commute_alarm_enabled';
+  static const _commuteRadiusKey = 'commute_radius';
+  static const _commuteSoundKey = 'commute_sound_mode';
+  static const _commutePinsKey = 'commute_pins';
+  static const _commuteAmStartKey = 'commute_am_start';
+  static const _commuteAmEndKey = 'commute_am_end';
+  static const _commutePmStartKey = 'commute_pm_start';
+  static const _commutePmEndKey = 'commute_pm_end';
+  static const _commuteWeekdaysOnlyKey = 'commute_weekdays_only';
+  static const _commuteActiveKey = 'commute_alarm_active';
+  static const _commuteCustomStartKey = 'commute_custom_start';
+  static const _commuteCustomEndKey = 'commute_custom_end';
+  static const _commuteAmEnabledKey = 'commute_am_enabled';
+  static const _commutePmEnabledKey = 'commute_pm_enabled';
+  static const _commuteCustomEnabledKey = 'commute_custom_enabled';
 
   static const defaultMemoDisplayPath = '/storage/emulated/0/Documents/nakkda';
 
@@ -79,6 +94,30 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final locationFabBottom = prefs.getDouble(_locationFabBottomKey) ?? 100;
     final trackingFabRight = prefs.getDouble(_trackingFabRightKey) ?? 16;
     final trackingFabBottom = prefs.getDouble(_trackingFabBottomKey) ?? 172;
+    final commuteAlarmEnabled = prefs.getBool(_commuteEnabledKey) ?? false;
+    final commuteRadius = prefs.getInt(_commuteRadiusKey) ?? 200;
+    final commuteSoundStr = prefs.getString(_commuteSoundKey);
+    final commuteSoundMode = CommuteSoundMode.values.firstWhere(
+      (e) => e.name == commuteSoundStr,
+      orElse: () => CommuteSoundMode.systemDefault,
+    );
+    final commutePinsStr = prefs.getString(_commutePinsKey);
+    final commutePins = commutePinsStr != null
+        ? (jsonDecode(commutePinsStr) as List<dynamic>)
+            .map((e) => CommutePin.fromJson(e as Map<String, dynamic>))
+            .toList()
+        : const <CommutePin>[];
+    final commuteAmStart = prefs.getInt(_commuteAmStartKey) ?? 420;
+    final commuteAmEnd = prefs.getInt(_commuteAmEndKey) ?? 540;
+    final commutePmStart = prefs.getInt(_commutePmStartKey) ?? 1080;
+    final commutePmEnd = prefs.getInt(_commutePmEndKey) ?? 1200;
+    final commuteWeekdaysOnly = prefs.getBool(_commuteWeekdaysOnlyKey) ?? true;
+    final commuteAlarmActive = prefs.getBool(_commuteActiveKey) ?? true;
+    final commuteCustomStart = prefs.getInt(_commuteCustomStartKey) ?? 600;
+    final commuteCustomEnd = prefs.getInt(_commuteCustomEndKey) ?? 720;
+    final commuteAmEnabled = prefs.getBool(_commuteAmEnabledKey) ?? true;
+    final commutePmEnabled = prefs.getBool(_commutePmEnabledKey) ?? true;
+    final commuteCustomEnabled = prefs.getBool(_commuteCustomEnabledKey) ?? false;
 
     return AppSettings(
       savePath: saveUri,
@@ -108,6 +147,21 @@ class SettingsRepositoryImpl implements SettingsRepository {
       locationFabBottom: locationFabBottom,
       trackingFabRight: trackingFabRight,
       trackingFabBottom: trackingFabBottom,
+      commuteAlarmEnabled: commuteAlarmEnabled,
+      commuteRadius: commuteRadius,
+      commuteSoundMode: commuteSoundMode,
+      commutePins: commutePins,
+      commuteAmStart: commuteAmStart,
+      commuteAmEnd: commuteAmEnd,
+      commutePmStart: commutePmStart,
+      commutePmEnd: commutePmEnd,
+      commuteWeekdaysOnly: commuteWeekdaysOnly,
+      commuteAlarmActive: commuteAlarmActive,
+      commuteCustomStart: commuteCustomStart,
+      commuteCustomEnd: commuteCustomEnd,
+      commuteAmEnabled: commuteAmEnabled,
+      commutePmEnabled: commutePmEnabled,
+      commuteCustomEnabled: commuteCustomEnabled,
     );
   }
 
@@ -154,6 +208,22 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setDouble(_locationFabBottomKey, settings.locationFabBottom);
     await prefs.setDouble(_trackingFabRightKey, settings.trackingFabRight);
     await prefs.setDouble(_trackingFabBottomKey, settings.trackingFabBottom);
+    await prefs.setBool(_commuteEnabledKey, settings.commuteAlarmEnabled);
+    await prefs.setInt(_commuteRadiusKey, settings.commuteRadius);
+    await prefs.setString(_commuteSoundKey, settings.commuteSoundMode.name);
+    await prefs.setString(_commutePinsKey,
+        jsonEncode(settings.commutePins.map((p) => p.toJson()).toList()));
+    await prefs.setInt(_commuteAmStartKey, settings.commuteAmStart);
+    await prefs.setInt(_commuteAmEndKey, settings.commuteAmEnd);
+    await prefs.setInt(_commutePmStartKey, settings.commutePmStart);
+    await prefs.setInt(_commutePmEndKey, settings.commutePmEnd);
+    await prefs.setBool(_commuteWeekdaysOnlyKey, settings.commuteWeekdaysOnly);
+    await prefs.setBool(_commuteActiveKey, settings.commuteAlarmActive);
+    await prefs.setInt(_commuteCustomStartKey, settings.commuteCustomStart);
+    await prefs.setInt(_commuteCustomEndKey, settings.commuteCustomEnd);
+    await prefs.setBool(_commuteAmEnabledKey, settings.commuteAmEnabled);
+    await prefs.setBool(_commutePmEnabledKey, settings.commutePmEnabled);
+    await prefs.setBool(_commuteCustomEnabledKey, settings.commuteCustomEnabled);
   }
 
   Future<String> _defaultPhotoSavePath() async {

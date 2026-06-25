@@ -355,10 +355,60 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     return result;
   }
 
+  // 지도 길게 누르기 → 출퇴근 알림 지점 추가(최대 3개)
+  void _onMapLongPress(LatLng latlng) {
+    final s = ref.read(settingsProvider).valueOrNull;
+    if (s == null || !s.commuteAlarmEnabled) {
+      _showToastMessage('출퇴근 알림을 먼저 켜세요 (설정 > 개발자 메뉴)');
+      return;
+    }
+    if (!s.commuteAlarmActive) {
+      _showToastMessage('지도의 알림 버튼을 켜야 지점을 추가할 수 있습니다');
+      return;
+    }
+    if (s.commutePins.length >= 3) {
+      _showToastMessage('지점은 최대 3개까지입니다');
+      return;
+    }
+    ref
+        .read(settingsProvider.notifier)
+        .addCommutePin(latlng.latitude, latlng.longitude);
+    _showToastMessage('출퇴근 알림 지점 추가됨');
+  }
+
+  Future<void> _removeCommutePin(int index) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('지점 삭제'),
+        content: const Text('이 출퇴근 알림 지점을 삭제할까요?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('취소')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('삭제')),
+        ],
+      ),
+    );
+    if (ok == true) {
+      await ref.read(settingsProvider.notifier).removeCommutePin(index);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final showTrackingButton =
         ref.watch(settingsProvider).valueOrNull?.showTrackingButton ?? true;
+    final commuteEnabled = ref.watch(settingsProvider
+        .select((s) => s.valueOrNull?.commuteAlarmEnabled ?? false));
+    final commutePins = ref.watch(settingsProvider
+        .select((s) => s.valueOrNull?.commutePins ?? const <CommutePin>[]));
+    final commuteRadius = ref.watch(settingsProvider
+        .select((s) => s.valueOrNull?.commuteRadius ?? 200));
+    final commuteActive = ref.watch(settingsProvider
+        .select((s) => s.valueOrNull?.commuteAlarmActive ?? true));
     final placed = _spreadPoints();
     final placedSorted = List<_PlacedPoint>.from(placed)
       ..sort((a, b) => a.point.timestamp.compareTo(b.point.timestamp));
@@ -411,6 +461,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               initialCenter: _initialCenter,
               initialZoom: 15,
               onTap: (_, _) => setState(() => _selected = null),
+              onLongPress: (_, latlng) => _onMapLongPress(latlng),
               onPositionChanged: (camera, hasGesture) {
                 if ((camera.zoom - _zoom).abs() >= 0.5) {
                   setState(() => _zoom = camera.zoom);
@@ -423,6 +474,36 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.sgchoisg.nakkda',
               ),
+              // 출퇴근 알림 지점: 반경 원 + 핀(탭하면 삭제)
+              if (commuteEnabled && commuteActive && commutePins.isNotEmpty) ...[
+                CircleLayer(
+                  circles: commutePins
+                      .map((p) => CircleMarker(
+                            point: LatLng(p.lat, p.lng),
+                            radius: commuteRadius.toDouble(),
+                            useRadiusInMeter: true,
+                            color: const Color(0x2218A0FF),
+                            borderColor: const Color(0xFF1976D2),
+                            borderStrokeWidth: 2,
+                          ))
+                      .toList(),
+                ),
+                MarkerLayer(
+                  markers: [
+                    for (var i = 0; i < commutePins.length; i++)
+                      Marker(
+                        point: LatLng(commutePins[i].lat, commutePins[i].lng),
+                        width: 40,
+                        height: 40,
+                        child: GestureDetector(
+                          onTap: () => _removeCommutePin(i),
+                          child: const Icon(Icons.train,
+                              color: Color(0xFF1976D2), size: 32),
+                        ),
+                      ),
+                  ],
+                ),
+              ],
               // 메모지점 연결(_showLines)이 켜지면 linePoints가 메모+트랙을
               // 시간순 단일 선으로 그리므로, 트랙 전용 선은 중복이라 생략한다.
               if (_showTrack && !_showLines && _trackPoints.length >= 2)
@@ -669,6 +750,28 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // 출퇴근 알림: 설정 마스터 토글이 켜진 경우에만 노출, 추적 켜고/끄기
+                    if (commuteEnabled) ...[
+                      _toolBtn(
+                        commuteActive
+                            ? Icons.notifications_active
+                            : Icons.notifications_off_outlined,
+                        commuteActive
+                            ? Theme.of(context).colorScheme.primary
+                            : Theme.of(context)
+                                .colorScheme
+                                .onSurface
+                                .withValues(alpha: 0.4),
+                        () {
+                          final next = !commuteActive;
+                          ref
+                              .read(settingsProvider.notifier)
+                              .updateCommuteActive(next);
+                          _showToastMessage(next ? '출퇴근 알림 켜짐' : '출퇴근 알림 꺼짐');
+                        },
+                      ),
+                      _divider(),
+                    ],
                     _toolBtn(Icons.my_location, null, _moveToCurrentLocation),
                     _divider(),
                     _toolBtn(

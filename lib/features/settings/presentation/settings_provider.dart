@@ -14,7 +14,9 @@ export '../domain/models/app_settings.dart'
         WatermarkAlign,
         WatermarkFont,
         WatermarkWeight,
-        QuickLaunchMode;
+        QuickLaunchMode,
+        CommuteSoundMode,
+        CommutePin;
 
 final settingsRepositoryProvider = Provider<SettingsRepository>(
   (ref) => SettingsRepositoryImpl(),
@@ -32,7 +34,130 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     // 앱 시작 시 저장된 모드·민감도를 Android 서비스에 동기화
     await TrackingService()
         .setQuickLaunchMode(settings.quickLaunchMode.name, settings.shakeThresholdG);
+    // 출퇴근 알림 추적 중이면 네이티브 재동기화
+    if (settings.commuteTracking) {
+      await TrackingService().commuteSync(_commuteConfig(settings));
+    }
     return settings;
+  }
+
+  // ── 지하철 출퇴근 알림 ──────────────────────────────
+  Map<String, dynamic> _commuteConfig(AppSettings s) => {
+        'enabled': s.commuteTracking,
+        'radius': s.commuteRadius,
+        'sound': s.commuteSoundMode.name,
+        'pins':
+            s.commutePins.map((p) => {'lat': p.lat, 'lng': p.lng}).toList(),
+        'amStart': s.commuteAmStart,
+        'amEnd': s.commuteAmEnd,
+        'pmStart': s.commutePmStart,
+        'pmEnd': s.commutePmEnd,
+        'customStart': s.commuteCustomStart,
+        'customEnd': s.commuteCustomEnd,
+        'amEnabled': s.commuteAmEnabled,
+        'pmEnabled': s.commutePmEnabled,
+        'customEnabled': s.commuteCustomEnabled,
+        'weekdaysOnly': s.commuteWeekdaysOnly,
+      };
+
+  Future<void> _applyCommute(AppSettings updated) async {
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+    if (updated.commuteTracking) {
+      await TrackingService().commuteSync(_commuteConfig(updated));
+    } else {
+      await TrackingService().commuteStop();
+    }
+  }
+
+  Future<void> updateCommuteEnabled(bool value) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    // 켤 때는 활성 상태도 함께 켠다(지도 아이콘 기본 활성)
+    await _applyCommute(c.copyWith(
+        commuteAlarmEnabled: value, commuteAlarmActive: value ? true : null));
+  }
+
+  /// 지도 알람 아이콘: 추적 활성/일시중지 토글
+  Future<void> updateCommuteActive(bool value) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    await _applyCommute(c.copyWith(commuteAlarmActive: value));
+  }
+
+  Future<void> updateCommuteRadius(int meters) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    await _applyCommute(c.copyWith(commuteRadius: meters));
+  }
+
+  Future<void> updateCommuteSound(CommuteSoundMode mode) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    await _applyCommute(c.copyWith(commuteSoundMode: mode));
+  }
+
+  Future<void> updateCommuteWindow({
+    int? amStart,
+    int? amEnd,
+    int? pmStart,
+    int? pmEnd,
+    int? customStart,
+    int? customEnd,
+  }) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    await _applyCommute(c.copyWith(
+      commuteAmStart: amStart,
+      commuteAmEnd: amEnd,
+      commutePmStart: pmStart,
+      commutePmEnd: pmEnd,
+      commuteCustomStart: customStart,
+      commuteCustomEnd: customEnd,
+    ));
+  }
+
+  Future<void> updateCommuteWindowEnabled({
+    bool? am,
+    bool? pm,
+    bool? custom,
+  }) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    await _applyCommute(c.copyWith(
+      commuteAmEnabled: am,
+      commutePmEnabled: pm,
+      commuteCustomEnabled: custom,
+    ));
+  }
+
+  Future<void> updateCommuteWeekdaysOnly(bool value) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    await _applyCommute(c.copyWith(commuteWeekdaysOnly: value));
+  }
+
+  Future<void> addCommutePin(double lat, double lng) async {
+    final c = state.valueOrNull;
+    if (c == null || c.commutePins.length >= 3) return;
+    await _applyCommute(
+        c.copyWith(commutePins: [...c.commutePins, CommutePin(lat: lat, lng: lng)]));
+  }
+
+  Future<void> removeCommutePin(int index) async {
+    final c = state.valueOrNull;
+    if (c == null || index < 0 || index >= c.commutePins.length) return;
+    await _applyCommute(
+        c.copyWith(commutePins: [...c.commutePins]..removeAt(index)));
+  }
+
+  Future<void> updateCommutePinLabel(int index, String label) async {
+    final c = state.valueOrNull;
+    if (c == null || index < 0 || index >= c.commutePins.length) return;
+    final pins = [...c.commutePins];
+    final p = pins[index];
+    pins[index] = CommutePin(lat: p.lat, lng: p.lng, label: label);
+    await _applyCommute(c.copyWith(commutePins: pins));
   }
 
   final _saf = SafService();

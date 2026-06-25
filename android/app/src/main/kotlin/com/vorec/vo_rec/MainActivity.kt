@@ -500,6 +500,64 @@ class MainActivity : FlutterActivity() {
                         }
                         result.success(list)
                     }
+                    "commuteSync" -> {
+                        val prefs = getSharedPreferences(
+                            CommuteAlarmService.PREFS_NAME, Context.MODE_PRIVATE)
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        val pins = call.argument<List<Map<String, Any>>>("pins") ?: emptyList()
+                        val pinsJson = JSONArray()
+                        for (p in pins) {
+                            val lat = (p["lat"] as? Number)?.toDouble()
+                            val lng = (p["lng"] as? Number)?.toDouble()
+                            if (lat != null && lng != null) pinsJson.put("$lat,$lng")
+                        }
+                        prefs.edit()
+                            .putBoolean(CommuteAlarmService.KEY_ENABLED, enabled)
+                            .putInt(CommuteAlarmService.KEY_RADIUS,
+                                call.argument<Int>("radius") ?: 200)
+                            .putString(CommuteAlarmService.KEY_SOUND,
+                                call.argument<String>("sound") ?: "systemDefault")
+                            .putString(CommuteAlarmService.KEY_PINS, pinsJson.toString())
+                            .putInt(CommuteAlarmService.KEY_AM_START,
+                                call.argument<Int>("amStart") ?: 420)
+                            .putInt(CommuteAlarmService.KEY_AM_END,
+                                call.argument<Int>("amEnd") ?: 540)
+                            .putInt(CommuteAlarmService.KEY_PM_START,
+                                call.argument<Int>("pmStart") ?: 1080)
+                            .putInt(CommuteAlarmService.KEY_PM_END,
+                                call.argument<Int>("pmEnd") ?: 1200)
+                            .putInt(CommuteAlarmService.KEY_CUSTOM_START,
+                                call.argument<Int>("customStart") ?: 600)
+                            .putInt(CommuteAlarmService.KEY_CUSTOM_END,
+                                call.argument<Int>("customEnd") ?: 720)
+                            .putBoolean(CommuteAlarmService.KEY_AM_ENABLED,
+                                call.argument<Boolean>("amEnabled") ?: true)
+                            .putBoolean(CommuteAlarmService.KEY_PM_ENABLED,
+                                call.argument<Boolean>("pmEnabled") ?: true)
+                            .putBoolean(CommuteAlarmService.KEY_CUSTOM_ENABLED,
+                                call.argument<Boolean>("customEnabled") ?: false)
+                            .putBoolean(CommuteAlarmService.KEY_WEEKDAYS_ONLY,
+                                call.argument<Boolean>("weekdaysOnly") ?: true)
+                            .apply()
+                        val hasLoc = checkSelfPermission(
+                            android.Manifest.permission.ACCESS_FINE_LOCATION) ==
+                            android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                            checkSelfPermission(
+                                android.Manifest.permission.ACCESS_COARSE_LOCATION) ==
+                            android.content.pm.PackageManager.PERMISSION_GRANTED
+                        if (enabled && pinsJson.length() > 0 && hasLoc) {
+                            CommuteAlarmService.start(this)
+                        } else {
+                            CommuteAlarmService.stop(this)
+                        }
+                        result.success(null)
+                    }
+                    "commuteStop" -> {
+                        getSharedPreferences(CommuteAlarmService.PREFS_NAME, Context.MODE_PRIVATE)
+                            .edit().putBoolean(CommuteAlarmService.KEY_ENABLED, false).apply()
+                        CommuteAlarmService.stop(this)
+                        result.success(null)
+                    }
                     "setQuickLaunchMode" -> {
                         val mode = call.argument<String>("mode") ?: "volume"
                         val threshold =
