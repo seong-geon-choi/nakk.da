@@ -341,19 +341,33 @@ enum QuickLaunchMode { none, shake, volume }
 /// 출퇴근 알림음 모드
 enum CommuteSoundMode { vibrateOnly, vibrateBell, bell, silent, systemDefault }
 
+/// 출퇴근 알림 감시 시간대(지점별 할당)
+enum CommuteWindow { am, pm, custom }
+
 /// 출퇴근 알림 지점(지도에서 길게 눌러 지정)
 class CommutePin {
   final double lat;
   final double lng;
   final String label;
-  const CommutePin({required this.lat, required this.lng, this.label = ''});
+  final CommuteWindow window; // 이 지점에 할당된 감시 시간대
+  const CommutePin({
+    required this.lat,
+    required this.lng,
+    this.label = '',
+    this.window = CommuteWindow.am,
+  });
 
-  Map<String, dynamic> toJson() => {'lat': lat, 'lng': lng, 'label': label};
+  Map<String, dynamic> toJson() =>
+      {'lat': lat, 'lng': lng, 'label': label, 'window': window.name};
 
   factory CommutePin.fromJson(Map<String, dynamic> j) => CommutePin(
         lat: (j['lat'] as num).toDouble(),
         lng: (j['lng'] as num).toDouble(),
         label: j['label'] as String? ?? '',
+        window: CommuteWindow.values.firstWhere(
+          (e) => e.name == j['window'],
+          orElse: () => CommuteWindow.am,
+        ),
       );
 }
 
@@ -387,12 +401,12 @@ class AppSettings {
   final double trackingFabBottom; // 홈 트래킹 FAB 위치 (bottom)
   // ── 지하철 출퇴근 알림 ──────────────────────────────
   final bool commuteAlarmEnabled;
-  final int commuteRadius; // 반경(m), 50~2000, 기본 200
+  final int commuteRadius; // 반경(m), 50~2000, 기본 700
   final CommuteSoundMode commuteSoundMode;
   final List<CommutePin> commutePins; // 최대 3개
-  final int commuteAmStart; // 출근 창 시작(자정 기준 분), 기본 420(07:00)
+  final int commuteAmStart; // 출근 창 시작(자정 기준 분), 기본 480(08:00)
   final int commuteAmEnd;   // 출근 창 종료, 기본 540(09:00)
-  final int commutePmStart; // 퇴근 창 시작, 기본 1080(18:00)
+  final int commutePmStart; // 퇴근 창 시작, 기본 1140(19:00)
   final int commutePmEnd;   // 퇴근 창 종료, 기본 1200(20:00)
   final int commuteCustomStart; // 사용자지정 창 시작, 기본 600(10:00)
   final int commuteCustomEnd;   // 사용자지정 창 종료, 기본 720(12:00)
@@ -442,12 +456,12 @@ class AppSettings {
     this.trackingFabRight = 16,
     this.trackingFabBottom = 172,
     this.commuteAlarmEnabled = false,
-    this.commuteRadius = 200,
+    this.commuteRadius = 700,
     this.commuteSoundMode = CommuteSoundMode.systemDefault,
     this.commutePins = const [],
-    this.commuteAmStart = 420,
+    this.commuteAmStart = 480,
     this.commuteAmEnd = 540,
-    this.commutePmStart = 1080,
+    this.commutePmStart = 1140,
     this.commutePmEnd = 1200,
     this.commuteCustomStart = 600,
     this.commuteCustomEnd = 720,

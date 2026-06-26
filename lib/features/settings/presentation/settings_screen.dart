@@ -1186,6 +1186,12 @@ class _CommuteSettingsScreen extends ConsumerWidget {
     CommuteSoundMode.systemDefault: '안드로이드 설정 따름',
   };
 
+  static const _windowLabels = {
+    CommuteWindow.am: '출근',
+    CommuteWindow.pm: '퇴근',
+    CommuteWindow.custom: '지정',
+  };
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final s = ref.watch(settingsProvider).valueOrNull;
@@ -1326,10 +1332,19 @@ class _CommuteSettingsScreen extends ConsumerWidget {
                 trailing: Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    IconButton(
-                      icon: const Icon(Icons.edit_outlined),
-                      tooltip: '명칭 수정',
-                      onPressed: () => _editPinLabel(context, ref, i, p.label),
+                    DropdownButton<CommuteWindow>(
+                      value: p.window,
+                      isDense: true,
+                      underline: const SizedBox.shrink(),
+                      onChanged: (w) {
+                        if (w != null) {
+                          notifier.updateCommutePinWindow(i, w);
+                        }
+                      },
+                      items: CommuteWindow.values
+                          .map((w) => DropdownMenuItem(
+                              value: w, child: Text(_windowLabels[w]!)))
+                          .toList(),
                     ),
                     IconButton(
                       icon: const Icon(Icons.delete_outline),

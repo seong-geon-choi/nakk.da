@@ -95,7 +95,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final trackingFabRight = prefs.getDouble(_trackingFabRightKey) ?? 16;
     final trackingFabBottom = prefs.getDouble(_trackingFabBottomKey) ?? 172;
     final commuteAlarmEnabled = prefs.getBool(_commuteEnabledKey) ?? false;
-    final commuteRadius = prefs.getInt(_commuteRadiusKey) ?? 200;
+    final commuteRadius = prefs.getInt(_commuteRadiusKey) ?? 700;
     final commuteSoundStr = prefs.getString(_commuteSoundKey);
     final commuteSoundMode = CommuteSoundMode.values.firstWhere(
       (e) => e.name == commuteSoundStr,
@@ -107,9 +107,9 @@ class SettingsRepositoryImpl implements SettingsRepository {
             .map((e) => CommutePin.fromJson(e as Map<String, dynamic>))
             .toList()
         : const <CommutePin>[];
-    final commuteAmStart = prefs.getInt(_commuteAmStartKey) ?? 420;
+    final commuteAmStart = prefs.getInt(_commuteAmStartKey) ?? 480;
     final commuteAmEnd = prefs.getInt(_commuteAmEndKey) ?? 540;
-    final commutePmStart = prefs.getInt(_commutePmStartKey) ?? 1080;
+    final commutePmStart = prefs.getInt(_commutePmStartKey) ?? 1140;
     final commutePmEnd = prefs.getInt(_commutePmEndKey) ?? 1200;
     final commuteWeekdaysOnly = prefs.getBool(_commuteWeekdaysOnlyKey) ?? true;
     final commuteAlarmActive = prefs.getBool(_commuteActiveKey) ?? true;

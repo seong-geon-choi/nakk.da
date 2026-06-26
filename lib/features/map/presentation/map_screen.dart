@@ -358,7 +358,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   }
 
   // 지도 길게 누르기 → 출퇴근 알림 지점 추가(최대 3개)
-  void _onMapLongPress(LatLng latlng) {
+  Future<void> _onMapLongPress(LatLng latlng) async {
     final s = ref.read(settingsProvider).valueOrNull;
     if (s == null || !s.commuteAlarmEnabled) {
       _showToastMessage('출퇴근 알림을 먼저 켜세요 (설정 > 개발자 메뉴)');
@@ -372,10 +372,41 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       _showToastMessage('지점은 최대 3개까지입니다');
       return;
     }
-    ref
+    final label = await _askPinLabel();
+    if (label == null) return; // 취소
+    await ref
         .read(settingsProvider.notifier)
-        .addCommutePin(latlng.latitude, latlng.longitude);
+        .addCommutePin(latlng.latitude, latlng.longitude, label: label);
     _showToastMessage('출퇴근 알림 지점 추가됨');
+  }
+
+  // 지점 추가 시 이름 입력 다이얼로그. 취소 시 null, 비워두면 빈 문자열.
+  Future<String?> _askPinLabel() async {
+    final ctrl = TextEditingController();
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('지점 이름'),
+        content: TextField(
+          controller: ctrl,
+          autofocus: true,
+          decoration: const InputDecoration(
+            hintText: '예: 집, 회사, 강남역',
+            border: OutlineInputBorder(),
+          ),
+          onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim()),
+              child: const Text('추가')),
+        ],
+      ),
+    );
+    WidgetsBinding.instance.addPostFrameCallback((_) => ctrl.dispose());
+    return result;
   }
 
   Future<void> _removeCommutePin(int index) async {

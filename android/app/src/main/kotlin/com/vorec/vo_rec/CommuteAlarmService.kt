@@ -73,26 +73,36 @@ class CommuteAlarmService : Service() {
         }
 
         fun isWithinWindow(prefs: SharedPreferences, now: Calendar): Boolean {
+            return isWindowActive(prefs, now, "am") ||
+                isWindowActive(prefs, now, "pm") ||
+                isWindowActive(prefs, now, "custom")
+        }
+
+        /** 특정 감시 시간대(am/pm/custom)가 현재 활성인지(평일·켜짐·시각 범위). */
+        fun isWindowActive(prefs: SharedPreferences, now: Calendar, window: String): Boolean {
             if (prefs.getBoolean(KEY_WEEKDAYS_ONLY, true)) {
                 val dow = now.get(Calendar.DAY_OF_WEEK)
                 if (dow == Calendar.SATURDAY || dow == Calendar.SUNDAY) return false
             }
             val minutes = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
-            val am = prefs.getBoolean(KEY_AM_ENABLED, true) &&
-                minutes in prefs.getInt(KEY_AM_START, 420) until prefs.getInt(KEY_AM_END, 540)
-            val pm = prefs.getBoolean(KEY_PM_ENABLED, true) &&
-                minutes in prefs.getInt(KEY_PM_START, 1080) until prefs.getInt(KEY_PM_END, 1200)
-            val custom = prefs.getBoolean(KEY_CUSTOM_ENABLED, false) &&
-                minutes in prefs.getInt(KEY_CUSTOM_START, 600) until prefs.getInt(KEY_CUSTOM_END, 720)
-            return am || pm || custom
+            return when (window) {
+                "am" -> prefs.getBoolean(KEY_AM_ENABLED, true) &&
+                    minutes in prefs.getInt(KEY_AM_START, 480) until prefs.getInt(KEY_AM_END, 540)
+                "pm" -> prefs.getBoolean(KEY_PM_ENABLED, true) &&
+                    minutes in prefs.getInt(KEY_PM_START, 1140) until prefs.getInt(KEY_PM_END, 1200)
+                "custom" -> prefs.getBoolean(KEY_CUSTOM_ENABLED, false) &&
+                    minutes in prefs.getInt(KEY_CUSTOM_START, 600) until prefs.getInt(KEY_CUSTOM_END, 720)
+                else -> false
+            }
         }
     }
 
     private var fusedClient: FusedLocationProviderClient? = null
     private val pinLats = ArrayList<Double>()
     private val pinLngs = ArrayList<Double>()
+    private val pinWindows = ArrayList<String>() // 지점별 할당 시간대(am/pm/custom)
     private var armed = BooleanArray(0)
-    private var radius = 200f
+    private var radius = 700f
     private var soundMode = "systemDefault"
     private var currentIntervalMs = INTERVAL_FAR_MS
     private var monitoring = false // 위치 수신 중인지(창 안)
@@ -141,17 +151,21 @@ class CommuteAlarmService : Service() {
 
     private fun loadConfig() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        radius = prefs.getInt(KEY_RADIUS, 200).toFloat()
+        radius = prefs.getInt(KEY_RADIUS, 700).toFloat()
         soundMode = prefs.getString(KEY_SOUND, "systemDefault") ?: "systemDefault"
-        pinLats.clear(); pinLngs.clear()
+        pinLats.clear(); pinLngs.clear(); pinWindows.clear()
         try {
             val arr = JSONArray(prefs.getString(KEY_PINS, "[]") ?: "[]")
             for (i in 0 until arr.length()) {
                 val parts = arr.getString(i).split(",")
-                if (parts.size == 2) {
+                if (parts.size >= 2) {
                     val lat = parts[0].toDoubleOrNull()
                     val lng = parts[1].toDoubleOrNull()
-                    if (lat != null && lng != null) { pinLats.add(lat); pinLngs.add(lng) }
+                    if (lat != null && lng != null) {
+                        pinLats.add(lat)
+                        pinLngs.add(lng)
+                        pinWindows.add(if (parts.size >= 3) parts[2] else "am")
+                    }
                 }
             }
         } catch (_: Exception) {}
@@ -186,13 +200,17 @@ class CommuteAlarmService : Service() {
     }
 
     private fun onLocation(loc: Location) {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val now = Calendar.getInstance()
         var nearest = Float.MAX_VALUE
         for (i in pinLats.indices) {
             val out = FloatArray(1)
             Location.distanceBetween(loc.latitude, loc.longitude, pinLats[i], pinLngs[i], out)
             val d = out[0]
             if (d < nearest) nearest = d
-            if (d <= radius && armed[i]) {
+            // 지점에 할당된 시간대가 현재 활성일 때만 알람 발화
+            val pinActive = isWindowActive(prefs, now, pinWindows.getOrElse(i) { "am" })
+            if (d <= radius && armed[i] && pinActive) {
                 armed[i] = false
                 triggerAlarm()
             } else if (d > radius * HYSTERESIS) {

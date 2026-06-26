@@ -523,21 +523,22 @@ class MainActivity : FlutterActivity() {
                         for (p in pins) {
                             val lat = (p["lat"] as? Number)?.toDouble()
                             val lng = (p["lng"] as? Number)?.toDouble()
-                            if (lat != null && lng != null) pinsJson.put("$lat,$lng")
+                            val window = (p["window"] as? String) ?: "am"
+                            if (lat != null && lng != null) pinsJson.put("$lat,$lng,$window")
                         }
                         prefs.edit()
                             .putBoolean(CommuteAlarmService.KEY_ENABLED, enabled)
                             .putInt(CommuteAlarmService.KEY_RADIUS,
-                                call.argument<Int>("radius") ?: 200)
+                                call.argument<Int>("radius") ?: 700)
                             .putString(CommuteAlarmService.KEY_SOUND,
                                 call.argument<String>("sound") ?: "systemDefault")
                             .putString(CommuteAlarmService.KEY_PINS, pinsJson.toString())
                             .putInt(CommuteAlarmService.KEY_AM_START,
-                                call.argument<Int>("amStart") ?: 420)
+                                call.argument<Int>("amStart") ?: 480)
                             .putInt(CommuteAlarmService.KEY_AM_END,
                                 call.argument<Int>("amEnd") ?: 540)
                             .putInt(CommuteAlarmService.KEY_PM_START,
-                                call.argument<Int>("pmStart") ?: 1080)
+                                call.argument<Int>("pmStart") ?: 1140)
                             .putInt(CommuteAlarmService.KEY_PM_END,
                                 call.argument<Int>("pmEnd") ?: 1200)
                             .putInt(CommuteAlarmService.KEY_CUSTOM_START,

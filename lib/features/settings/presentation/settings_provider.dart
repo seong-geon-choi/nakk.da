@@ -16,6 +16,7 @@ export '../domain/models/app_settings.dart'
         WatermarkWeight,
         QuickLaunchMode,
         CommuteSoundMode,
+        CommuteWindow,
         CommutePin;
 
 final settingsRepositoryProvider = Provider<SettingsRepository>(
@@ -46,8 +47,9 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
         'enabled': s.commuteTracking,
         'radius': s.commuteRadius,
         'sound': s.commuteSoundMode.name,
-        'pins':
-            s.commutePins.map((p) => {'lat': p.lat, 'lng': p.lng}).toList(),
+        'pins': s.commutePins
+            .map((p) => {'lat': p.lat, 'lng': p.lng, 'window': p.window.name})
+            .toList(),
         'amStart': s.commuteAmStart,
         'amEnd': s.commuteAmEnd,
         'pmStart': s.commutePmStart,
@@ -137,11 +139,13 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     await _applyCommute(c.copyWith(commuteWeekdaysOnly: value));
   }
 
-  Future<void> addCommutePin(double lat, double lng) async {
+  Future<void> addCommutePin(double lat, double lng, {String label = ''}) async {
     final c = state.valueOrNull;
     if (c == null || c.commutePins.length >= 3) return;
-    await _applyCommute(
-        c.copyWith(commutePins: [...c.commutePins, CommutePin(lat: lat, lng: lng)]));
+    await _applyCommute(c.copyWith(commutePins: [
+      ...c.commutePins,
+      CommutePin(lat: lat, lng: lng, label: label),
+    ]));
   }
 
   Future<void> removeCommutePin(int index) async {
@@ -156,7 +160,18 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     if (c == null || index < 0 || index >= c.commutePins.length) return;
     final pins = [...c.commutePins];
     final p = pins[index];
-    pins[index] = CommutePin(lat: p.lat, lng: p.lng, label: label);
+    pins[index] =
+        CommutePin(lat: p.lat, lng: p.lng, label: label, window: p.window);
+    await _applyCommute(c.copyWith(commutePins: pins));
+  }
+
+  Future<void> updateCommutePinWindow(int index, CommuteWindow window) async {
+    final c = state.valueOrNull;
+    if (c == null || index < 0 || index >= c.commutePins.length) return;
+    final pins = [...c.commutePins];
+    final p = pins[index];
+    pins[index] =
+        CommutePin(lat: p.lat, lng: p.lng, label: p.label, window: window);
     await _applyCommute(c.copyWith(commutePins: pins));
   }
 
