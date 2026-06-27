@@ -92,6 +92,10 @@ flutter:
   # the material Icons class.
   uses-material-design: true
 
+  assets:
+    - assets/fish/color/
+    - assets/fish/silhouette/
+
   fonts:
     - family: BlackHanSans
       fonts:

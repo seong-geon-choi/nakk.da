@@ -88,7 +88,7 @@ void main() {
       expect(loaded.trackingFabBottom, 300);
     });
 
-    test('fishSpecies 저장 후 load()에서 동일 목록 반환', () async {
+    test('fishSpecies 저장 후 load(): 저장 목록 + 누락된 기본 어종 병합', () async {
       final initial = AppSettings(
         savePath: defaultPath,
         photoSavePath: '/test/photos',
@@ -97,7 +97,15 @@ void main() {
       await repository.save(initial);
 
       final loaded = await repository.load();
-      expect(loaded.fishSpecies, ['돗돔', '참돔', '볼락']);
+      // 저장한 순서·항목은 앞쪽에 그대로 유지
+      expect(loaded.fishSpecies.take(3), ['돗돔', '참돔', '볼락']);
+      // 사용자 커스텀 어종(돗돔)은 유지
+      expect(loaded.fishSpecies, contains('돗돔'));
+      // 누락됐던 기본 어종이 뒤에 병합됨
+      expect(loaded.fishSpecies, contains('감성돔'));
+      expect(loaded.fishSpecies, contains('민어'));
+      // 저장 목록과 기본 목록 양쪽에 있는 어종은 중복되지 않음
+      expect(loaded.fishSpecies.where((s) => s == '참돔').length, 1);
     });
   });
 }

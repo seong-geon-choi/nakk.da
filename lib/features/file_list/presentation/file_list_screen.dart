@@ -69,6 +69,11 @@ class _FileListScreenState extends ConsumerState<FileListScreen> {
             onPressed: () => context.push(AppRoutes.stats),
           ),
           IconButton(
+            icon: const Icon(Icons.menu_book_outlined),
+            tooltip: '어류 도감',
+            onPressed: () => context.push(AppRoutes.dogam),
+          ),
+          IconButton(
             icon: const Icon(Icons.search),
             tooltip: '검색',
             onPressed: () => context.push(AppRoutes.search),

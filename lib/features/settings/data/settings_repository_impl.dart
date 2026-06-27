@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../../core/constants/app_constants.dart';
 import '../domain/models/app_settings.dart';
 import '../domain/settings_repository.dart';
 
@@ -88,7 +89,15 @@ class SettingsRepositoryImpl implements SettingsRepository {
         ? DateTime.fromMillisecondsSinceEpoch(lastSyncAtMs)
         : null;
     final lastSyncSuccessRaw = prefs.getBool(_lastSyncSuccessKey);
-    final fishSpecies = prefs.getStringList(_fishSpeciesKey);
+    // 저장된 어종 목록이 있으면, 새로 추가된 기본 어종(누락분)을 뒤에 병합한다.
+    // (사용자가 추가한 어종·순서는 유지. null이면 AppSettings가 전체 기본값 사용)
+    final savedFishSpecies = prefs.getStringList(_fishSpeciesKey);
+    final fishSpecies = savedFishSpecies == null
+        ? null
+        : [
+            ...savedFishSpecies,
+            ...kCommonFishSpecies.where((s) => !savedFishSpecies.contains(s)),
+          ];
     final hiddenFishSpecies = prefs.getStringList(_hiddenFishSpeciesKey) ?? const [];
     final locationFabRight = prefs.getDouble(_locationFabRightKey) ?? 16;
     final locationFabBottom = prefs.getDouble(_locationFabBottomKey) ?? 100;

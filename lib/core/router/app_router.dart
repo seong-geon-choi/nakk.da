@@ -6,6 +6,7 @@ import '../../features/file_list/presentation/file_list_screen.dart';
 import '../../features/map/presentation/map_screen.dart';
 import '../../features/search/presentation/search_screen.dart';
 import '../../features/stats/presentation/stats_screen.dart';
+import '../../features/dogam/presentation/dogam_screen.dart';
 
 class AppRoutes {
   static const permission = '/permission';
@@ -16,6 +17,7 @@ class AppRoutes {
   static const map = '/map';
   static const search = '/search';
   static const stats = '/stats';
+  static const dogam = '/dogam';
 }
 
 GoRouter buildAppRouter({bool firstLaunch = false}) => GoRouter(
@@ -56,6 +58,10 @@ GoRouter buildAppRouter({bool firstLaunch = false}) => GoRouter(
     GoRoute(
       path: AppRoutes.stats,
       builder: (context, state) => const StatsScreen(),
+    ),
+    GoRoute(
+      path: AppRoutes.dogam,
+      builder: (context, state) => const DogamScreen(),
     ),
   ],
 );
