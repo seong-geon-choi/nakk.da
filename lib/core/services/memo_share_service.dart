@@ -1,5 +1,6 @@
 import 'dart:io';
 import 'package:flutter/services.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:lunar/lunar.dart';
@@ -174,10 +175,12 @@ class MemoShareService {
       : '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
 
   // ── 사진 파일 해석 (공유 첨부용) ───────────────────────────
+  // 공유 시 사진의 EXIF(GPS·촬영시각·기기 등)를 제거해 임시 파일로 첨부한다.
   Future<List<XFile>> _resolvePhotos(
       List<dynamic> blocks, String savePath) async {
     final result = <XFile>[];
     Directory? tmp;
+    var idx = 0;
     for (final b in blocks) {
       if (b is! MemoEntry || b.photoPath == null) continue;
       final p = b.photoPath!;
@@ -186,23 +189,41 @@ class MemoShareService {
         eff = 'photos/${p.split('/').last}';
       }
 
+      // 원본 바이트 확보
+      Uint8List? bytes;
       if (_isAbsolute(eff)) {
-        if (File(eff).existsSync()) result.add(XFile(eff, mimeType: 'image/jpeg'));
+        final f = File(eff);
+        if (f.existsSync()) bytes = await f.readAsBytes();
       } else if (SafService.isSafUri(savePath)) {
-        final bytes = await _saf.readSafImage(savePath, eff);
-        if (bytes != null) {
-          tmp ??= await getTemporaryDirectory();
-          final file = File('${tmp.path}/share_${eff.split('/').last}');
-          await file.writeAsBytes(bytes);
-          result.add(XFile(file.path, mimeType: 'image/jpeg'));
-        }
+        bytes = await _saf.readSafImage(savePath, eff);
       } else {
-        final resolved = '$savePath/$eff';
-        if (File(resolved).existsSync()) {
-          result.add(XFile(resolved, mimeType: 'image/jpeg'));
-        }
+        final f = File('$savePath/$eff');
+        if (f.existsSync()) bytes = await f.readAsBytes();
       }
+      if (bytes == null) continue;
+
+      final stripped = await _stripExif(bytes);
+      tmp ??= await getTemporaryDirectory();
+      final file = File('${tmp.path}/share_${idx++}_${eff.split('/').last}');
+      await file.writeAsBytes(stripped);
+      result.add(XFile(file.path, mimeType: 'image/jpeg'));
     }
     return result;
+  }
+
+  /// 사진 메타정보(EXIF) 제거 — 재인코딩(해상도는 유지). 실패 시 원본 반환.
+  Future<Uint8List> _stripExif(Uint8List bytes) async {
+    try {
+      final out = await FlutterImageCompress.compressWithList(
+        bytes,
+        minWidth: 100000, // 큰 값으로 두어 다운스케일 방지(재인코딩만)
+        minHeight: 100000,
+        quality: 95,
+        keepExif: false,
+      );
+      return out.isNotEmpty ? out : bytes;
+    } catch (_) {
+      return bytes;
+    }
   }
 }
