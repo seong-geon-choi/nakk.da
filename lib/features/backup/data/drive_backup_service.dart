@@ -120,6 +120,51 @@ class DriveBackupService {
     }
   }
 
+  static const _commuteFile = 'commute_settings.json';
+
+  /// 출퇴근 설정(JSON)을 백업 폴더에 업로드(있으면 갱신).
+  Future<void> uploadCommuteSettings(String json) async {
+    final api = await _getApi();
+    if (api == null) return;
+    final folderId = await _getOrCreateFolder(api);
+    final fileId = await _findFile(api, _commuteFile, folderId);
+    final bytes = utf8.encode(json);
+    final media = drive.Media(
+      Stream.value(bytes),
+      bytes.length,
+      contentType: 'application/json',
+    );
+    if (fileId != null) {
+      await api.files.update(drive.File(), fileId, uploadMedia: media);
+    } else {
+      await api.files.create(
+        drive.File()
+          ..name = _commuteFile
+          ..parents = [folderId],
+        uploadMedia: media,
+        $fields: 'id',
+      );
+    }
+  }
+
+  /// 백업 폴더의 출퇴근 설정(JSON) 다운로드. 없으면 null.
+  Future<String?> downloadCommuteSettings() async {
+    final api = await _getApi();
+    if (api == null) return null;
+    final folderId = await _getOrCreateFolder(api);
+    final fileId = await _findFile(api, _commuteFile, folderId);
+    if (fileId == null) return null;
+    final media = await api.files.get(
+      fileId,
+      downloadOptions: drive.DownloadOptions.fullMedia,
+    ) as drive.Media;
+    final chunks = <int>[];
+    await for (final chunk in media.stream) {
+      chunks.addAll(chunk);
+    }
+    return utf8.decode(chunks);
+  }
+
   Future<void> syncMediaFile(String localPath) async {
     final file = File(localPath);
     if (!await file.exists()) return;

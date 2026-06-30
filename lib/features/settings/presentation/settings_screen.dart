@@ -855,6 +855,45 @@ class _ShakeSensitivitySliderState
   }
 }
 
+/// 출퇴근 알림 반경 슬라이더. 50~2000m.
+/// 드래그 중에는 라벨만 갱신하고, 손을 떼는 순간(onChangeEnd) 저장·드라이브 업로드.
+class _CommuteRadiusSlider extends ConsumerStatefulWidget {
+  final int value;
+  const _CommuteRadiusSlider({required this.value});
+
+  @override
+  ConsumerState<_CommuteRadiusSlider> createState() =>
+      _CommuteRadiusSliderState();
+}
+
+class _CommuteRadiusSliderState extends ConsumerState<_CommuteRadiusSlider> {
+  late double _value = widget.value.toDouble();
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+          child: Text('반경: ${_value.round()}m',
+              style: Theme.of(context).textTheme.bodyMedium),
+        ),
+        Slider(
+          min: 50,
+          max: 2000,
+          divisions: 39, // 50m 단위
+          value: _value.clamp(50, 2000),
+          label: '${_value.round()}m',
+          onChanged: (v) => setState(() => _value = v),
+          onChangeEnd: (v) =>
+              ref.read(settingsProvider.notifier).updateCommuteRadius(v.round()),
+        ),
+      ],
+    );
+  }
+}
+
 class _AccessibilityTile extends StatefulWidget {
   const _AccessibilityTile();
 
@@ -1240,19 +1279,7 @@ class _CommuteSettingsScreen extends ConsumerWidget {
       appBar: AppBar(title: const Text('지하철 출퇴근 알림')),
       body: ListView(
         children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
-            child: Text('반경: ${s.commuteRadius}m',
-                style: Theme.of(context).textTheme.bodyMedium),
-          ),
-          Slider(
-            min: 50,
-            max: 2000,
-            divisions: 39, // 50m 단위
-            value: s.commuteRadius.toDouble().clamp(50, 2000),
-            label: '${s.commuteRadius}m',
-            onChanged: (v) => notifier.updateCommuteRadius(v.round()),
-          ),
+          _CommuteRadiusSlider(value: s.commuteRadius),
           ListTile(
             leading: const Icon(Icons.volume_up_outlined),
             title: const Text('알림음'),
@@ -1703,6 +1730,7 @@ class _BackupSubScreen extends ConsumerWidget {
         final parts = <String>[];
         if (result.mediaRestored > 0) parts.add('미디어 ${result.mediaRestored}개 복원');
         if (mediaAlreadyLocal > 0) parts.add('$mediaAlreadyLocal개 이미 로컬');
+        if (result.commuteRestored) parts.add('출퇴근 지점 복원');
         final mediaPart = parts.isNotEmpty ? ', ${parts.join(', ')}' : '';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('메모 ${result.filesRestored}개 복원$mediaPart')),

@@ -22,6 +22,8 @@
     <application
         android:label="낚.다"
         android:name="${applicationName}"
+        android:allowBackup="true"
+        android:fullBackupContent="true"
         android:icon="@mipmap/ic_launcher">
 
         <!-- ARCore optional support declaration -->

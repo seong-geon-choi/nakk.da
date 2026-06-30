@@ -80,6 +80,34 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     await ref.read(settingsProvider.notifier).updateDriveBackup(includeMedia: value);
   }
 
+  /// 출퇴근 설정(지점 포함)을 드라이브에 업로드 — 백업 켜짐 + Wi-Fi일 때만
+  Future<void> backupCommuteSettings() async {
+    final settings = await ref.read(settingsProvider.future);
+    if (!settings.driveBackupEnabled) return;
+    final svc = ref.read(driveBackupServiceProvider);
+    if (!await svc.isWifi()) return;
+    try {
+      final json =
+          jsonEncode(ref.read(settingsProvider.notifier).commuteBackupJson());
+      await svc.uploadCommuteSettings(json);
+    } catch (_) {}
+  }
+
+  /// 드라이브의 출퇴근 설정을 복원 — 적용되면 true
+  Future<bool> restoreCommuteSettings() async {
+    final svc = ref.read(driveBackupServiceProvider);
+    try {
+      final raw = await svc.downloadCommuteSettings();
+      if (raw == null) return false;
+      await ref
+          .read(settingsProvider.notifier)
+          .restoreCommuteFromJson(jsonDecode(raw) as Map<String, dynamic>);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 메모 저장/삭제 후 호출 — Wi-Fi 확인 후 md 파일 업로드
   Future<void> syncMdFile(DateTime date, String savePath) async {
     final settings = await ref.read(settingsProvider.future);
@@ -239,6 +267,12 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
         progress.state = (++done, total);
       }
 
+      // 출퇴근 설정(지점 포함)도 함께 업로드
+      try {
+        await svc.uploadCommuteSettings(
+            jsonEncode(ref.read(settingsProvider.notifier).commuteBackupJson()));
+      } catch (_) {}
+
       await _saveManifest(manifest);
       await _updateSyncStatus(succeeded + skipped == total);
       return BackupAllResult(total: total, succeeded: succeeded, skipped: skipped);
@@ -300,9 +334,22 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     try {
       final svc = ref.read(driveBackupServiceProvider);
 
+      // 출퇴근 설정(지점 포함) 먼저 복원
+      final commuteRestored = await restoreCommuteSettings();
+
       // 전체 복원 대상 파악 (total 확정)
       final mdFiles = await svc.listMdFiles();
       final localMediaSet = (await _listMediaFiles(savePath)).toSet();
+      // 갤러리 원본(절대경로)이 이미 로컬에 있는 사진의 basename.
+      // 원본이 있으면 photos/로 중복 다운로드하지 않는다(같은 기기 복원 시 사본 방지).
+      final localOriginals = <String>{};
+      for (final name in await _listMdFiles(savePath)) {
+        final content = await _read(savePath, name);
+        if (content == null) continue;
+        for (final p in externalPhotoPaths(content)) {
+          if (File(p).existsSync()) localOriginals.add(p.split('/').last);
+        }
+      }
       final driveMediaFiles = await svc.listMediaFiles();
       // total = md 전체 + Drive 미디어 전체 (이미 로컬에 있어도 progress에 포함)
       final total = mdFiles.length + driveMediaFiles.length;
@@ -348,7 +395,9 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
       for (var i = 0; i < driveMediaFiles.length; i += 4) {
         final batch = driveMediaFiles.sublist(i, min(i + 4, driveMediaFiles.length));
         final counts = await Future.wait(batch.map((driveFile) async {
-          if (localMediaSet.contains(driveFile.name)) {
+          // photos/에 이미 있거나, 갤러리 원본이 로컬에 있으면 다운로드 생략
+          if (localMediaSet.contains(driveFile.name) ||
+              localOriginals.contains(driveFile.name)) {
             progress.state = (++done, total);
             return 0;
           }
@@ -370,6 +419,7 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
         filesRestored: restored,
         mediaRestored: mediaRestored,
         mediaDriveTotal: driveMediaFiles.length,
+        commuteRestored: commuteRestored,
       );
     } finally {
       progress.state = null;
@@ -472,10 +522,12 @@ class RestoreResult {
   final int filesRestored;
   final int mediaRestored;
   final int mediaDriveTotal;
+  final bool commuteRestored;
   const RestoreResult({
     required this.filesRestored,
     this.mediaRestored = 0,
     this.mediaDriveTotal = 0,
+    this.commuteRestored = false,
   });
 }
 

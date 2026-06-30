@@ -573,6 +573,14 @@ class MainActivity : FlutterActivity() {
                         CommuteAlarmService.stop(this)
                         result.success(null)
                     }
+                    "commuteIsActive" -> {
+                        // 네이티브 감시 활성 여부. 알림 스와이프로 중단되면 false가 되어
+                        // 앱이 지도 아이콘을 정합화하는 데 사용.
+                        val active = getSharedPreferences(
+                            CommuteAlarmService.PREFS_NAME, Context.MODE_PRIVATE
+                        ).getBoolean(CommuteAlarmService.KEY_ENABLED, false)
+                        result.success(active)
+                    }
                     "setQuickLaunchMode" -> {
                         val mode = call.argument<String>("mode") ?: "volume"
                         val threshold =

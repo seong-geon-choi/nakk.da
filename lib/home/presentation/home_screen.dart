@@ -10,6 +10,8 @@ import '../../core/widgets/confirm_dialog.dart';
 import '../../core/widgets/empty_state_view.dart';
 import '../../core/widgets/memo_entry_card.dart';
 import '../../core/widgets/location_status_card.dart';
+import '../../core/widgets/location_share_card.dart';
+import '../../core/utils/widget_capture.dart';
 import '../../core/utils/date_formatter.dart';
 import '../../features/memo/domain/models/memo_entry.dart';
 import '../../features/memo/domain/models/day_file.dart';
@@ -34,6 +36,8 @@ import '../../core/widgets/app_toast.dart';
 import 'dart:io';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 /// 하루치 메모를 시스템 공유 시트로 내보낸다(블로그/카페 등 사용자가 앱 선택).
 Future<void> _shareDayMemo(
@@ -54,11 +58,34 @@ Future<void> _shareDayMemo(
     duration: const Duration(seconds: 3),
     emphasized: true,
   );
+  // 현장정보 블록을 카드 이미지로 캡처해 함께 첨부
+  final envCards = await _captureEnvCards(context, blocks);
   await MemoShareService().shareDay(
     blocks: blocks,
     displayName: displayName,
     savePath: savePath,
+    extraImages: envCards,
   );
+}
+
+/// 현장정보(LocationStatus) 블록을 상세 카드 이미지(PNG)로 캡처한다.
+/// 실패한 카드는 건너뛰고, 사진보다 앞에 첨부되도록 순서대로 반환한다.
+Future<List<XFile>> _captureEnvCards(
+    BuildContext context, List<dynamic> blocks) async {
+  final result = <XFile>[];
+  Directory? tmp;
+  var idx = 0;
+  for (final b in blocks) {
+    if (b is! LocationStatus) continue;
+    if (!context.mounted) break;
+    final png = await captureWidgetToPng(context, LocationShareCard(status: b));
+    if (png == null) continue;
+    tmp ??= await getTemporaryDirectory();
+    final file = File('${tmp.path}/env_card_${idx++}.png');
+    await file.writeAsBytes(png);
+    result.add(XFile(file.path, mimeType: 'image/png'));
+  }
+  return result;
 }
 
 /// 지정 날짜(scanDate)에 촬영된 갤러리 사진을 스캔해 메모에 일괄 추가한다.
@@ -755,7 +782,11 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refreshStatus();
+    if (state == AppLifecycleState.resumed) {
+      _refreshStatus();
+      // 대기 알림 스와이프로 감시가 중단됐으면 지도 아이콘을 정합화
+      ref.read(settingsProvider.notifier).reconcileCommuteActive();
+    }
   }
 
   /// 앱 시작 시 트래킹 상태를 정합화한다.

@@ -46,8 +46,10 @@ class CommuteAlarmService : Service() {
         const val KEY_WEEKDAYS_ONLY = "weekdaysOnly"
 
         const val ACTION_STOP_ALARM = "com.sgchoisg.nakkda.STOP_COMMUTE_ALARM"
+        const val ACTION_STOP_MONITOR = "com.sgchoisg.nakkda.STOP_COMMUTE_MONITOR"
 
-        private const val CHANNEL_MONITOR = "nakkda_commute_channel"
+        private const val CHANNEL_MONITOR = "nakkda_commute_channel_min"
+        private const val CHANNEL_MONITOR_OLD = "nakkda_commute_channel"
         private const val CHANNEL_ALARM = "nakkda_commute_alarm_channel"
         private const val NOTIF_MONITOR = 1006
         private const val NOTIF_ALARM = 1007
@@ -135,6 +137,14 @@ class CommuteAlarmService : Service() {
         if (intent?.action == ACTION_STOP_ALARM) {
             stopAlarm()
             return START_STICKY
+        }
+        if (intent?.action == ACTION_STOP_MONITOR) {
+            // 사용자가 대기 알림을 스와이프 → 감시 자체 중단.
+            // KEY_ENABLED=false로 명시적 중단을 기록(앱이 지도 아이콘을 정합화).
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_ENABLED, false).apply()
+            stopSelf()
+            return START_NOT_STICKY
         }
         startForegroundMonitor()
         loadConfig()
@@ -301,10 +311,11 @@ class CommuteAlarmService : Service() {
             .setContentText("설정한 지점 반경에 들어왔습니다")
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_ALARM)
-            .setOngoing(true)
+            .setOngoing(false)
             .setAutoCancel(false)
             .setFullScreenIntent(fullScreenPi, true)
             .setContentIntent(fullScreenPi)
+            .setDeleteIntent(stopPi) // 스와이프로 닫아도 알람 중단
             .addAction(0, "끄기", stopPi)
             .build()
         (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
@@ -313,12 +324,19 @@ class CommuteAlarmService : Service() {
 
     // ── 포그라운드 알림/채널 ───────────────────────────────
     private fun startForegroundMonitor() {
+        // 스와이프(사용자 직접 닫기) 시 감시 자체를 중단하는 deleteIntent
+        val stopMonitorPi = PendingIntent.getService(
+            this, 2,
+            Intent(this, CommuteAlarmService::class.java).apply { action = ACTION_STOP_MONITOR },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val notif = NotificationCompat.Builder(this, CHANNEL_MONITOR)
             .setSmallIcon(android.R.drawable.ic_menu_mylocation)
             .setContentTitle("출퇴근 알림 대기 중")
             .setContentText("감시 시간대에 지점 접근을 확인합니다")
-            .setPriority(NotificationCompat.PRIORITY_LOW)
-            .setOngoing(true)
+            .setPriority(NotificationCompat.PRIORITY_MIN)
+            .setOngoing(false) // Android 13+에서 스와이프 가능하도록
+            .setDeleteIntent(stopMonitorPi)
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_MONITOR, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
@@ -330,9 +348,11 @@ class CommuteAlarmService : Service() {
     private fun createChannels() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        // 옛 LOW 채널은 상태바 아이콘을 항상 표시 → MIN 채널로 교체하고 정리
+        try { nm.deleteNotificationChannel(CHANNEL_MONITOR_OLD) } catch (_: Exception) {}
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_MONITOR, "출퇴근 알림 감시",
-                NotificationManager.IMPORTANCE_LOW)
+                NotificationManager.IMPORTANCE_MIN)
         )
         nm.createNotificationChannel(
             NotificationChannel(CHANNEL_ALARM, "출퇴근 도착 알람",

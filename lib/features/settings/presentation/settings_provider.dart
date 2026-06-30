@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../data/settings_repository_impl.dart';
 import '../domain/models/app_settings.dart';
 import '../domain/settings_repository.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/services/tracking_service.dart';
+import '../../backup/presentation/backup_provider.dart';
 
 export '../domain/models/app_settings.dart'
     show
@@ -31,15 +33,33 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
   @override
   Future<AppSettings> build() async {
     final repo = ref.read(settingsRepositoryProvider);
-    final settings = await repo.load();
+    var settings = await repo.load();
     // 앱 시작 시 저장된 모드·민감도를 Android 서비스에 동기화
     await TrackingService()
         .setQuickLaunchMode(settings.quickLaunchMode.name, settings.shakeThresholdG);
-    // 출퇴근 알림 추적 중이면 네이티브 재동기화
+    // 출퇴근 알림 추적 중이면, 네이티브가 사용자 스와이프로 중단됐는지 확인 후 정합화.
+    // 중단됐으면 지도 아이콘을 끄고(active=false), 아니면 네이티브 재동기화.
     if (settings.commuteTracking) {
-      await TrackingService().commuteSync(_commuteConfig(settings));
+      final nativeActive = await TrackingService().commuteIsActive();
+      if (nativeActive) {
+        await TrackingService().commuteSync(_commuteConfig(settings));
+      } else {
+        settings = settings.copyWith(commuteAlarmActive: false);
+        await repo.save(settings);
+      }
     }
     return settings;
+  }
+
+  /// 앱 복귀 시 네이티브 감시 상태와 정합화.
+  /// 대기 알림을 스와이프해 중단한 경우 지도 아이콘을 끈다(active=false).
+  Future<void> reconcileCommuteActive() async {
+    final c = state.valueOrNull;
+    if (c == null || !c.commuteTracking) return;
+    final nativeActive = await TrackingService().commuteIsActive();
+    if (!nativeActive) {
+      await _applyCommute(c.copyWith(commuteAlarmActive: false));
+    }
   }
 
   // ── 지하철 출퇴근 알림 ──────────────────────────────
@@ -70,6 +90,60 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     } else {
       await TrackingService().commuteStop();
     }
+    // 변경된 출퇴근 설정을 드라이브에 자동 백업(백업 켜짐 + Wi-Fi일 때만)
+    unawaited(ref.read(backupProvider.notifier).backupCommuteSettings());
+  }
+
+  /// 출퇴근 설정(지점 포함)을 백업용 JSON 맵으로 직렬화.
+  Map<String, dynamic> commuteBackupJson() {
+    final s = state.valueOrNull;
+    if (s == null) return {};
+    return {
+      'enabled': s.commuteAlarmEnabled,
+      'active': s.commuteAlarmActive,
+      'radius': s.commuteRadius,
+      'sound': s.commuteSoundMode.name,
+      'pins': s.commutePins.map((p) => p.toJson()).toList(),
+      'amStart': s.commuteAmStart,
+      'amEnd': s.commuteAmEnd,
+      'pmStart': s.commutePmStart,
+      'pmEnd': s.commutePmEnd,
+      'customStart': s.commuteCustomStart,
+      'customEnd': s.commuteCustomEnd,
+      'amEnabled': s.commuteAmEnabled,
+      'pmEnabled': s.commutePmEnabled,
+      'customEnabled': s.commuteCustomEnabled,
+      'weekdaysOnly': s.commuteWeekdaysOnly,
+    };
+  }
+
+  /// 백업 JSON에서 출퇴근 설정 복원(저장 + 서비스 재동기화).
+  Future<void> restoreCommuteFromJson(Map<String, dynamic> j) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    final pins = (j['pins'] as List<dynamic>? ?? const [])
+        .map((e) => CommutePin.fromJson(e as Map<String, dynamic>))
+        .toList();
+    await _applyCommute(c.copyWith(
+      commuteAlarmEnabled: j['enabled'] as bool?,
+      commuteAlarmActive: j['active'] as bool?,
+      commuteRadius: j['radius'] as int?,
+      commuteSoundMode: CommuteSoundMode.values.firstWhere(
+        (e) => e.name == j['sound'],
+        orElse: () => c.commuteSoundMode,
+      ),
+      commutePins: pins,
+      commuteAmStart: j['amStart'] as int?,
+      commuteAmEnd: j['amEnd'] as int?,
+      commutePmStart: j['pmStart'] as int?,
+      commutePmEnd: j['pmEnd'] as int?,
+      commuteCustomStart: j['customStart'] as int?,
+      commuteCustomEnd: j['customEnd'] as int?,
+      commuteAmEnabled: j['amEnabled'] as bool?,
+      commutePmEnabled: j['pmEnabled'] as bool?,
+      commuteCustomEnabled: j['customEnabled'] as bool?,
+      commuteWeekdaysOnly: j['weekdaysOnly'] as bool?,
+    ));
   }
 
   Future<void> updateCommuteEnabled(bool value) async {

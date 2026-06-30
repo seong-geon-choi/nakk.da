@@ -60,6 +60,15 @@ class TrackingService {
     } catch (_) {}
   }
 
+  /// 네이티브 출퇴근 감시 활성 여부. 알림 스와이프로 중단되면 false.
+  Future<bool> commuteIsActive() async {
+    try {
+      return await _channel.invokeMethod<bool>('commuteIsActive') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<List<TrackPoint>> getAndClearTrackPoints() async {
     try {
       final list =
