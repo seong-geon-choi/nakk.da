@@ -1,4 +1,6 @@
+import 'dart:convert';
 import '../domain/models/memo_entry.dart';
+import '../domain/models/outing_info.dart';
 import '../../location/domain/models/location_status.dart';
 import '../../tide/domain/models/tide_station.dart';
 import '../../weather/data/weather_service.dart';
@@ -69,6 +71,39 @@ class MdSerializer {
         '${weatherLine.isNotEmpty ? '- $weatherLine\n' : ''}'
         '$metaComment'
         '$tidesComment';
+  }
+
+  /// 출조 정보(태클·조과)를 헤더 뒤 섹션 + 숨김 주석(JSON)으로 직렬화.
+  /// 읽기 좋은 섹션은 사람용, 숨김 주석은 정확한 복원용(물때 주석과 동일 방식).
+  static String serializeOuting(OutingInfo o) {
+    if (o.isEmpty) return '';
+    final sb = StringBuffer('\n## 출조정보\n');
+    for (var i = 0; i < o.tackles.length; i++) {
+      final t = o.tackles[i];
+      if (t.isEmpty) continue;
+      final parts =
+          [t.rod, t.reel, t.line, t.rig].where((s) => s.isNotEmpty).join(' / ');
+      sb.writeln('- 🎣 태클${i + 1}: $parts');
+    }
+    final catchStr = o.catches
+        .where((e) => e.species.isNotEmpty)
+        .map((e) => '${e.species} ${e.count}')
+        .join(', ');
+    if (catchStr.isNotEmpty) sb.writeln('- 🐟 조과: $catchStr');
+    sb.writeln('[//]: # (outing:${jsonEncode(o.toJson())})');
+    return sb.toString();
+  }
+
+  /// 숨김 주석에서 출조 정보 복원. 없으면 null.
+  static OutingInfo? parseOuting(String content) {
+    final m = RegExp(r'\[//\]: # \(outing:(.*)\)\s*$', multiLine: true)
+        .firstMatch(content);
+    if (m == null) return null;
+    try {
+      return OutingInfo.fromJson(jsonDecode(m.group(1)!) as Map<String, dynamic>);
+    } catch (_) {
+      return null;
+    }
   }
 
   static String fileHeader(DateTime date) {
@@ -334,8 +369,11 @@ class MdSerializer {
   // ── 전체 재빌드 ────────────────────────────────────────
 
   static String buildFullContent(DateTime date, List<dynamic> blocks,
-      [List<TrackPoint> trackPoints = const []]) {
+      [List<TrackPoint> trackPoints = const [], OutingInfo? outing]) {
     final sb = StringBuffer(fileHeader(date));
+    if (outing != null && !outing.isEmpty) {
+      sb.write(serializeOuting(outing));
+    }
     for (final block in blocks) {
       if (block is LocationStatus) {
         sb.write(serializeLocationBlock(block));

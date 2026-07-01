@@ -20,6 +20,7 @@ import '../../features/memo/presentation/memo_provider.dart';
 import '../../features/backup/presentation/backup_provider.dart';
 import '../../features/memo/presentation/memo_input_sheet.dart';
 import '../../features/memo/presentation/location_edit_sheet.dart';
+import '../../features/memo/presentation/outing_edit_sheet.dart';
 import '../../features/settings/presentation/settings_provider.dart';
 import '../../features/location/presentation/location_provider.dart';
 import '../../features/file_list/presentation/file_list_provider.dart';
@@ -1348,31 +1349,50 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
         message: '불러오기 실패',
         subMessage: e.toString(),
       ),
-      data: (dayFile) => GestureDetector(
-        // 카드가 없는 빈 영역 가로 스와이프 → 이전/이후 날짜 메모 이동
-        // (카드 위 가로 스와이프는 자식 _SwipeItem이 우선 처리: 편집/삭제)
-        behavior: HitTestBehavior.translucent,
-        onHorizontalDragEnd: (details) {
-          final v = details.primaryVelocity;
-          if (v == null) return;
-          if (v < -250) {
-            _navigateDay(1); // 왼쪽 스와이프 → 이후(미래) 날짜
-          } else if (v > 250) {
-            _navigateDay(-1); // 오른쪽 스와이프 → 이전(과거) 날짜
-          }
-        },
-        child: _Body(
-          dayFile: dayFile,
-          onEditMemoSave: (idx, entry) => notifier.editBlock(idx, entry),
-          onEditLocationSave: (idx, loc) => notifier.editBlock(idx, loc),
-          onRemoveBlock: (idx) => notifier.removeBlock(idx),
-          onRefresh: () async {
-            ref.invalidate(dayFileProvider(path));
-            ref.invalidate(fileListProvider);
-            await ref.read(dayFileProvider(path).future);
+      data: (dayFile) {
+        final body = GestureDetector(
+          // 카드가 없는 빈 영역 가로 스와이프 → 이전/이후 날짜 메모 이동
+          // (카드 위 가로 스와이프는 자식 _SwipeItem이 우선 처리: 편집/삭제)
+          behavior: HitTestBehavior.translucent,
+          onHorizontalDragEnd: (details) {
+            final v = details.primaryVelocity;
+            if (v == null) return;
+            if (v < -250) {
+              _navigateDay(1); // 왼쪽 스와이프 → 이후(미래) 날짜
+            } else if (v > 250) {
+              _navigateDay(-1); // 오른쪽 스와이프 → 이전(과거) 날짜
+            }
           },
-        ),
-      ),
+          child: _Body(
+            dayFile: dayFile,
+            onEditMemoSave: (idx, entry) => notifier.editBlock(idx, entry),
+            onEditLocationSave: (idx, loc) => notifier.editBlock(idx, loc),
+            onRemoveBlock: (idx) => notifier.removeBlock(idx),
+            onRefresh: () async {
+              ref.invalidate(dayFileProvider(path));
+              ref.invalidate(fileListProvider);
+              await ref.read(dayFileProvider(path).future);
+            },
+          ),
+        );
+        // 낚시-복잡 모드: 상단에 출조 정보(태클·조과) 카드 노출
+        if (!(settingsAsync.valueOrNull?.showComplexInput ?? false)) {
+          return body;
+        }
+        return Column(
+          children: [
+            OutingSummaryCard(
+              outing: dayFile?.outing,
+              onTap: () => OutingEditSheet.show(
+                context,
+                initial: dayFile?.outing,
+                onSave: (o) => notifier.updateOuting(o),
+              ),
+            ),
+            Expanded(child: body),
+          ],
+        );
+      },
     );
 
     return Scaffold(

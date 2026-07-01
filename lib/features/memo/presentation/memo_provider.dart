@@ -4,6 +4,7 @@ import '../data/memo_repository_impl.dart';
 import '../domain/memo_repository.dart';
 import '../domain/models/day_file.dart';
 import '../domain/models/memo_entry.dart';
+import '../domain/models/outing_info.dart';
 import '../../location/domain/models/location_status.dart';
 import '../../settings/presentation/settings_provider.dart';
 import '../../backup/presentation/backup_provider.dart';
@@ -60,6 +61,16 @@ class DayFileNotifier extends FamilyAsyncNotifier<DayFile?, String> {
     if (entry.videoPath != null) {
       unawaited(ref.read(backupProvider.notifier).syncMediaFile(entry.videoPath!));
     }
+  }
+
+  /// 하루 단위 출조 정보(태클·조과) 저장.
+  Future<void> updateOuting(OutingInfo outing) async {
+    final savePath = _savePath;
+    if (savePath == null) return;
+    await ref.read(memoRepositoryProvider).saveOuting(_date, outing, savePath);
+    ref.invalidateSelf();
+    ref.invalidate(fileListProvider);
+    unawaited(ref.read(backupProvider.notifier).syncMdFile(_date, savePath));
   }
 
   Future<void> addLocationBlock(LocationStatus loc) async {

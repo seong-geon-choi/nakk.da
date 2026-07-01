@@ -3,6 +3,7 @@ import 'dart:io';
 import '../domain/memo_repository.dart';
 import '../domain/models/day_file.dart';
 import '../domain/models/memo_entry.dart';
+import '../domain/models/outing_info.dart';
 import '../../location/domain/models/location_status.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/services/tracking_service.dart';
@@ -51,8 +52,33 @@ class MemoRepositoryImpl implements MemoRepository {
     if (content == null) return null;
     final blocks = MdSerializer.parseBlocks(content, date);
     final trackPoints = MdSerializer.parseTrackPoints(content);
-    return DayFile(date: date, filePath: '$savePath/$filename', blocks: blocks, trackPoints: trackPoints);
+    final outing = MdSerializer.parseOuting(content);
+    return DayFile(
+        date: date,
+        filePath: '$savePath/$filename',
+        blocks: blocks,
+        trackPoints: trackPoints,
+        outing: outing);
   }
+
+  @override
+  Future<void> saveOuting(DateTime date, OutingInfo outing, String savePath) =>
+      _withLock(_lockKey(date, savePath), () async {
+        final filename = _filenameFor(date);
+        final dayFile = await loadDayFile(date, savePath);
+        final blocks = dayFile?.blocks ?? const [];
+        final points = dayFile?.trackPoints ?? const [];
+        final content =
+            MdSerializer.buildFullContent(date, blocks, points, outing);
+        if (SafService.isSafUri(savePath)) {
+          await _safEnsureHeader(savePath, filename, date);
+          await _saf.writeFile(savePath, filename, content);
+        } else {
+          final file = File('$savePath/$filename');
+          await _ensureHeader(file, date);
+          await file.writeAsString(content);
+        }
+      });
 
   @override
   Future<void> appendEntry(DateTime date, MemoEntry entry, String savePath) =>
@@ -128,8 +154,11 @@ class MemoRepositoryImpl implements MemoRepository {
           if (dayFile == null || blockIndex >= dayFile.blocks.length) return;
           final blocks = List<dynamic>.from(dayFile.blocks);
           blocks[blockIndex] = newBlock;
-          await _saf.writeFile(savePath, filename,
-              MdSerializer.buildFullContent(date, blocks, dayFile.trackPoints));
+          await _saf.writeFile(
+              savePath,
+              filename,
+              MdSerializer.buildFullContent(
+                  date, blocks, dayFile.trackPoints, dayFile.outing));
         } else {
           final file = File('$savePath/$filename');
           if (!await file.exists()) return;
@@ -137,8 +166,8 @@ class MemoRepositoryImpl implements MemoRepository {
           if (dayFile == null || blockIndex >= dayFile.blocks.length) return;
           final blocks = List<dynamic>.from(dayFile.blocks);
           blocks[blockIndex] = newBlock;
-          await file.writeAsString(
-              MdSerializer.buildFullContent(date, blocks, dayFile.trackPoints));
+          await file.writeAsString(MdSerializer.buildFullContent(
+              date, blocks, dayFile.trackPoints, dayFile.outing));
         }
       });
 
@@ -149,8 +178,8 @@ class MemoRepositoryImpl implements MemoRepository {
         final dayFile = await loadDayFile(date, savePath);
         if (dayFile == null || blockIndex >= dayFile.blocks.length) return;
         final blocks = List<dynamic>.from(dayFile.blocks)..removeAt(blockIndex);
-        final content =
-            MdSerializer.buildFullContent(date, blocks, dayFile.trackPoints);
+        final content = MdSerializer.buildFullContent(
+            date, blocks, dayFile.trackPoints, dayFile.outing);
         if (SafService.isSafUri(savePath)) {
           await _saf.writeFile(savePath, filename, content);
         } else {

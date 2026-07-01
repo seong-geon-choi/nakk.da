@@ -456,7 +456,10 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     final mergedPoints = pointMap.values.toList()
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
 
-    return MdSerializer.buildFullContent(date, sorted, mergedPoints);
+    // 출조 정보는 로컬 우선, 없으면 원격 것을 보존
+    final outing =
+        MdSerializer.parseOuting(local) ?? MdSerializer.parseOuting(remote);
+    return MdSerializer.buildFullContent(date, sorted, mergedPoints, outing);
   }
 
   String _blockKey(dynamic b) => _blockTs(b).toIso8601String();

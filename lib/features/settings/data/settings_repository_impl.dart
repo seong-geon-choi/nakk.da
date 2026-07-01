@@ -13,7 +13,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _autoLocationOnFirstEntryKey = 'auto_location_on_first_entry';
   static const _autoSaveVoiceKey = 'auto_save_voice';
   static const _showAddressInMemoNameKey = 'show_address_in_memo_name';
-  static const _showCatchInputKey = 'show_catch_input';
+  static const _showCatchInputKey = 'show_catch_input'; // 구버전 마이그레이션용
+  static const _memoComplexityKey = 'memo_complexity';
   static const _shareEnabledKey = 'share_enabled';
   static const _adsEnabledKey = 'ads_enabled';
   static const _khoaApiKeyKey = 'khoa_api_key';
@@ -29,6 +30,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _lastSyncSuccessKey = 'last_sync_success';
   static const _fishSpeciesKey = 'fish_species';
   static const _hiddenFishSpeciesKey = 'hidden_fish_species';
+  static const _tackleRodsKey = 'tackle_rods';
+  static const _tackleReelsKey = 'tackle_reels';
+  static const _tackleLinesKey = 'tackle_lines';
+  static const _tackleRigsKey = 'tackle_rigs';
   static const _locationFabRightKey = 'location_fab_right';
   static const _locationFabBottomKey = 'location_fab_bottom';
   static const _trackingFabRightKey = 'tracking_fab_right';
@@ -65,7 +70,13 @@ class SettingsRepositoryImpl implements SettingsRepository {
         prefs.getBool(_autoLocationOnFirstEntryKey) ?? false;
     final autoSaveVoice = prefs.getBool(_autoSaveVoiceKey) ?? true;
     final showAddressInMemoName = prefs.getBool(_showAddressInMemoNameKey) ?? true;
-    final showCatchInput = prefs.getBool(_showCatchInputKey) ?? true;
+    // 신규 키 우선, 없으면 구버전 show_catch_input에서 마이그레이션(true→단순, false→일반)
+    final memoComplexity = MemoComplexity.values.firstWhere(
+      (e) => e.name == prefs.getString(_memoComplexityKey),
+      orElse: () => (prefs.getBool(_showCatchInputKey) ?? true)
+          ? MemoComplexity.simpleFishing
+          : MemoComplexity.general,
+    );
     final shareEnabled = prefs.getBool(_shareEnabledKey) ?? true;
     final adsEnabled = prefs.getBool(_adsEnabledKey) ?? false;
     final khoaApiKey = prefs.getString(_khoaApiKeyKey);
@@ -99,6 +110,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
             ...kCommonFishSpecies.where((s) => !savedFishSpecies.contains(s)),
           ];
     final hiddenFishSpecies = prefs.getStringList(_hiddenFishSpeciesKey) ?? const [];
+    final tackleRods = prefs.getStringList(_tackleRodsKey) ?? const [];
+    final tackleReels = prefs.getStringList(_tackleReelsKey) ?? const [];
+    final tackleLines = prefs.getStringList(_tackleLinesKey) ?? const [];
+    final tackleRigs = prefs.getStringList(_tackleRigsKey) ?? const [];
     final locationFabRight = prefs.getDouble(_locationFabRightKey) ?? 16;
     final locationFabBottom = prefs.getDouble(_locationFabBottomKey) ?? 100;
     final trackingFabRight = prefs.getDouble(_trackingFabRightKey) ?? 16;
@@ -136,7 +151,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       autoLocationOnFirstEntry: autoLocationOnFirstEntry,
       autoSaveVoice: autoSaveVoice,
       showAddressInMemoName: showAddressInMemoName,
-      showCatchInput: showCatchInput,
+      memoComplexity: memoComplexity,
       shareEnabled: shareEnabled,
       adsEnabled: adsEnabled,
       khoaApiKey: khoaApiKey,
@@ -152,6 +167,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
       lastSyncSuccess: lastSyncSuccessRaw,
       fishSpecies: fishSpecies, // null이면 AppSettings 기본값(kCommonFishSpecies)
       hiddenFishSpecies: hiddenFishSpecies,
+      tackleRods: tackleRods,
+      tackleReels: tackleReels,
+      tackleLines: tackleLines,
+      tackleRigs: tackleRigs,
       locationFabRight: locationFabRight,
       locationFabBottom: locationFabBottom,
       trackingFabRight: trackingFabRight,
@@ -185,7 +204,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
         _autoLocationOnFirstEntryKey, settings.autoLocationOnFirstEntry);
     await prefs.setBool(_autoSaveVoiceKey, settings.autoSaveVoice);
     await prefs.setBool(_showAddressInMemoNameKey, settings.showAddressInMemoName);
-    await prefs.setBool(_showCatchInputKey, settings.showCatchInput);
+    await prefs.setString(_memoComplexityKey, settings.memoComplexity.name);
     await prefs.setBool(_shareEnabledKey, settings.shareEnabled);
     await prefs.setBool(_adsEnabledKey, settings.adsEnabled);
     if (settings.khoaApiKey != null) {
@@ -213,6 +232,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
     }
     await prefs.setStringList(_fishSpeciesKey, settings.fishSpecies);
     await prefs.setStringList(_hiddenFishSpeciesKey, settings.hiddenFishSpecies);
+    await prefs.setStringList(_tackleRodsKey, settings.tackleRods);
+    await prefs.setStringList(_tackleReelsKey, settings.tackleReels);
+    await prefs.setStringList(_tackleLinesKey, settings.tackleLines);
+    await prefs.setStringList(_tackleRigsKey, settings.tackleRigs);
     await prefs.setDouble(_locationFabRightKey, settings.locationFabRight);
     await prefs.setDouble(_locationFabBottomKey, settings.locationFabBottom);
     await prefs.setDouble(_trackingFabRightKey, settings.trackingFabRight);

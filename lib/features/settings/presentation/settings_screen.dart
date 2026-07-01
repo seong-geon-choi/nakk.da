@@ -117,14 +117,34 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               onChanged: (v) =>
                   ref.read(settingsProvider.notifier).updateShowAddressInMemoName(v),
             ),
-            SwitchListTile(
-              secondary: const Icon(Icons.phishing),
-              title: const Text('낚시용 입력 항목'),
-              subtitle:
-                  const Text('메모 작성 시 어종 관련 항목을 포함/제외합니다'),
-              value: settings.showCatchInput,
-              onChanged: (v) =>
-                  ref.read(settingsProvider.notifier).updateShowCatchInput(v),
+            ListTile(
+              leading: const Icon(Icons.phishing),
+              title: const Text('메모 입력 항목'),
+              subtitle: Text(switch (settings.memoComplexity) {
+                MemoComplexity.simpleFishing => '낚시-단순: 현장정보 + 메모(조과)',
+                MemoComplexity.complexFishing =>
+                  '낚시-복잡: + 태클·선사 정보',
+                MemoComplexity.general => '일반: 어종·길이 제외',
+              }),
+              trailing: DropdownButton<MemoComplexity>(
+                value: settings.memoComplexity,
+                underline: const SizedBox.shrink(),
+                items: const [
+                  DropdownMenuItem(
+                      value: MemoComplexity.simpleFishing,
+                      child: Text('낚시-단순')),
+                  DropdownMenuItem(
+                      value: MemoComplexity.complexFishing,
+                      child: Text('낚시-복잡')),
+                  DropdownMenuItem(
+                      value: MemoComplexity.general, child: Text('일반')),
+                ],
+                onChanged: (v) {
+                  if (v != null) {
+                    ref.read(settingsProvider.notifier).updateMemoComplexity(v);
+                  }
+                },
+              ),
             ),
             SwitchListTile(
               secondary: const Icon(Icons.ios_share),

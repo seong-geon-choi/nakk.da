@@ -19,7 +19,9 @@ export '../domain/models/app_settings.dart'
         QuickLaunchMode,
         CommuteSoundMode,
         CommuteWindow,
-        CommutePin;
+        CommutePin,
+        MemoComplexity,
+        TackleField;
 
 final settingsRepositoryProvider = Provider<SettingsRepository>(
   (ref) => SettingsRepositoryImpl(),
@@ -335,10 +337,40 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     state = AsyncData(updated);
   }
 
-  Future<void> updateShowCatchInput(bool value) async {
+  Future<void> updateMemoComplexity(MemoComplexity mode) async {
     final current = state.valueOrNull;
     if (current == null) return;
-    final updated = current.copyWith(showCatchInput: value);
+    final updated = current.copyWith(memoComplexity: mode);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  // ── 태클 프리셋 ───────────────────────────────────────
+  AppSettings _copyTackle(
+          AppSettings c, TackleField f, List<String> list) =>
+      switch (f) {
+        TackleField.rod => c.copyWith(tackleRods: list),
+        TackleField.reel => c.copyWith(tackleReels: list),
+        TackleField.line => c.copyWith(tackleLines: list),
+        TackleField.rig => c.copyWith(tackleRigs: list),
+      };
+
+  /// 태클 프리셋 추가(중복·공백 무시, 최신순 맨 앞).
+  Future<void> addTacklePreset(TackleField field, String value) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    final v = value.trim();
+    if (v.isEmpty || c.tacklePresetsFor(field).contains(v)) return;
+    final updated = _copyTackle(c, field, [v, ...c.tacklePresetsFor(field)]);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  Future<void> removeTacklePreset(TackleField field, String value) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    final updated = _copyTackle(
+        c, field, c.tacklePresetsFor(field).where((s) => s != value).toList());
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
   }

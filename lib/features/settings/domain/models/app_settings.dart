@@ -344,6 +344,15 @@ enum CommuteSoundMode { vibrateOnly, vibrateBell, bell, silent, systemDefault }
 /// 출퇴근 알림 감시 시간대(지점별 할당)
 enum CommuteWindow { am, pm, custom }
 
+/// 메모 입력항목 복잡도
+/// - simpleFishing: 현장정보 + 메모(조과 포함)
+/// - complexFishing: + 태클 정보, 선사 정보
+/// - general: 현장정보 + 메모(어종·길이 제외)
+enum MemoComplexity { simpleFishing, complexFishing, general }
+
+/// 태클 프리셋 항목 종류(로드/릴/라인/채비)
+enum TackleField { rod, reel, line, rig }
+
 /// 출퇴근 알림 지점(지도에서 길게 눌러 지정)
 class CommutePin {
   final double lat;
@@ -379,7 +388,7 @@ class AppSettings {
   final bool autoLocationOnFirstEntry; // 첫 기록 시 현장 정보 1회 자동 추가
   final bool autoSaveVoice;
   final bool showAddressInMemoName;
-  final bool showCatchInput; // 메모 작성 시 어종·길이 입력 항목 표시 여부
+  final MemoComplexity memoComplexity; // 메모 입력항목 복잡도(단순/복잡/일반)
   final bool shareEnabled; // 메모 공유 버튼 표시 여부 (향후 유료화 대비 토글)
   final bool adsEnabled; // 광고 노출 여부 (개발자 메뉴 토글, 기본 off)
   final String? khoaApiKey;
@@ -395,6 +404,11 @@ class AppSettings {
   final bool? lastSyncSuccess;
   final List<String> fishSpecies; // 어종 입력 목록 (사용자 편집 가능)
   final List<String> hiddenFishSpecies; // 메모 드롭다운에서 숨길(체크 해제) 어종
+  // 태클 프리셋(입력 시 셀렉트박스로 재사용, 최신순)
+  final List<String> tackleRods;
+  final List<String> tackleReels;
+  final List<String> tackleLines;
+  final List<String> tackleRigs;
   final double locationFabRight;  // 홈 '환경 추가' FAB 위치 (right)
   final double locationFabBottom; // 홈 '환경 추가' FAB 위치 (bottom)
   final double trackingFabRight;  // 홈 트래킹 FAB 위치 (right)
@@ -422,6 +436,20 @@ class AppSettings {
   bool get commuteTracking =>
       commuteAlarmEnabled && commuteAlarmActive && commutePins.isNotEmpty;
 
+  /// 조과(어종·길이) 입력 표시 여부 — 일반 모드에서만 숨김
+  bool get showCatchInput => memoComplexity != MemoComplexity.general;
+
+  /// 태클·선사 등 복잡 항목 표시 여부
+  bool get showComplexInput => memoComplexity == MemoComplexity.complexFishing;
+
+  /// 태클 항목별 프리셋 목록
+  List<String> tacklePresetsFor(TackleField f) => switch (f) {
+        TackleField.rod => tackleRods,
+        TackleField.reel => tackleReels,
+        TackleField.line => tackleLines,
+        TackleField.rig => tackleRigs,
+      };
+
   /// 메모 작성 드롭다운에 노출할 어종 (숨김 제외).
   /// 주의: 음성/메모 텍스트 어종 탐지는 항상 전체 [fishSpecies]를 사용한다.
   List<String> get visibleFishSpecies =>
@@ -435,7 +463,7 @@ class AppSettings {
     this.autoLocationOnFirstEntry = false,
     this.autoSaveVoice = true,
     this.showAddressInMemoName = true,
-    this.showCatchInput = true,
+    this.memoComplexity = MemoComplexity.simpleFishing,
     this.shareEnabled = true,
     this.adsEnabled = false,
     this.khoaApiKey,
@@ -470,6 +498,10 @@ class AppSettings {
     this.commuteCustomEnabled = false,
     this.commuteWeekdaysOnly = true,
     this.commuteAlarmActive = true,
+    this.tackleRods = const [],
+    this.tackleReels = const [],
+    this.tackleLines = const [],
+    this.tackleRigs = const [],
   })  : watermark = watermark ?? WatermarkSettings(),
         fishSpecies = fishSpecies ?? kCommonFishSpecies,
         hiddenFishSpecies = hiddenFishSpecies ?? const [];
@@ -487,7 +519,7 @@ class AppSettings {
     bool? autoLocationOnFirstEntry,
     bool? autoSaveVoice,
     bool? showAddressInMemoName,
-    bool? showCatchInput,
+    MemoComplexity? memoComplexity,
     bool? shareEnabled,
     bool? adsEnabled,
     String? khoaApiKey,
@@ -505,6 +537,10 @@ class AppSettings {
     bool clearLastSync = false,
     List<String>? fishSpecies,
     List<String>? hiddenFishSpecies,
+    List<String>? tackleRods,
+    List<String>? tackleReels,
+    List<String>? tackleLines,
+    List<String>? tackleRigs,
     double? locationFabRight,
     double? locationFabBottom,
     double? trackingFabRight,
@@ -534,7 +570,7 @@ class AppSettings {
           autoLocationOnFirstEntry ?? this.autoLocationOnFirstEntry,
       autoSaveVoice: autoSaveVoice ?? this.autoSaveVoice,
       showAddressInMemoName: showAddressInMemoName ?? this.showAddressInMemoName,
-      showCatchInput: showCatchInput ?? this.showCatchInput,
+      memoComplexity: memoComplexity ?? this.memoComplexity,
       shareEnabled: shareEnabled ?? this.shareEnabled,
       adsEnabled: adsEnabled ?? this.adsEnabled,
       khoaApiKey: clearKhoaApiKey ? null : (khoaApiKey ?? this.khoaApiKey),
@@ -550,6 +586,10 @@ class AppSettings {
       lastSyncSuccess: clearLastSync ? null : (lastSyncSuccess ?? this.lastSyncSuccess),
       fishSpecies: fishSpecies ?? this.fishSpecies,
       hiddenFishSpecies: hiddenFishSpecies ?? this.hiddenFishSpecies,
+      tackleRods: tackleRods ?? this.tackleRods,
+      tackleReels: tackleReels ?? this.tackleReels,
+      tackleLines: tackleLines ?? this.tackleLines,
+      tackleRigs: tackleRigs ?? this.tackleRigs,
       locationFabRight: locationFabRight ?? this.locationFabRight,
       locationFabBottom: locationFabBottom ?? this.locationFabBottom,
       trackingFabRight: trackingFabRight ?? this.trackingFabRight,
