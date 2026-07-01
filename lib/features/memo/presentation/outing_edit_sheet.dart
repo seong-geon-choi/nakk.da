@@ -45,31 +45,44 @@ class OutingSummaryCard extends StatelessWidget {
               const Text('🎣', style: TextStyle(fontSize: 18)),
               const SizedBox(width: 10),
               Expanded(
-                child: empty
-                    ? Text('출조 정보 추가 (태클·조과)',
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('출조정보 (선박/태클/조과)',
                         style: TextStyle(
                             fontSize: 13,
-                            color: cs.onSurface.withValues(alpha: 0.6)))
-                    : Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                              vesselStr.isNotEmpty
-                                  ? '⛴ $vesselStr · 태클 $tackleCount세트'
-                                  : '태클 $tackleCount세트',
-                              style: const TextStyle(
-                                  fontSize: 13, fontWeight: FontWeight.w600)),
-                          if (catchStr.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(top: 2),
-                              child: Text('🐟 $catchStr',
-                                  style: TextStyle(
-                                      fontSize: 12,
-                                      color:
-                                          cs.onSurface.withValues(alpha: 0.7))),
-                            ),
-                        ],
+                            fontWeight: FontWeight.w700,
+                            color: cs.primary)),
+                    if (empty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text('탭하여 추가',
+                            style: TextStyle(
+                                fontSize: 12,
+                                color: cs.onSurface.withValues(alpha: 0.6))),
+                      )
+                    else ...[
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(
+                            vesselStr.isNotEmpty
+                                ? '⛴ $vesselStr · 태클 $tackleCount세트'
+                                : '태클 $tackleCount세트',
+                            style: const TextStyle(
+                                fontSize: 12, fontWeight: FontWeight.w600)),
                       ),
+                      if (catchStr.isNotEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 2),
+                          child: Text('🐟 $catchStr',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  color:
+                                      cs.onSurface.withValues(alpha: 0.7))),
+                        ),
+                    ],
+                  ],
+                ),
               ),
               Icon(Icons.edit_outlined,
                   size: 18, color: cs.onSurface.withValues(alpha: 0.5)),
@@ -85,12 +98,14 @@ class OutingSummaryCard extends StatelessWidget {
 class OutingEditSheet extends ConsumerStatefulWidget {
   final OutingInfo? initial;
   final List<TideEvent> tides; // 당일 물때(조위 그래프용)
+  final String? tideName; // 당일 물때명(예: 3물)
   final Future<void> Function(OutingInfo) onSave;
 
   const OutingEditSheet({
     super.key,
     this.initial,
     this.tides = const [],
+    this.tideName,
     required this.onSave,
   });
 
@@ -98,6 +113,7 @@ class OutingEditSheet extends ConsumerStatefulWidget {
     BuildContext context, {
     OutingInfo? initial,
     List<TideEvent> tides = const [],
+    String? tideName,
     required Future<void> Function(OutingInfo) onSave,
   }) {
     return showModalBottomSheet(
@@ -106,8 +122,8 @@ class OutingEditSheet extends ConsumerStatefulWidget {
       constraints: BoxConstraints(
         maxWidth: math.min(MediaQuery.of(context).size.width, 600),
       ),
-      builder: (_) =>
-          OutingEditSheet(initial: initial, tides: tides, onSave: onSave),
+      builder: (_) => OutingEditSheet(
+          initial: initial, tides: tides, tideName: tideName, onSave: onSave),
     );
   }
 
@@ -131,11 +147,15 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
   final _vPoint = TextEditingController();
   final _vFishType = TextEditingController();
   final _vDepth = TextEditingController();
+  final _vReview = TextEditingController();
   int _departMin = 300;
   int _arriveMin = 960;
   int _rating = 0;
   int _tackleVisible = 1; // 화면에 표시할 태클 세트 수(+ 버튼으로 증가)
   final _scrollCtrl = ScrollController();
+  bool _vesselExpanded = true;
+  bool _tackleExpanded = true;
+  bool _catchExpanded = true;
 
   @override
   void initState() {
@@ -150,6 +170,7 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
       _vPoint.text = v.point;
       _vFishType.text = v.fishType;
       if (v.avgDepth != null) _vDepth.text = _fmtDepth(v.avgDepth!);
+      _vReview.text = v.review;
       _departMin = v.departMin;
       _arriveMin = v.arriveMin;
       _rating = v.rating;
@@ -186,6 +207,7 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
     _vPoint.dispose();
     _vFishType.dispose();
     _vDepth.dispose();
+    _vReview.dispose();
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -245,15 +267,27 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    _vesselSection(),
-                    const Divider(height: 20),
-                    _tackleHeader(),
-                    for (var i = 0; i < _tackleVisible; i++) ...[
-                      const SizedBox(height: 6),
-                      _tackleSet(i),
-                    ],
-                    const Divider(height: 20),
-                    _catchSection(),
+                    _expandable(
+                      title: '선사 정보',
+                      expanded: _vesselExpanded,
+                      onToggle: () => setState(
+                          () => _vesselExpanded = !_vesselExpanded),
+                      child: _vesselSection(),
+                    ),
+                    _expandable(
+                      title: '태클 정보',
+                      expanded: _tackleExpanded,
+                      onToggle: () => setState(
+                          () => _tackleExpanded = !_tackleExpanded),
+                      child: _tackleBody(),
+                    ),
+                    _expandable(
+                      title: '최종 조과',
+                      expanded: _catchExpanded,
+                      onToggle: () =>
+                          setState(() => _catchExpanded = !_catchExpanded),
+                      child: _catchSection(),
+                    ),
                   ],
                 ),
               ),
@@ -284,25 +318,64 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
     );
   }
 
-  // ── 태클 세트 ─────────────────────────────────────────
-  Widget _tackleHeader() {
-    return Row(
+  /// 접기/펼치기 가능한 섹션(제목 헤더 + 본문). 제목은 강조색.
+  Widget _expandable({
+    required String title,
+    required bool expanded,
+    required VoidCallback onToggle,
+    required Widget child,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        const Text('태클',
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-        const Spacer(),
+        InkWell(
+          onTap: onToggle,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 10),
+            child: Row(
+              children: [
+                _sectionTitle(title),
+                const Spacer(),
+                Icon(expanded ? Icons.expand_less : Icons.expand_more,
+                    size: 22, color: Theme.of(context).colorScheme.primary),
+              ],
+            ),
+          ),
+        ),
+        if (expanded)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 4),
+            child: child,
+          ),
+        const Divider(height: 1, thickness: 1.2),
+      ],
+    );
+  }
+
+  // ── 태클 세트 ─────────────────────────────────────────
+  Widget _tackleBody() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (var i = 0; i < _tackleVisible; i++) ...[
+          if (i > 0) const SizedBox(height: 8),
+          _tackleSet(i),
+        ],
         if (_tackleVisible < _maxTackles)
-          TextButton.icon(
-            onPressed: () {
-              setState(() => _tackleVisible++);
-              _scrollToEnd();
-            },
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('추가'),
-            style: TextButton.styleFrom(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                minimumSize: Size.zero,
-                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () {
+                setState(() => _tackleVisible++);
+                _scrollToEnd();
+              },
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('태클 추가'),
+              style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+            ),
           ),
       ],
     );
@@ -314,7 +387,7 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
       children: [
         Text('태클 ${index + 1}',
             style: TextStyle(
-                fontSize: 12,
+                fontSize: 13,
                 fontWeight: FontWeight.w600,
                 color: Theme.of(context).colorScheme.onSurfaceVariant)),
         const SizedBox(height: 6),
@@ -381,12 +454,17 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
   Widget _presetDropdown(TextEditingController ctrl, String label,
           List<String> presets, void Function(String) onRemovePreset) =>
       PopupMenuButton<String>(
-        icon: const Icon(Icons.arrow_drop_down, size: 22),
+        // icon: 대신 child: 사용 → 내부 IconButton(48px 최소높이) 제거해 필드 높이 통일
         tooltip: '$label 선택',
         enabled: presets.isNotEmpty,
         padding: EdgeInsets.zero,
-        splashRadius: 18,
         onSelected: (v) => setState(() => ctrl.text = v),
+        child: Icon(Icons.arrow_drop_down,
+            size: 24,
+            color: Theme.of(context)
+                .colorScheme
+                .onSurface
+                .withValues(alpha: presets.isEmpty ? 0.25 : 0.7)),
         itemBuilder: (_) => [
           for (final p in presets)
             PopupMenuItem<String>(
@@ -410,6 +488,13 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
         ],
       );
 
+  /// 강조된 섹션 제목(색상)
+  Widget _sectionTitle(String t) => Text(t,
+      style: TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w700,
+          color: Theme.of(context).colorScheme.primary));
+
   // ── 선사 정보 ─────────────────────────────────────────
   Widget _vesselSection() {
     final s = ref.watch(settingsProvider).valueOrNull;
@@ -425,9 +510,6 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        const Text('선사 정보',
-            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-        const SizedBox(height: 6),
         Row(
           children: [
             Expanded(child: vesselField(VesselField.name, _vName, '선박명')),
@@ -447,7 +529,9 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
                     '입항', _arriveMin, (m) => setState(() => _arriveMin = m))),
           ],
         ),
-        const SizedBox(height: 6),
+        const SizedBox(height: 10),
+        _tideBlock(),
+        const SizedBox(height: 10),
         vesselField(VesselField.point, _vPoint, '주요 포인트'),
         const SizedBox(height: 6),
         Row(
@@ -483,6 +567,35 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
           ],
         ),
         const SizedBox(height: 10),
+        TextField(
+          controller: _vReview,
+          minLines: 3,
+          maxLines: 5,
+          keyboardType: TextInputType.multiline,
+          decoration: const InputDecoration(
+            labelText: '나의 평가',
+            alignLabelWithHint: true,
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+            border: OutlineInputBorder(),
+          ),
+          style: const TextStyle(fontSize: 13),
+        ),
+      ],
+    );
+  }
+
+  /// 물때 요약(한 줄) + 조위 곡선. 물때 자료 없으면 그래프 위젯이 안내 표시.
+  Widget _tideBlock() {
+    final summary = _tideSummary();
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        if (summary != null)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text('🌊 $summary', style: const TextStyle(fontSize: 13)),
+          ),
         TideCurveGraph(
           tides: widget.tides,
           startMin: _departMin,
@@ -490,6 +603,16 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
         ),
       ],
     );
+  }
+
+  String? _tideSummary() {
+    if (widget.tides.isEmpty) return null;
+    final parts = <String>[
+      if (widget.tideName != null && widget.tideName!.trim().isNotEmpty)
+        widget.tideName!.trim(),
+      ...widget.tides.map((t) => '${t.type} ${t.time}'),
+    ];
+    return parts.isEmpty ? null : parts.join(' · ');
   }
 
   Widget _timeField(String label, int min, void Function(int) onChanged) {
@@ -522,28 +645,23 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Row(
-          children: [
-            const Text('최종 조과',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
-            const Spacer(),
-            if (_catches.length < _maxCatches)
-              TextButton.icon(
-                onPressed: () {
-                  setState(() => _catches.add((TextEditingController(), 1)));
-                  _scrollToEnd();
-                },
-                icon: const Icon(Icons.add, size: 18),
-                label: const Text('추가'),
-                style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                    minimumSize: Size.zero,
-                    tapTargetSize: MaterialTapTargetSize.shrinkWrap),
-              ),
-          ],
-        ),
-        const SizedBox(height: 4),
         for (var i = 0; i < _catches.length; i++) _catchRow(i, species),
+        if (_catches.length < _maxCatches)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              onPressed: () {
+                setState(() => _catches.add((TextEditingController(), 1)));
+                _scrollToEnd();
+              },
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('조과 추가'),
+              style: TextButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  minimumSize: Size.zero,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+            ),
+          ),
       ],
     );
   }
@@ -555,7 +673,7 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
         children: [
-          const Text('🐟', style: TextStyle(fontSize: 15)),
+          const Text('🐟', style: TextStyle(fontSize: 14)),
           const SizedBox(width: 6),
           Expanded(
             child: TextField(
@@ -564,12 +682,16 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
                 '어종',
                 hint: '입력 또는 ▼',
                 suffix: PopupMenuButton<String>(
-                  icon: const Icon(Icons.arrow_drop_down, size: 22),
                   tooltip: '어종 선택',
                   padding: EdgeInsets.zero,
-                  splashRadius: 18,
                   enabled: species.isNotEmpty,
                   onSelected: (v) => setState(() => ctrl.text = v),
+                  child: Icon(Icons.arrow_drop_down,
+                      size: 24,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: species.isEmpty ? 0.25 : 0.7)),
                   itemBuilder: (_) => species
                       .map((s) =>
                           PopupMenuItem<String>(value: s, child: Text(s)))
@@ -588,7 +710,7 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
                     _catches[index] = (ctrl, count - 1))
                 : null,
           ),
-          Text('$count', style: const TextStyle(fontSize: 14)),
+          Text('$count', style: const TextStyle(fontSize: 13)),
           IconButton(
             icon: const Icon(Icons.add_circle_outline, size: 20),
             visualDensity: VisualDensity.compact,
@@ -654,6 +776,7 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
         fishType: vFishType,
         avgDepth: double.tryParse(_vDepth.text.trim()),
         rating: _rating,
+        review: _vReview.text.trim(),
       );
       if (vName.isNotEmpty) await notifier.addVesselPreset(VesselField.name, vName);
       if (vPort.isNotEmpty) await notifier.addVesselPreset(VesselField.port, vPort);

@@ -497,7 +497,7 @@ class AppSettings {
     this.autoLocationOnFirstEntry = false,
     this.autoSaveVoice = true,
     this.showAddressInMemoName = true,
-    this.memoComplexity = MemoComplexity.simpleFishing,
+    this.memoComplexity = MemoComplexity.complexFishing,
     this.shareEnabled = true,
     this.adsEnabled = false,
     this.khoaApiKey,

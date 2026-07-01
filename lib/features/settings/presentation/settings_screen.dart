@@ -121,10 +121,10 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               leading: const Icon(Icons.phishing),
               title: const Text('메모 입력 항목'),
               subtitle: Text(switch (settings.memoComplexity) {
-                MemoComplexity.simpleFishing => '낚시-단순: 현장정보 + 메모(조과)',
+                MemoComplexity.simpleFishing => '낚시(최소): 현장정보 + 메모(조과)',
                 MemoComplexity.complexFishing =>
-                  '낚시-복잡: + 태클·선사 정보',
-                MemoComplexity.general => '일반: 어종·길이 제외',
+                  '낚시(상세): + 태클·선사 정보',
+                MemoComplexity.general => '일반메모: 어종·길이 제외',
               }),
               trailing: DropdownButton<MemoComplexity>(
                 value: settings.memoComplexity,
@@ -132,12 +132,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 items: const [
                   DropdownMenuItem(
                       value: MemoComplexity.simpleFishing,
-                      child: Text('낚시-단순')),
+                      child: Text('낚시(최소)')),
                   DropdownMenuItem(
                       value: MemoComplexity.complexFishing,
-                      child: Text('낚시-복잡')),
+                      child: Text('낚시(상세)')),
                   DropdownMenuItem(
-                      value: MemoComplexity.general, child: Text('일반')),
+                      value: MemoComplexity.general, child: Text('일반메모')),
                 ],
                 onChanged: (v) {
                   if (v != null) {

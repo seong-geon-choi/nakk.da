@@ -64,6 +64,7 @@ class VesselInfo {
   final String fishType; // 낚시 종류
   final double? avgDepth; // 평균 수심(m)
   final int rating; // 별점 0~5
+  final String review; // 나의 평가(자유 서술)
 
   const VesselInfo({
     this.name = '',
@@ -74,6 +75,7 @@ class VesselInfo {
     this.fishType = '',
     this.avgDepth,
     this.rating = 0,
+    this.review = '',
   });
 
   bool get isEmpty =>
@@ -82,7 +84,8 @@ class VesselInfo {
       point.isEmpty &&
       fishType.isEmpty &&
       avgDepth == null &&
-      rating == 0;
+      rating == 0 &&
+      review.isEmpty;
 
   VesselInfo copyWith({
     String? name,
@@ -93,6 +96,7 @@ class VesselInfo {
     String? fishType,
     double? avgDepth,
     int? rating,
+    String? review,
   }) =>
       VesselInfo(
         name: name ?? this.name,
@@ -103,6 +107,7 @@ class VesselInfo {
         fishType: fishType ?? this.fishType,
         avgDepth: avgDepth ?? this.avgDepth,
         rating: rating ?? this.rating,
+        review: review ?? this.review,
       );
 
   Map<String, dynamic> toJson() => {
@@ -114,6 +119,7 @@ class VesselInfo {
         'fishType': fishType,
         'avgDepth': avgDepth,
         'rating': rating,
+        'review': review,
       };
 
   factory VesselInfo.fromJson(Map<String, dynamic> j) => VesselInfo(
@@ -125,6 +131,7 @@ class VesselInfo {
         fishType: j['fishType'] as String? ?? '',
         avgDepth: (j['avgDepth'] as num?)?.toDouble(),
         rating: (j['rating'] as num?)?.toInt() ?? 0,
+        review: j['review'] as String? ?? '',
       );
 }
 

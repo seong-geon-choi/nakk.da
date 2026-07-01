@@ -93,6 +93,9 @@ class MdSerializer {
         if (v.avgDepth != null) '수심 ${v.avgDepth}m',
       ].join(' | ');
       sb.writeln('- 🕐 $detail');
+      if (v.review.isNotEmpty) {
+        sb.writeln('- 📝 평가: ${v.review.replaceAll('\n', ' ')}');
+      }
     }
     for (var i = 0; i < o.tackles.length; i++) {
       final t = o.tackles[i];

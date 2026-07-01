@@ -41,14 +41,18 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
-/// 당일 현황 블록 중 물때가 가장 많은 것을 조위 그래프용으로 선택.
-List<TideEvent> _outingTides(DayFile? dayFile) {
-  if (dayFile == null) return const [];
+/// 당일 현황 블록 중 물때가 가장 많은 것을 조위 그래프용으로 선택(물때명 포함).
+({List<TideEvent> tides, String? name}) _outingTideInfo(DayFile? dayFile) {
+  if (dayFile == null) return (tides: const [], name: null);
   List<TideEvent> best = const [];
+  String? name;
   for (final loc in dayFile.locationBlocks) {
-    if (loc.tides.length > best.length) best = loc.tides;
+    if (loc.tides.length > best.length) {
+      best = loc.tides;
+      name = loc.tideName;
+    }
   }
-  return best;
+  return (tides: best, name: name);
 }
 
 /// 하루치 메모를 시스템 공유 시트로 내보낸다(블로그/카페 등 사용자가 앱 선택).
@@ -1394,12 +1398,16 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
           children: [
             OutingSummaryCard(
               outing: dayFile?.outing,
-              onTap: () => OutingEditSheet.show(
-                context,
-                initial: dayFile?.outing,
-                tides: _outingTides(dayFile),
-                onSave: (o) => notifier.updateOuting(o),
-              ),
+              onTap: () {
+                final t = _outingTideInfo(dayFile);
+                OutingEditSheet.show(
+                  context,
+                  initial: dayFile?.outing,
+                  tides: t.tides,
+                  tideName: t.name,
+                  onSave: (o) => notifier.updateOuting(o),
+                );
+              },
             ),
             Expanded(child: body),
           ],

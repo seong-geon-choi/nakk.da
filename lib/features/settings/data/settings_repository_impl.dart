@@ -76,12 +76,15 @@ class SettingsRepositoryImpl implements SettingsRepository {
         prefs.getBool(_autoLocationOnFirstEntryKey) ?? false;
     final autoSaveVoice = prefs.getBool(_autoSaveVoiceKey) ?? true;
     final showAddressInMemoName = prefs.getBool(_showAddressInMemoNameKey) ?? true;
-    // 신규 키 우선, 없으면 구버전 show_catch_input에서 마이그레이션(true→단순, false→일반)
+    // 신규 키 우선. 없으면: 구버전 show_catch_input 있으면 이관(true→최소, false→일반),
+    // 아무 것도 없으면(신규 설치) 기본값 낚시(상세).
     final memoComplexity = MemoComplexity.values.firstWhere(
       (e) => e.name == prefs.getString(_memoComplexityKey),
-      orElse: () => (prefs.getBool(_showCatchInputKey) ?? true)
-          ? MemoComplexity.simpleFishing
-          : MemoComplexity.general,
+      orElse: () {
+        final old = prefs.getBool(_showCatchInputKey);
+        if (old == null) return MemoComplexity.complexFishing;
+        return old ? MemoComplexity.simpleFishing : MemoComplexity.general;
+      },
     );
     final shareEnabled = prefs.getBool(_shareEnabledKey) ?? true;
     final adsEnabled = prefs.getBool(_adsEnabledKey) ?? false;

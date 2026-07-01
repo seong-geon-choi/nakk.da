@@ -441,11 +441,16 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
   }
 
   /// 활성 워터마크 템플릿 선택(0~2). 즉시 적용됨.
+  /// 워터마크 사용(enabled)은 마스터 스위치로 취급 → 전환 시 유지(디자인만 교체).
   Future<void> selectWatermarkTemplate(int index) async {
     final current = state.valueOrNull;
     if (current == null) return;
-    final updated =
-        current.copyWith(watermarkTemplateIndex: index.clamp(0, 2));
+    final i = index.clamp(0, 2);
+    final wasEnabled = current.watermark.enabled;
+    final templates = [...current.watermarkTemplates];
+    templates[i] = templates[i].copyWith(enabled: wasEnabled);
+    final updated = current.copyWith(
+        watermarkTemplates: templates, watermarkTemplateIndex: i);
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
   }
