@@ -18,7 +18,9 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _shareEnabledKey = 'share_enabled';
   static const _adsEnabledKey = 'ads_enabled';
   static const _khoaApiKeyKey = 'khoa_api_key';
-  static const _watermarkKey = 'watermark_settings';
+  static const _watermarkKey = 'watermark_settings'; // 구버전 단일 워터마크(마이그레이션)
+  static const _watermarkTemplatesKey = 'watermark_templates';
+  static const _watermarkTemplateIndexKey = 'watermark_template_index';
   static const _showTrackingButtonKey = 'show_tracking_button';
   static const _locationTrackingEnabledKey = 'location_tracking_enabled';
   static const _trackingIntervalMetersKey = 'tracking_interval_meters';
@@ -84,10 +86,26 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final shareEnabled = prefs.getBool(_shareEnabledKey) ?? true;
     final adsEnabled = prefs.getBool(_adsEnabledKey) ?? false;
     final khoaApiKey = prefs.getString(_khoaApiKeyKey);
-    final wmJson = prefs.getString(_watermarkKey);
-    final watermark = wmJson != null
-        ? WatermarkSettings.fromJson(jsonDecode(wmJson) as Map<String, dynamic>)
-        : WatermarkSettings();
+    // 워터마크 템플릿 3슬롯. 신규 키 우선, 없으면 구버전 단일 워터마크에서 마이그레이션.
+    List<WatermarkSettings> watermarkTemplates;
+    final templatesJson = prefs.getString(_watermarkTemplatesKey);
+    if (templatesJson != null) {
+      final list = (jsonDecode(templatesJson) as List)
+          .map((e) => WatermarkSettings.fromJson(e as Map<String, dynamic>))
+          .toList();
+      watermarkTemplates = [
+        for (var i = 0; i < 3; i++)
+          i < list.length ? list[i] : WatermarkSettings(),
+      ];
+    } else {
+      final wmJson = prefs.getString(_watermarkKey);
+      final legacy = wmJson != null
+          ? WatermarkSettings.fromJson(jsonDecode(wmJson) as Map<String, dynamic>)
+          : WatermarkSettings();
+      watermarkTemplates = [legacy, WatermarkSettings(), WatermarkSettings()];
+    }
+    final watermarkTemplateIndex =
+        (prefs.getInt(_watermarkTemplateIndexKey) ?? 0).clamp(0, 2);
     final showTrackingButton = prefs.getBool(_showTrackingButtonKey) ?? true;
     final locationTrackingEnabled = prefs.getBool(_locationTrackingEnabledKey) ?? false;
     final trackingIntervalMeters = prefs.getInt(_trackingIntervalMetersKey) ?? 100;
@@ -163,7 +181,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
       shareEnabled: shareEnabled,
       adsEnabled: adsEnabled,
       khoaApiKey: khoaApiKey,
-      watermark: watermark,
+      watermarkTemplates: watermarkTemplates,
+      watermarkTemplateIndex: watermarkTemplateIndex,
       showTrackingButton: showTrackingButton,
       locationTrackingEnabled: locationTrackingEnabled,
       trackingIntervalMeters: trackingIntervalMeters,
@@ -224,7 +243,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
     } else {
       await prefs.remove(_khoaApiKeyKey);
     }
-    await prefs.setString(_watermarkKey, jsonEncode(settings.watermark.toJson()));
+    await prefs.setString(_watermarkTemplatesKey,
+        jsonEncode(settings.watermarkTemplates.map((t) => t.toJson()).toList()));
+    await prefs.setInt(
+        _watermarkTemplateIndexKey, settings.watermarkTemplateIndex);
     await prefs.setBool(_showTrackingButtonKey, settings.showTrackingButton);
     await prefs.setBool(_locationTrackingEnabledKey, settings.locationTrackingEnabled);
     await prefs.setInt(_trackingIntervalMetersKey, settings.trackingIntervalMeters);

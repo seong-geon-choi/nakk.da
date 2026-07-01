@@ -149,8 +149,11 @@ class MemoInputSheet extends ConsumerStatefulWidget {
             containerPosX: arResult.posX!, containerPosY: arResult.posY!);
         await ref.read(settingsProvider.notifier).updateWatermark(effectiveWm);
       }
+      final wmAddress = ref.read(locationProvider).valueOrNull?.address ??
+          ref.read(locationProvider.notifier).cached?.address;
       final rawPath = (arResult.applyWatermark && effectiveWm != null)
-          ? await applyWatermark(arResult.path, effectiveWm.copyWith(enabled: true))
+          ? await applyWatermark(arResult.path, effectiveWm.copyWith(enabled: true),
+              address: wmAddress)
           : arResult.path;
       exifSourcePath = rawPath;
       path = await saveToGallery(rawPath, relativePath: relPath);

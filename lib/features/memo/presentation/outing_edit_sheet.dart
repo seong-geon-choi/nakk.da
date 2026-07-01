@@ -134,11 +134,15 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
   int _departMin = 300;
   int _arriveMin = 960;
   int _rating = 0;
+  int _tackleVisible = 1; // 화면에 표시할 태클 세트 수(+ 버튼으로 증가)
+  final _scrollCtrl = ScrollController();
 
   @override
   void initState() {
     super.initState();
     final init = widget.initial;
+    _tackleVisible =
+        (init?.tackles.where((t) => !t.isEmpty).length ?? 1).clamp(1, _maxTackles);
     final v = init?.vessel;
     if (v != null) {
       _vName.text = v.name;
@@ -182,7 +186,20 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
     _vPoint.dispose();
     _vFishType.dispose();
     _vDepth.dispose();
+    _scrollCtrl.dispose();
     super.dispose();
+  }
+
+  void _scrollToEnd() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_scrollCtrl.hasClients) {
+        _scrollCtrl.animateTo(
+          _scrollCtrl.position.maxScrollExtent,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
+    });
   }
 
   static String _fmtDepth(double v) =>
@@ -224,15 +241,18 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
             const SizedBox(height: 4),
             Flexible(
               child: SingleChildScrollView(
+                controller: _scrollCtrl,
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
                     _vesselSection(),
                     const Divider(height: 20),
-                    for (var i = 0; i < _maxTackles; i++) ...[
+                    _tackleHeader(),
+                    for (var i = 0; i < _tackleVisible; i++) ...[
+                      const SizedBox(height: 6),
                       _tackleSet(i),
-                      const Divider(height: 20),
                     ],
+                    const Divider(height: 20),
                     _catchSection(),
                   ],
                 ),
@@ -265,20 +285,54 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
   }
 
   // ── 태클 세트 ─────────────────────────────────────────
+  Widget _tackleHeader() {
+    return Row(
+      children: [
+        const Text('태클',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        const Spacer(),
+        if (_tackleVisible < _maxTackles)
+          TextButton.icon(
+            onPressed: () {
+              setState(() => _tackleVisible++);
+              _scrollToEnd();
+            },
+            icon: const Icon(Icons.add, size: 18),
+            label: const Text('추가'),
+            style: TextButton.styleFrom(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                minimumSize: Size.zero,
+                tapTargetSize: MaterialTapTargetSize.shrinkWrap),
+          ),
+      ],
+    );
+  }
+
   Widget _tackleSet(int index) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text('태클 ${index + 1}',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+            style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Theme.of(context).colorScheme.onSurfaceVariant)),
         const SizedBox(height: 6),
-        _presetField(index, TackleField.rod, '로드'),
+        Row(
+          children: [
+            Expanded(child: _presetField(index, TackleField.rod, '로드')),
+            const SizedBox(width: 8),
+            Expanded(child: _presetField(index, TackleField.reel, '릴')),
+          ],
+        ),
         const SizedBox(height: 6),
-        _presetField(index, TackleField.reel, '릴'),
-        const SizedBox(height: 6),
-        _presetField(index, TackleField.line, '라인'),
-        const SizedBox(height: 6),
-        _presetField(index, TackleField.rig, '채비'),
+        Row(
+          children: [
+            Expanded(child: _presetField(index, TackleField.line, '라인')),
+            const SizedBox(width: 8),
+            Expanded(child: _presetField(index, TackleField.rig, '채비')),
+          ],
+        ),
       ],
     );
   }
@@ -296,58 +350,65 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
     );
   }
 
-  /// 자유입력 TextField + 프리셋 드롭다운(항목별 X 삭제) 공용 위젯
+  /// 모든 입력창 공용 데코레이션(높이·패딩·suffix 제약 통일).
+  InputDecoration _fieldDec(String label, {Widget? suffix, String? hint}) =>
+      InputDecoration(
+        labelText: label,
+        hintText: hint,
+        isDense: true,
+        contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+        border: const OutlineInputBorder(),
+        suffixIcon: suffix,
+        suffixIconConstraints:
+            const BoxConstraints(minWidth: 32, minHeight: 24),
+      );
+
+  /// 자유입력 TextField + 프리셋 드롭다운(입력창 안 ▼, 항목별 X 삭제) 공용 위젯
   Widget _presetRow({
     required TextEditingController ctrl,
     required String label,
     required List<String> presets,
     required void Function(String) onRemovePreset,
   }) {
-    return Row(
-      children: [
-        Expanded(
-          child: TextField(
-            controller: ctrl,
-            decoration: InputDecoration(
-              labelText: label,
-              isDense: true,
-              contentPadding:
-                  const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-              border: const OutlineInputBorder(),
-            ),
-            style: const TextStyle(fontSize: 13),
-          ),
-        ),
-        PopupMenuButton<String>(
-          icon: const Icon(Icons.arrow_drop_down, size: 24),
-          tooltip: '$label 선택',
-          enabled: presets.isNotEmpty,
-          onSelected: (v) => setState(() => ctrl.text = v),
-          itemBuilder: (_) => [
-            for (final p in presets)
-              PopupMenuItem<String>(
-                value: p,
-                child: Row(
-                  children: [
-                    Expanded(child: Text(p)),
-                    InkWell(
-                      onTap: () {
-                        Navigator.pop(context); // 메뉴 닫기
-                        onRemovePreset(p);
-                      },
-                      child: const Padding(
-                        padding: EdgeInsets.only(left: 8),
-                        child: Icon(Icons.close, size: 16),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-          ],
-        ),
-      ],
+    return TextField(
+      controller: ctrl,
+      decoration: _fieldDec(label,
+          suffix: _presetDropdown(ctrl, label, presets, onRemovePreset)),
+      style: const TextStyle(fontSize: 13),
     );
   }
+
+  Widget _presetDropdown(TextEditingController ctrl, String label,
+          List<String> presets, void Function(String) onRemovePreset) =>
+      PopupMenuButton<String>(
+        icon: const Icon(Icons.arrow_drop_down, size: 22),
+        tooltip: '$label 선택',
+        enabled: presets.isNotEmpty,
+        padding: EdgeInsets.zero,
+        splashRadius: 18,
+        onSelected: (v) => setState(() => ctrl.text = v),
+        itemBuilder: (_) => [
+          for (final p in presets)
+            PopupMenuItem<String>(
+              value: p,
+              child: Row(
+                children: [
+                  Expanded(child: Text(p)),
+                  InkWell(
+                    onTap: () {
+                      Navigator.pop(context); // 메뉴 닫기
+                      onRemovePreset(p);
+                    },
+                    child: const Padding(
+                      padding: EdgeInsets.only(left: 8),
+                      child: Icon(Icons.close, size: 16),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      );
 
   // ── 선사 정보 ─────────────────────────────────────────
   Widget _vesselSection() {
@@ -367,32 +428,42 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
         const Text('선사 정보',
             style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
         const SizedBox(height: 6),
-        vesselField(VesselField.name, _vName, '선박명'),
-        const SizedBox(height: 6),
-        vesselField(VesselField.port, _vPort, '항구'),
+        Row(
+          children: [
+            Expanded(child: vesselField(VesselField.name, _vName, '선박명')),
+            const SizedBox(width: 8),
+            Expanded(child: vesselField(VesselField.port, _vPort, '항구')),
+          ],
+        ),
         const SizedBox(height: 6),
         Row(
           children: [
-            Expanded(child: _timeField('출항', _departMin, (m) => setState(() => _departMin = m))),
+            Expanded(
+                child: _timeField(
+                    '출항', _departMin, (m) => setState(() => _departMin = m))),
             const SizedBox(width: 8),
-            Expanded(child: _timeField('입항', _arriveMin, (m) => setState(() => _arriveMin = m))),
+            Expanded(
+                child: _timeField(
+                    '입항', _arriveMin, (m) => setState(() => _arriveMin = m))),
           ],
         ),
         const SizedBox(height: 6),
         vesselField(VesselField.point, _vPoint, '주요 포인트'),
         const SizedBox(height: 6),
-        vesselField(VesselField.fishType, _vFishType, '낚시 종류'),
-        const SizedBox(height: 6),
-        TextField(
-          controller: _vDepth,
-          keyboardType: const TextInputType.numberWithOptions(decimal: true),
-          decoration: const InputDecoration(
-            labelText: '평균 수심(m)',
-            isDense: true,
-            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-            border: OutlineInputBorder(),
-          ),
-          style: const TextStyle(fontSize: 13),
+        Row(
+          children: [
+            Expanded(child: vesselField(VesselField.fishType, _vFishType, '낚시 종류')),
+            const SizedBox(width: 8),
+            Expanded(
+              child: TextField(
+                controller: _vDepth,
+                keyboardType:
+                    const TextInputType.numberWithOptions(decimal: true),
+                decoration: _fieldDec('평균 수심(m)'),
+                style: const TextStyle(fontSize: 13),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 8),
         Row(
@@ -431,14 +502,13 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
         if (picked != null) onChanged(picked.hour * 60 + picked.minute);
       },
       child: InputDecorator(
-        decoration: InputDecoration(
-          labelText: label,
-          isDense: true,
-          contentPadding:
-              const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
-          border: const OutlineInputBorder(),
+        decoration: _fieldDec(label),
+        child: SizedBox(
+          width: double.infinity,
+          child: Text(_minToHhmm(min),
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 13)),
         ),
-        child: Text(_minToHhmm(min), style: const TextStyle(fontSize: 13)),
       ),
     );
   }
@@ -459,8 +529,10 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
             const Spacer(),
             if (_catches.length < _maxCatches)
               TextButton.icon(
-                onPressed: () => setState(() =>
-                    _catches.add((TextEditingController(), 1))),
+                onPressed: () {
+                  setState(() => _catches.add((TextEditingController(), 1)));
+                  _scrollToEnd();
+                },
                 icon: const Icon(Icons.add, size: 18),
                 label: const Text('추가'),
                 style: TextButton.styleFrom(
@@ -488,24 +560,24 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
           Expanded(
             child: TextField(
               controller: ctrl,
-              decoration: const InputDecoration(
-                labelText: '어종',
-                hintText: '입력 또는 ▼',
-                isDense: true,
-                contentPadding:
-                    EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-                border: OutlineInputBorder(),
+              decoration: _fieldDec(
+                '어종',
+                hint: '입력 또는 ▼',
+                suffix: PopupMenuButton<String>(
+                  icon: const Icon(Icons.arrow_drop_down, size: 22),
+                  tooltip: '어종 선택',
+                  padding: EdgeInsets.zero,
+                  splashRadius: 18,
+                  enabled: species.isNotEmpty,
+                  onSelected: (v) => setState(() => ctrl.text = v),
+                  itemBuilder: (_) => species
+                      .map((s) =>
+                          PopupMenuItem<String>(value: s, child: Text(s)))
+                      .toList(),
+                ),
               ),
               style: const TextStyle(fontSize: 13),
             ),
-          ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.arrow_drop_down, size: 24),
-            tooltip: '어종 선택',
-            onSelected: (v) => setState(() => ctrl.text = v),
-            itemBuilder: (_) => species
-                .map((s) => PopupMenuItem<String>(value: s, child: Text(s)))
-                .toList(),
           ),
           // 마릿수 스테퍼
           IconButton(

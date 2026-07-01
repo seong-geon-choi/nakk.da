@@ -9,6 +9,12 @@ enum WatermarkAlign { left, center, right }
 enum WatermarkFont { sansSerif, monospace, serif, heavy }
 enum WatermarkWeight { normal, bold, black }
 
+/// 커스텀 텍스트 박스의 내용 종류
+/// - text: 고정 입력 텍스트
+/// - year: 해당 연도(굽는 시점)
+/// - address: GPS 기반 시/군/구/동 주소(앞에 📍)
+enum WatermarkTextContent { text, year, address }
+
 // ── 워터마크 박스 (날짜/시간/커스텀 각각 독립 설정·위치) ─────────
 
 class WatermarkBox {
@@ -24,6 +30,7 @@ class WatermarkBox {
   final WatermarkAlign alignment;
   final String dateFormat; // type == date 일 때 사용
   final String timeFormat; // type == time 일 때 사용
+  final WatermarkTextContent textContent; // customText/customText2 내용 종류
 
   const WatermarkBox({
     required this.type,
@@ -38,6 +45,7 @@ class WatermarkBox {
     this.alignment = WatermarkAlign.left,
     this.dateFormat = 'yyyy-MM-dd',
     this.timeFormat = 'HH:mm',
+    this.textContent = WatermarkTextContent.text,
   });
 
   WatermarkBox copyWith({
@@ -52,6 +60,7 @@ class WatermarkBox {
     WatermarkAlign? alignment,
     String? dateFormat,
     String? timeFormat,
+    WatermarkTextContent? textContent,
   }) =>
       WatermarkBox(
         type: type,
@@ -66,6 +75,7 @@ class WatermarkBox {
         alignment: alignment ?? this.alignment,
         dateFormat: dateFormat ?? this.dateFormat,
         timeFormat: timeFormat ?? this.timeFormat,
+        textContent: textContent ?? this.textContent,
       );
 
   Map<String, dynamic> toJson() => {
@@ -81,6 +91,7 @@ class WatermarkBox {
         'alignment': alignment.name,
         'dateFormat': dateFormat,
         'timeFormat': timeFormat,
+        'textContent': textContent.name,
       };
 
   factory WatermarkBox.fromJson(Map<String, dynamic> j) => WatermarkBox(
@@ -99,6 +110,8 @@ class WatermarkBox {
             WatermarkAlign.values.byName(j['alignment'] as String? ?? 'left'),
         dateFormat: j['dateFormat'] as String? ?? 'yyyy-MM-dd',
         timeFormat: j['timeFormat'] as String? ?? 'HH:mm',
+        textContent: WatermarkTextContent.values
+            .byName(j['textContent'] as String? ?? 'text'),
       );
 }
 
@@ -395,7 +408,8 @@ class AppSettings {
   final bool shareEnabled; // 메모 공유 버튼 표시 여부 (향후 유료화 대비 토글)
   final bool adsEnabled; // 광고 노출 여부 (개발자 메뉴 토글, 기본 off)
   final String? khoaApiKey;
-  final WatermarkSettings watermark;
+  final List<WatermarkSettings> watermarkTemplates; // 사용자 템플릿 3슬롯
+  final int watermarkTemplateIndex; // 활성 템플릿(0~2)
   final bool showTrackingButton;
   final bool locationTrackingEnabled;
   final int trackingIntervalMeters;
@@ -450,6 +464,10 @@ class AppSettings {
   /// 태클·선사 등 복잡 항목 표시 여부
   bool get showComplexInput => memoComplexity == MemoComplexity.complexFishing;
 
+  /// 현재 활성 워터마크 템플릿(사진 굽기·미리보기에 사용)
+  WatermarkSettings get watermark =>
+      watermarkTemplates[watermarkTemplateIndex.clamp(0, watermarkTemplates.length - 1)];
+
   /// 태클 항목별 프리셋 목록
   List<String> tacklePresetsFor(TackleField f) => switch (f) {
         TackleField.rod => tackleRods,
@@ -483,7 +501,8 @@ class AppSettings {
     this.shareEnabled = true,
     this.adsEnabled = false,
     this.khoaApiKey,
-    WatermarkSettings? watermark,
+    List<WatermarkSettings>? watermarkTemplates,
+    this.watermarkTemplateIndex = 0,
     this.showTrackingButton = true,
     this.locationTrackingEnabled = false,
     this.trackingIntervalMeters = 100,
@@ -522,7 +541,8 @@ class AppSettings {
     this.vesselPorts = const [],
     this.vesselPoints = const [],
     this.vesselFishTypes = const [],
-  })  : watermark = watermark ?? WatermarkSettings(),
+  })  : watermarkTemplates = watermarkTemplates ??
+            [WatermarkSettings(), WatermarkSettings(), WatermarkSettings()],
         fishSpecies = fishSpecies ?? kCommonFishSpecies,
         hiddenFishSpecies = hiddenFishSpecies ?? const [];
 
@@ -544,7 +564,8 @@ class AppSettings {
     bool? adsEnabled,
     String? khoaApiKey,
     bool clearKhoaApiKey = false,
-    WatermarkSettings? watermark,
+    List<WatermarkSettings>? watermarkTemplates,
+    int? watermarkTemplateIndex,
     bool? showTrackingButton,
     bool? locationTrackingEnabled,
     int? trackingIntervalMeters,
@@ -598,7 +619,9 @@ class AppSettings {
       shareEnabled: shareEnabled ?? this.shareEnabled,
       adsEnabled: adsEnabled ?? this.adsEnabled,
       khoaApiKey: clearKhoaApiKey ? null : (khoaApiKey ?? this.khoaApiKey),
-      watermark: watermark ?? this.watermark,
+      watermarkTemplates: watermarkTemplates ?? this.watermarkTemplates,
+      watermarkTemplateIndex:
+          watermarkTemplateIndex ?? this.watermarkTemplateIndex,
       showTrackingButton: showTrackingButton ?? this.showTrackingButton,
       locationTrackingEnabled: locationTrackingEnabled ?? this.locationTrackingEnabled,
       trackingIntervalMeters: trackingIntervalMeters ?? this.trackingIntervalMeters,

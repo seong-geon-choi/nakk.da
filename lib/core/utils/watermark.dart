@@ -12,14 +12,14 @@ const String kWatermarkHeavyFont = 'BlackHanSans';
 /// 이미지에 워터마크(배경 컨테이너 + 독립 박스들)를 적용하고 JPEG 경로를 반환.
 /// 실패 시 원본 경로 반환.
 Future<String> applyWatermark(
-    String imagePath, WatermarkSettings settings) async {
+    String imagePath, WatermarkSettings settings, {String? address}) async {
   if (!settings.enabled) return imagePath;
 
   try {
     final now = DateTime.now();
     // 보이고 내용이 있는 박스만
     final boxes = settings.boxes
-        .where((b) => b.visible && _boxText(b, now).isNotEmpty)
+        .where((b) => b.visible && _boxText(b, now, address).isNotEmpty)
         .toList();
     if (boxes.isEmpty) return imagePath;
 
@@ -51,7 +51,7 @@ Future<String> applyWatermark(
     final laid = <_LaidBox>[];
     double maxFont = 0;
     for (final b in boxes) {
-      final text = _boxText(b, now);
+      final text = _boxText(b, now, address);
       final scaledFont = b.fontSize * shortSide / 480.0;
       maxFont = math.max(maxFont, scaledFont);
       final fw = _fontWeight(b.weight);
@@ -185,7 +185,7 @@ class _LaidBox {
   _LaidBox(this.para, this.x, this.y, this.w, this.h);
 }
 
-String _boxText(WatermarkBox b, DateTime now) {
+String _boxText(WatermarkBox b, DateTime now, String? address) {
   switch (b.type) {
     case WatermarkLineType.date:
       return _formatDate(now, b.dateFormat);
@@ -193,7 +193,14 @@ String _boxText(WatermarkBox b, DateTime now) {
       return b.timeFormat.isEmpty ? '' : _formatTime(now, b.timeFormat);
     case WatermarkLineType.customText:
     case WatermarkLineType.customText2:
-      return b.customText.trim();
+      return switch (b.textContent) {
+        WatermarkTextContent.text => b.customText.trim(),
+        WatermarkTextContent.year => '${now.year}',
+        WatermarkTextContent.address =>
+          (address != null && address.trim().isNotEmpty)
+              ? '📍 ${address.trim()}'
+              : '',
+      };
   }
 }
 

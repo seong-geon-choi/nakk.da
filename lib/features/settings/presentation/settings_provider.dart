@@ -16,6 +16,7 @@ export '../domain/models/app_settings.dart'
         WatermarkAlign,
         WatermarkFont,
         WatermarkWeight,
+        WatermarkTextContent,
         QuickLaunchMode,
         CommuteSoundMode,
         CommuteWindow,
@@ -428,10 +429,23 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     state = AsyncData(updated);
   }
 
+  /// 활성 템플릿 슬롯의 워터마크를 갱신.
   Future<void> updateWatermark(WatermarkSettings watermark) async {
     final current = state.valueOrNull;
     if (current == null) return;
-    final updated = current.copyWith(watermark: watermark);
+    final templates = [...current.watermarkTemplates];
+    templates[current.watermarkTemplateIndex] = watermark;
+    final updated = current.copyWith(watermarkTemplates: templates);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  /// 활성 워터마크 템플릿 선택(0~2). 즉시 적용됨.
+  Future<void> selectWatermarkTemplate(int index) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated =
+        current.copyWith(watermarkTemplateIndex: index.clamp(0, 2));
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
   }

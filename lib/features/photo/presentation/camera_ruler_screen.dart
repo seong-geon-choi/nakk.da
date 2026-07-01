@@ -7,6 +7,7 @@ import 'package:sensors_plus/sensors_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../settings/presentation/settings_provider.dart';
+import '../../location/presentation/location_provider.dart';
 import '../../../core/utils/watermark.dart';
 import '../../../core/utils/media_scanner.dart';
 
@@ -197,8 +198,10 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       if (!mounted) return;
 
       final wmSettings = ref.read(settingsProvider).valueOrNull?.watermark;
+      final wmAddress = ref.read(locationProvider).valueOrNull?.address ??
+          ref.read(locationProvider.notifier).cached?.address;
       final photoPath = (wmSettings != null && wmSettings.enabled)
-          ? await applyWatermark(file.path, wmSettings)
+          ? await applyWatermark(file.path, wmSettings, address: wmAddress)
           : file.path;
 
       if (!mounted) return;

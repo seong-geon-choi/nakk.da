@@ -90,11 +90,36 @@ class _WatermarkSettingsScreenState
   Widget build(BuildContext context) {
     final wm = ref.watch(settingsProvider).valueOrNull?.watermark ??
         WatermarkSettings();
+    final activeIndex =
+        ref.watch(settingsProvider).valueOrNull?.watermarkTemplateIndex ?? 0;
+
+    // 템플릿 전환 시 커스텀 텍스트 컨트롤러를 새 템플릿 값으로 동기화
+    ref.listen(
+      settingsProvider.select((s) => s.valueOrNull?.watermarkTemplateIndex),
+      (_, _) {
+        final newWm = ref.read(settingsProvider).valueOrNull?.watermark;
+        if (newWm == null) return;
+        for (final b in newWm.boxes) {
+          if (_isCustom(b.type)) {
+            final c = _customCtrls[b.type] ??=
+                TextEditingController();
+            if (c.text != b.customText) c.text = b.customText;
+          }
+        }
+        setState(() => _selectedType = null);
+      },
+    );
 
     return Scaffold(
       appBar: AppBar(title: const Text('워터마크 설정')),
       body: Column(
         children: [
+          _TemplateTabs(
+            active: activeIndex,
+            onSelect: (i) =>
+                ref.read(settingsProvider.notifier).selectWatermarkTemplate(i),
+          ),
+          const Divider(height: 1),
           _PreviewSection(
             wm: wm,
             dark: _darkPreview,
@@ -232,11 +257,15 @@ String _previewBoxText(WatermarkBox b, DateTime now) {
     case WatermarkLineType.time:
       return b.timeFormat.isEmpty ? '' : _formatTime(now, b.timeFormat);
     case WatermarkLineType.customText:
-      final t = b.customText.trim();
-      return t.isEmpty ? '(텍스트1)' : t;
     case WatermarkLineType.customText2:
-      final t = b.customText.trim();
-      return t.isEmpty ? '(텍스트2)' : t;
+      final placeholder =
+          b.type == WatermarkLineType.customText ? '(텍스트1)' : '(텍스트2)';
+      return switch (b.textContent) {
+        WatermarkTextContent.year => '${now.year}',
+        WatermarkTextContent.address => '📍 시/군/구/동',
+        WatermarkTextContent.text =>
+          b.customText.trim().isEmpty ? placeholder : b.customText.trim(),
+      };
   }
 }
 
@@ -249,6 +278,61 @@ String _boxLabel(WatermarkLineType t) => switch (t) {
 
 bool _isCustom(WatermarkLineType t) =>
     t == WatermarkLineType.customText || t == WatermarkLineType.customText2;
+
+// ── 템플릿 탭 (3슬롯) ─────────────────────────────────────────
+
+class _TemplateTabs extends StatelessWidget {
+  final int active;
+  final void Function(int) onSelect;
+  const _TemplateTabs({required this.active, required this.onSelect});
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      child: Row(
+        children: [
+          for (var i = 0; i < 3; i++)
+            Expanded(
+              child: Padding(
+                padding: EdgeInsets.only(right: i < 2 ? 8 : 0),
+                child: GestureDetector(
+                  onTap: () => onSelect(i),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    alignment: Alignment.center,
+                    decoration: BoxDecoration(
+                      color: i == active
+                          ? cs.primaryContainer
+                          : cs.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(10),
+                      border: Border.all(
+                          color: i == active
+                              ? cs.primary
+                              : cs.outline.withValues(alpha: 0.4)),
+                    ),
+                    child: Text(
+                      '템플릿 ${i + 1}',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight:
+                            i == active ? FontWeight.w700 : FontWeight.w400,
+                        color: i == active
+                            ? cs.primary
+                            : cs.onSurface.withValues(alpha: 0.7),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
 
 // ── 미리보기 섹션 ─────────────────────────────────────────────
 
@@ -845,20 +929,68 @@ class _BoxCard extends StatelessWidget {
               padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
               child: Column(
                 children: [
-          if (customCtrl != null)
+          if (customCtrl != null) ...[
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
-              child: TextField(
-                controller: customCtrl,
-                decoration: const InputDecoration(
-                  hintText: '커스텀 텍스트 입력',
-                  isDense: true,
-                  border: OutlineInputBorder(),
-                ),
-                style: const TextStyle(fontSize: 14),
-                onChanged: (text) => onUpdate((b) => b.copyWith(customText: text)),
+              child: Row(
+                children: [
+                  const Text('내용', style: TextStyle(fontSize: 13)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: SegmentedButton<WatermarkTextContent>(
+                      segments: const [
+                        ButtonSegment(
+                            value: WatermarkTextContent.text,
+                            label: Text('텍스트')),
+                        ButtonSegment(
+                            value: WatermarkTextContent.year,
+                            label: Text('연도')),
+                        ButtonSegment(
+                            value: WatermarkTextContent.address,
+                            label: Text('주소')),
+                      ],
+                      selected: {box.textContent},
+                      onSelectionChanged: (s) =>
+                          onUpdate((b) => b.copyWith(textContent: s.first)),
+                      showSelectedIcon: false,
+                      style: const ButtonStyle(
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
+            if (box.textContent == WatermarkTextContent.text)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: TextField(
+                  controller: customCtrl,
+                  decoration: const InputDecoration(
+                    hintText: '커스텀 텍스트 입력',
+                    isDense: true,
+                    border: OutlineInputBorder(),
+                  ),
+                  style: const TextStyle(fontSize: 14),
+                  onChanged: (text) =>
+                      onUpdate((b) => b.copyWith(customText: text)),
+                ),
+              ),
+            if (box.textContent == WatermarkTextContent.address)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Text(
+                  '📍 촬영 위치의 시/군/구/동 주소가 표시됩니다(온라인 필요, 없으면 생략).',
+                  style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context)
+                          .colorScheme
+                          .onSurface
+                          .withValues(alpha: 0.55)),
+                ),
+              ),
+          ],
           // 글자 크기
           Row(
             children: [
