@@ -34,6 +34,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _tackleReelsKey = 'tackle_reels';
   static const _tackleLinesKey = 'tackle_lines';
   static const _tackleRigsKey = 'tackle_rigs';
+  static const _vesselNamesKey = 'vessel_names';
+  static const _vesselPortsKey = 'vessel_ports';
+  static const _vesselPointsKey = 'vessel_points';
+  static const _vesselFishTypesKey = 'vessel_fish_types';
   static const _locationFabRightKey = 'location_fab_right';
   static const _locationFabBottomKey = 'location_fab_bottom';
   static const _trackingFabRightKey = 'tracking_fab_right';
@@ -114,6 +118,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final tackleReels = prefs.getStringList(_tackleReelsKey) ?? const [];
     final tackleLines = prefs.getStringList(_tackleLinesKey) ?? const [];
     final tackleRigs = prefs.getStringList(_tackleRigsKey) ?? const [];
+    final vesselNames = prefs.getStringList(_vesselNamesKey) ?? const [];
+    final vesselPorts = prefs.getStringList(_vesselPortsKey) ?? const [];
+    final vesselPoints = prefs.getStringList(_vesselPointsKey) ?? const [];
+    final vesselFishTypes = prefs.getStringList(_vesselFishTypesKey) ?? const [];
     final locationFabRight = prefs.getDouble(_locationFabRightKey) ?? 16;
     final locationFabBottom = prefs.getDouble(_locationFabBottomKey) ?? 100;
     final trackingFabRight = prefs.getDouble(_trackingFabRightKey) ?? 16;
@@ -171,6 +179,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
       tackleReels: tackleReels,
       tackleLines: tackleLines,
       tackleRigs: tackleRigs,
+      vesselNames: vesselNames,
+      vesselPorts: vesselPorts,
+      vesselPoints: vesselPoints,
+      vesselFishTypes: vesselFishTypes,
       locationFabRight: locationFabRight,
       locationFabBottom: locationFabBottom,
       trackingFabRight: trackingFabRight,
@@ -236,6 +248,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setStringList(_tackleReelsKey, settings.tackleReels);
     await prefs.setStringList(_tackleLinesKey, settings.tackleLines);
     await prefs.setStringList(_tackleRigsKey, settings.tackleRigs);
+    await prefs.setStringList(_vesselNamesKey, settings.vesselNames);
+    await prefs.setStringList(_vesselPortsKey, settings.vesselPorts);
+    await prefs.setStringList(_vesselPointsKey, settings.vesselPoints);
+    await prefs.setStringList(_vesselFishTypesKey, settings.vesselFishTypes);
     await prefs.setDouble(_locationFabRightKey, settings.locationFabRight);
     await prefs.setDouble(_locationFabBottomKey, settings.locationFabBottom);
     await prefs.setDouble(_trackingFabRightKey, settings.trackingFabRight);

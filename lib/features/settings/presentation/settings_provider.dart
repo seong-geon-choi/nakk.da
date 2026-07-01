@@ -21,7 +21,8 @@ export '../domain/models/app_settings.dart'
         CommuteWindow,
         CommutePin,
         MemoComplexity,
-        TackleField;
+        TackleField,
+        VesselField;
 
 final settingsRepositoryProvider = Provider<SettingsRepository>(
   (ref) => SettingsRepositoryImpl(),
@@ -371,6 +372,34 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     if (c == null) return;
     final updated = _copyTackle(
         c, field, c.tacklePresetsFor(field).where((s) => s != value).toList());
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  // ── 선사 프리셋 ───────────────────────────────────────
+  AppSettings _copyVessel(AppSettings c, VesselField f, List<String> list) =>
+      switch (f) {
+        VesselField.name => c.copyWith(vesselNames: list),
+        VesselField.port => c.copyWith(vesselPorts: list),
+        VesselField.point => c.copyWith(vesselPoints: list),
+        VesselField.fishType => c.copyWith(vesselFishTypes: list),
+      };
+
+  Future<void> addVesselPreset(VesselField field, String value) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    final v = value.trim();
+    if (v.isEmpty || c.vesselPresetsFor(field).contains(v)) return;
+    final updated = _copyVessel(c, field, [v, ...c.vesselPresetsFor(field)]);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  Future<void> removeVesselPreset(VesselField field, String value) async {
+    final c = state.valueOrNull;
+    if (c == null) return;
+    final updated = _copyVessel(
+        c, field, c.vesselPresetsFor(field).where((s) => s != value).toList());
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
   }

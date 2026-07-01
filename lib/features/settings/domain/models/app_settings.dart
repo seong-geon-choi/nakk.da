@@ -353,6 +353,9 @@ enum MemoComplexity { simpleFishing, complexFishing, general }
 /// 태클 프리셋 항목 종류(로드/릴/라인/채비)
 enum TackleField { rod, reel, line, rig }
 
+/// 선사 프리셋 항목 종류(선박명/항구/포인트/낚시종류)
+enum VesselField { name, port, point, fishType }
+
 /// 출퇴근 알림 지점(지도에서 길게 눌러 지정)
 class CommutePin {
   final double lat;
@@ -409,6 +412,11 @@ class AppSettings {
   final List<String> tackleReels;
   final List<String> tackleLines;
   final List<String> tackleRigs;
+  // 선사 프리셋
+  final List<String> vesselNames;
+  final List<String> vesselPorts;
+  final List<String> vesselPoints;
+  final List<String> vesselFishTypes;
   final double locationFabRight;  // 홈 '환경 추가' FAB 위치 (right)
   final double locationFabBottom; // 홈 '환경 추가' FAB 위치 (bottom)
   final double trackingFabRight;  // 홈 트래킹 FAB 위치 (right)
@@ -448,6 +456,14 @@ class AppSettings {
         TackleField.reel => tackleReels,
         TackleField.line => tackleLines,
         TackleField.rig => tackleRigs,
+      };
+
+  /// 선사 항목별 프리셋 목록
+  List<String> vesselPresetsFor(VesselField f) => switch (f) {
+        VesselField.name => vesselNames,
+        VesselField.port => vesselPorts,
+        VesselField.point => vesselPoints,
+        VesselField.fishType => vesselFishTypes,
       };
 
   /// 메모 작성 드롭다운에 노출할 어종 (숨김 제외).
@@ -502,6 +518,10 @@ class AppSettings {
     this.tackleReels = const [],
     this.tackleLines = const [],
     this.tackleRigs = const [],
+    this.vesselNames = const [],
+    this.vesselPorts = const [],
+    this.vesselPoints = const [],
+    this.vesselFishTypes = const [],
   })  : watermark = watermark ?? WatermarkSettings(),
         fishSpecies = fishSpecies ?? kCommonFishSpecies,
         hiddenFishSpecies = hiddenFishSpecies ?? const [];
@@ -541,6 +561,10 @@ class AppSettings {
     List<String>? tackleReels,
     List<String>? tackleLines,
     List<String>? tackleRigs,
+    List<String>? vesselNames,
+    List<String>? vesselPorts,
+    List<String>? vesselPoints,
+    List<String>? vesselFishTypes,
     double? locationFabRight,
     double? locationFabBottom,
     double? trackingFabRight,
@@ -590,6 +614,10 @@ class AppSettings {
       tackleReels: tackleReels ?? this.tackleReels,
       tackleLines: tackleLines ?? this.tackleLines,
       tackleRigs: tackleRigs ?? this.tackleRigs,
+      vesselNames: vesselNames ?? this.vesselNames,
+      vesselPorts: vesselPorts ?? this.vesselPorts,
+      vesselPoints: vesselPoints ?? this.vesselPoints,
+      vesselFishTypes: vesselFishTypes ?? this.vesselFishTypes,
       locationFabRight: locationFabRight ?? this.locationFabRight,
       locationFabBottom: locationFabBottom ?? this.locationFabBottom,
       trackingFabRight: trackingFabRight ?? this.trackingFabRight,

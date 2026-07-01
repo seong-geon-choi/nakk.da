@@ -16,6 +16,7 @@ import '../../core/utils/date_formatter.dart';
 import '../../features/memo/domain/models/memo_entry.dart';
 import '../../features/memo/domain/models/day_file.dart';
 import '../../features/location/domain/models/location_status.dart';
+import '../../features/tide/domain/models/tide_station.dart';
 import '../../features/memo/presentation/memo_provider.dart';
 import '../../features/backup/presentation/backup_provider.dart';
 import '../../features/memo/presentation/memo_input_sheet.dart';
@@ -39,6 +40,16 @@ import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+
+/// 당일 현황 블록 중 물때가 가장 많은 것을 조위 그래프용으로 선택.
+List<TideEvent> _outingTides(DayFile? dayFile) {
+  if (dayFile == null) return const [];
+  List<TideEvent> best = const [];
+  for (final loc in dayFile.locationBlocks) {
+    if (loc.tides.length > best.length) best = loc.tides;
+  }
+  return best;
+}
 
 /// 하루치 메모를 시스템 공유 시트로 내보낸다(블로그/카페 등 사용자가 앱 선택).
 Future<void> _shareDayMemo(
@@ -1386,6 +1397,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
               onTap: () => OutingEditSheet.show(
                 context,
                 initial: dayFile?.outing,
+                tides: _outingTides(dayFile),
                 onSave: (o) => notifier.updateOuting(o),
               ),
             ),

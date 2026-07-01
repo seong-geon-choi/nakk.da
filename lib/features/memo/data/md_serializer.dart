@@ -78,6 +78,22 @@ class MdSerializer {
   static String serializeOuting(OutingInfo o) {
     if (o.isEmpty) return '';
     final sb = StringBuffer('\n## 출조정보\n');
+    final v = o.vessel;
+    if (v != null && !v.isEmpty) {
+      final head = [
+        if (v.name.isNotEmpty) v.name,
+        if (v.port.isNotEmpty) v.port,
+      ].join(' / ');
+      final star = v.rating > 0 ? '  ${'★' * v.rating}${'☆' * (5 - v.rating)}' : '';
+      if (head.isNotEmpty || star.isNotEmpty) sb.writeln('- ⛴ 선사: $head$star');
+      final detail = [
+        '출항 ${_minToHhmm(v.departMin)}~입항 ${_minToHhmm(v.arriveMin)}',
+        if (v.point.isNotEmpty) '포인트 ${v.point}',
+        if (v.fishType.isNotEmpty) v.fishType,
+        if (v.avgDepth != null) '수심 ${v.avgDepth}m',
+      ].join(' | ');
+      sb.writeln('- 🕐 $detail');
+    }
     for (var i = 0; i < o.tackles.length; i++) {
       final t = o.tackles[i];
       if (t.isEmpty) continue;
@@ -92,6 +108,12 @@ class MdSerializer {
     if (catchStr.isNotEmpty) sb.writeln('- 🐟 조과: $catchStr');
     sb.writeln('[//]: # (outing:${jsonEncode(o.toJson())})');
     return sb.toString();
+  }
+
+  static String _minToHhmm(int min) {
+    final h = (min ~/ 60).toString().padLeft(2, '0');
+    final m = (min % 60).toString().padLeft(2, '0');
+    return '$h:$m';
   }
 
   /// 숨김 주석에서 출조 정보 복원. 없으면 null.

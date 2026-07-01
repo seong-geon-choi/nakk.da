@@ -2,7 +2,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../settings/presentation/settings_provider.dart';
+import '../../tide/domain/models/tide_station.dart';
 import '../../../core/constants/app_constants.dart';
+import '../../../core/widgets/tide_curve_graph.dart';
 import '../domain/models/outing_info.dart';
 
 /// 날짜 화면 상단 '출조 정보' 요약 카드. 탭하면 편집 시트를 연다.
@@ -21,6 +23,13 @@ class OutingSummaryCard extends StatelessWidget {
         .where((c) => c.species.isNotEmpty)
         .map((c) => '${c.species} ${c.count}')
         .join(', ');
+    final v = o?.vessel;
+    final vesselStr = (v != null && !v.isEmpty)
+        ? [
+            if (v.name.isNotEmpty) v.name,
+            if (v.rating > 0) '★${v.rating}',
+          ].join(' ')
+        : '';
     final empty = o == null || o.isEmpty;
 
     return Card(
@@ -44,7 +53,10 @@ class OutingSummaryCard extends StatelessWidget {
                     : Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('태클 $tackleCount세트',
+                          Text(
+                              vesselStr.isNotEmpty
+                                  ? '⛴ $vesselStr · 태클 $tackleCount세트'
+                                  : '태클 $tackleCount세트',
                               style: const TextStyle(
                                   fontSize: 13, fontWeight: FontWeight.w600)),
                           if (catchStr.isNotEmpty)
@@ -72,13 +84,20 @@ class OutingSummaryCard extends StatelessWidget {
 /// 출조 정보(태클 3세트 + 최종 조과) 편집 바텀시트.
 class OutingEditSheet extends ConsumerStatefulWidget {
   final OutingInfo? initial;
+  final List<TideEvent> tides; // 당일 물때(조위 그래프용)
   final Future<void> Function(OutingInfo) onSave;
 
-  const OutingEditSheet({super.key, this.initial, required this.onSave});
+  const OutingEditSheet({
+    super.key,
+    this.initial,
+    this.tides = const [],
+    required this.onSave,
+  });
 
   static Future<void> show(
     BuildContext context, {
     OutingInfo? initial,
+    List<TideEvent> tides = const [],
     required Future<void> Function(OutingInfo) onSave,
   }) {
     return showModalBottomSheet(
@@ -87,7 +106,8 @@ class OutingEditSheet extends ConsumerStatefulWidget {
       constraints: BoxConstraints(
         maxWidth: math.min(MediaQuery.of(context).size.width, 600),
       ),
-      builder: (_) => OutingEditSheet(initial: initial, onSave: onSave),
+      builder: (_) =>
+          OutingEditSheet(initial: initial, tides: tides, onSave: onSave),
     );
   }
 
@@ -105,10 +125,31 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
   late List<(TextEditingController, int)> _catches;
   bool _saving = false;
 
+  // 선사 정보
+  final _vName = TextEditingController();
+  final _vPort = TextEditingController();
+  final _vPoint = TextEditingController();
+  final _vFishType = TextEditingController();
+  final _vDepth = TextEditingController();
+  int _departMin = 300;
+  int _arriveMin = 960;
+  int _rating = 0;
+
   @override
   void initState() {
     super.initState();
     final init = widget.initial;
+    final v = init?.vessel;
+    if (v != null) {
+      _vName.text = v.name;
+      _vPort.text = v.port;
+      _vPoint.text = v.point;
+      _vFishType.text = v.fishType;
+      if (v.avgDepth != null) _vDepth.text = _fmtDepth(v.avgDepth!);
+      _departMin = v.departMin;
+      _arriveMin = v.arriveMin;
+      _rating = v.rating;
+    }
     _tackleCtrls = List.generate(_maxTackles, (i) {
       final t = (init != null && i < init.tackles.length)
           ? init.tackles[i]
@@ -136,7 +177,21 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
     for (final c in _catches) {
       c.$1.dispose();
     }
+    _vName.dispose();
+    _vPort.dispose();
+    _vPoint.dispose();
+    _vFishType.dispose();
+    _vDepth.dispose();
     super.dispose();
+  }
+
+  static String _fmtDepth(double v) =>
+      v % 1 == 0 ? v.toStringAsFixed(0) : v.toStringAsFixed(1);
+
+  static String _minToHhmm(int min) {
+    final h = (min ~/ 60).toString().padLeft(2, '0');
+    final m = (min % 60).toString().padLeft(2, '0');
+    return '$h:$m';
   }
 
   @override
@@ -172,6 +227,8 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
+                    _vesselSection(),
+                    const Divider(height: 20),
                     for (var i = 0; i < _maxTackles; i++) ...[
                       _tackleSet(i),
                       const Divider(height: 20),
@@ -230,7 +287,22 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
     final presets =
         ref.watch(settingsProvider).valueOrNull?.tacklePresetsFor(field) ??
             const <String>[];
-    final ctrl = _tackleCtrls[setIndex][field]!;
+    return _presetRow(
+      ctrl: _tackleCtrls[setIndex][field]!,
+      label: label,
+      presets: presets,
+      onRemovePreset: (p) =>
+          ref.read(settingsProvider.notifier).removeTacklePreset(field, p),
+    );
+  }
+
+  /// 자유입력 TextField + 프리셋 드롭다운(항목별 X 삭제) 공용 위젯
+  Widget _presetRow({
+    required TextEditingController ctrl,
+    required String label,
+    required List<String> presets,
+    required void Function(String) onRemovePreset,
+  }) {
     return Row(
       children: [
         Expanded(
@@ -261,9 +333,7 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
                     InkWell(
                       onTap: () {
                         Navigator.pop(context); // 메뉴 닫기
-                        ref
-                            .read(settingsProvider.notifier)
-                            .removeTacklePreset(field, p);
+                        onRemovePreset(p);
                       },
                       child: const Padding(
                         padding: EdgeInsets.only(left: 8),
@@ -276,6 +346,100 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
           ],
         ),
       ],
+    );
+  }
+
+  // ── 선사 정보 ─────────────────────────────────────────
+  Widget _vesselSection() {
+    final s = ref.watch(settingsProvider).valueOrNull;
+    Widget vesselField(
+            VesselField f, TextEditingController ctrl, String label) =>
+        _presetRow(
+          ctrl: ctrl,
+          label: label,
+          presets: s?.vesselPresetsFor(f) ?? const [],
+          onRemovePreset: (p) =>
+              ref.read(settingsProvider.notifier).removeVesselPreset(f, p),
+        );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('선사 정보',
+            style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        vesselField(VesselField.name, _vName, '선박명'),
+        const SizedBox(height: 6),
+        vesselField(VesselField.port, _vPort, '항구'),
+        const SizedBox(height: 6),
+        Row(
+          children: [
+            Expanded(child: _timeField('출항', _departMin, (m) => setState(() => _departMin = m))),
+            const SizedBox(width: 8),
+            Expanded(child: _timeField('입항', _arriveMin, (m) => setState(() => _arriveMin = m))),
+          ],
+        ),
+        const SizedBox(height: 6),
+        vesselField(VesselField.point, _vPoint, '주요 포인트'),
+        const SizedBox(height: 6),
+        vesselField(VesselField.fishType, _vFishType, '낚시 종류'),
+        const SizedBox(height: 6),
+        TextField(
+          controller: _vDepth,
+          keyboardType: const TextInputType.numberWithOptions(decimal: true),
+          decoration: const InputDecoration(
+            labelText: '평균 수심(m)',
+            isDense: true,
+            contentPadding: EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+            border: OutlineInputBorder(),
+          ),
+          style: const TextStyle(fontSize: 13),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            const Text('별점', style: TextStyle(fontSize: 13)),
+            const SizedBox(width: 8),
+            for (var i = 1; i <= 5; i++)
+              GestureDetector(
+                onTap: () =>
+                    setState(() => _rating = _rating == i ? i - 1 : i),
+                child: Icon(
+                  i <= _rating ? Icons.star : Icons.star_border,
+                  color: Colors.amber,
+                  size: 26,
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 10),
+        TideCurveGraph(
+          tides: widget.tides,
+          startMin: _departMin,
+          endMin: _arriveMin,
+        ),
+      ],
+    );
+  }
+
+  Widget _timeField(String label, int min, void Function(int) onChanged) {
+    return InkWell(
+      onTap: () async {
+        final picked = await showTimePicker(
+          context: context,
+          initialTime: TimeOfDay(hour: min ~/ 60, minute: min % 60),
+        );
+        if (picked != null) onChanged(picked.hour * 60 + picked.minute);
+      },
+      child: InputDecorator(
+        decoration: InputDecoration(
+          labelText: label,
+          isDense: true,
+          contentPadding:
+              const EdgeInsets.symmetric(horizontal: 8, vertical: 10),
+          border: const OutlineInputBorder(),
+        ),
+        child: Text(_minToHhmm(min), style: const TextStyle(fontSize: 13)),
+      ),
     );
   }
 
@@ -403,7 +567,33 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
         catches.add(CatchTally(species: sp, count: c.$2));
         await notifier.addFishSpecies(sp);
       }
-      await widget.onSave(OutingInfo(tackles: tackles, catches: catches));
+
+      // 선사 정보
+      final vName = _vName.text.trim();
+      final vPort = _vPort.text.trim();
+      final vPoint = _vPoint.text.trim();
+      final vFishType = _vFishType.text.trim();
+      final vessel = VesselInfo(
+        name: vName,
+        port: vPort,
+        departMin: _departMin,
+        arriveMin: _arriveMin,
+        point: vPoint,
+        fishType: vFishType,
+        avgDepth: double.tryParse(_vDepth.text.trim()),
+        rating: _rating,
+      );
+      if (vName.isNotEmpty) await notifier.addVesselPreset(VesselField.name, vName);
+      if (vPort.isNotEmpty) await notifier.addVesselPreset(VesselField.port, vPort);
+      if (vPoint.isNotEmpty) {
+        await notifier.addVesselPreset(VesselField.point, vPoint);
+      }
+      if (vFishType.isNotEmpty) {
+        await notifier.addVesselPreset(VesselField.fishType, vFishType);
+      }
+
+      await widget.onSave(
+          OutingInfo(tackles: tackles, catches: catches, vessel: vessel));
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       if (mounted) {
