@@ -31,6 +31,7 @@ class WatermarkBox {
   final String dateFormat; // type == date 일 때 사용
   final String timeFormat; // type == time 일 때 사용
   final WatermarkTextContent textContent; // customText/customText2 내용 종류
+  final int quarterTurns; // 박스 회전(시계방향 90°×n, 0~3)
 
   const WatermarkBox({
     required this.type,
@@ -46,6 +47,7 @@ class WatermarkBox {
     this.dateFormat = 'yyyy-MM-dd',
     this.timeFormat = 'HH:mm',
     this.textContent = WatermarkTextContent.text,
+    this.quarterTurns = 0,
   });
 
   WatermarkBox copyWith({
@@ -61,6 +63,7 @@ class WatermarkBox {
     String? dateFormat,
     String? timeFormat,
     WatermarkTextContent? textContent,
+    int? quarterTurns,
   }) =>
       WatermarkBox(
         type: type,
@@ -76,6 +79,7 @@ class WatermarkBox {
         dateFormat: dateFormat ?? this.dateFormat,
         timeFormat: timeFormat ?? this.timeFormat,
         textContent: textContent ?? this.textContent,
+        quarterTurns: quarterTurns ?? this.quarterTurns,
       );
 
   Map<String, dynamic> toJson() => {
@@ -92,6 +96,7 @@ class WatermarkBox {
         'dateFormat': dateFormat,
         'timeFormat': timeFormat,
         'textContent': textContent.name,
+        'quarterTurns': quarterTurns,
       };
 
   factory WatermarkBox.fromJson(Map<String, dynamic> j) => WatermarkBox(
@@ -112,6 +117,7 @@ class WatermarkBox {
         timeFormat: j['timeFormat'] as String? ?? 'HH:mm',
         textContent: WatermarkTextContent.values
             .byName(j['textContent'] as String? ?? 'text'),
+        quarterTurns: (j['quarterTurns'] as num?)?.toInt() ?? 0,
       );
 }
 

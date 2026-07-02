@@ -110,25 +110,29 @@ class _WatermarkSettingsScreenState
       },
     );
 
+    // 키보드가 올라오면 상단 미리보기/탭을 숨겨 입력창 공간을 확보(오버플로 방지)
+    final keyboardOpen = MediaQuery.viewInsetsOf(context).bottom > 0;
     return Scaffold(
       appBar: AppBar(title: const Text('워터마크 설정')),
       body: Column(
         children: [
-          _TemplateTabs(
-            active: activeIndex,
-            onSelect: (i) =>
-                ref.read(settingsProvider.notifier).selectWatermarkTemplate(i),
-          ),
-          const Divider(height: 1),
-          _PreviewSection(
-            wm: wm,
-            dark: _darkPreview,
-            selectedType: _selectedType,
-            onToggleBg: (v) => setState(() => _darkPreview = v),
-            onMoveBox: (type, x, y) => _moveBox(wm, type, x, y),
-            onSelectBox: _selectBox,
-          ),
-          const Divider(height: 1),
+          if (!keyboardOpen) ...[
+            _TemplateTabs(
+              active: activeIndex,
+              onSelect: (i) =>
+                  ref.read(settingsProvider.notifier).selectWatermarkTemplate(i),
+            ),
+            const Divider(height: 1),
+            _PreviewSection(
+              wm: wm,
+              dark: _darkPreview,
+              selectedType: _selectedType,
+              onToggleBg: (v) => setState(() => _darkPreview = v),
+              onMoveBox: (type, x, y) => _moveBox(wm, type, x, y),
+              onSelectBox: _selectBox,
+            ),
+            const Divider(height: 1),
+          ],
           Expanded(
             child: ListView(
               controller: _scrollController,
@@ -560,7 +564,9 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
         textScaler: TextScaler.noScaling,
       )..layout();
       // +2px: 시스템 글꼴 배율 무시(noScaling)와 함께 서브픽셀 줄바꿈 방지
-      sizes.add(Size(tp.width + 2, tp.height));
+      final nat = Size(tp.width + 2, tp.height);
+      // 90°/270° 회전 시 footprint 가로·세로가 뒤바뀜
+      sizes.add(b.quarterTurns % 2 != 0 ? Size(nat.height, nat.width) : nat);
       positions.add(Offset(b.dx * shortSidePx, b.dy * shortSidePx));
     }
 
@@ -686,28 +692,36 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
             final highlight = dragging || selected;
             final dashColor = highlight ? Colors.amber : dashBase;
 
+            final turns = box.quarterTurns;
+            final swapped = turns % 2 != 0;
+            // footprint(bl.rect)에서 회전 전 파라그래프 자연 크기 복원
+            final natW = swapped ? bl.rect.height : bl.rect.width;
+            final natH = swapped ? bl.rect.width : bl.rect.height;
+            final textWidget = SizedBox(
+              width: natW,
+              height: natH,
+              child: Text(
+                _previewBoxText(box, now),
+                textAlign: _textAlign(box.alignment),
+                textScaler: TextScaler.noScaling,
+                maxLines: 1,
+                softWrap: false,
+                overflow: TextOverflow.visible,
+                style: TextStyle(
+                  color: Color(box.textColor),
+                  fontSize: box.fontSize * layout.shortSidePx / 480.0,
+                  fontWeight: _fontWeight(box.weight),
+                  fontFamily: _fontFamily(box.fontFamily),
+                  height: 1.25,
+                ),
+              ),
+            );
             final boxWidget = CustomPaint(
               foregroundPainter: _DashedBorderPainter(
                   color: dashColor, strokeWidth: highlight ? 2 : 1),
-              child: SizedBox(
-                width: bl.rect.width,
-                height: bl.rect.height,
-                child: Text(
-                  _previewBoxText(box, now),
-                  textAlign: _textAlign(box.alignment),
-                  textScaler: TextScaler.noScaling,
-                  maxLines: 1,
-                  softWrap: false,
-                  overflow: TextOverflow.visible,
-                  style: TextStyle(
-                    color: Color(box.textColor),
-                    fontSize: box.fontSize * layout.shortSidePx / 480.0,
-                    fontWeight: _fontWeight(box.weight),
-                    fontFamily: _fontFamily(box.fontFamily),
-                    height: 1.25,
-                  ),
-                ),
-              ),
+              child: turns % 4 == 0
+                  ? textWidget
+                  : RotatedBox(quarterTurns: turns, child: textWidget),
             );
 
             children.add(Positioned(
@@ -1099,6 +1113,28 @@ class _BoxCard extends StatelessWidget {
                 style: const ButtonStyle(
                   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                   visualDensity: VisualDensity.compact,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          // 회전 (탭할 때마다 시계방향 90°)
+          Row(
+            children: [
+              const Icon(Icons.rotate_90_degrees_cw, size: 20),
+              const SizedBox(width: 8),
+              const Text('회전', style: TextStyle(fontSize: 13)),
+              const Spacer(),
+              OutlinedButton.icon(
+                onPressed: () => onUpdate(
+                    (b) => b.copyWith(quarterTurns: (b.quarterTurns + 1) % 4)),
+                icon: const Icon(Icons.rotate_90_degrees_cw, size: 16),
+                label: Text('${box.quarterTurns * 90}°'),
+                style: OutlinedButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                  tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                 ),
               ),
             ],

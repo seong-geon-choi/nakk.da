@@ -92,8 +92,8 @@ Future<String> applyWatermark(
           .build()
         ..layout(ui.ParagraphConstraints(width: bw));
 
-      laid.add(_LaidBox(
-          para, b.dx * shortSide, b.dy * shortSide, bw, para.height));
+      laid.add(_LaidBox(para, b.dx * shortSide, b.dy * shortSide, bw,
+          para.height, b.quarterTurns));
     }
 
     // 박스 그룹의 바운딩 박스
@@ -102,8 +102,8 @@ Future<String> applyWatermark(
     for (final l in laid) {
       minX = math.min(minX, l.x);
       minY = math.min(minY, l.y);
-      maxX = math.max(maxX, l.x + l.w);
-      maxY = math.max(maxY, l.y + l.h);
+      maxX = math.max(maxX, l.x + l.fw);
+      maxY = math.max(maxY, l.y + l.fh);
     }
 
     final pad = maxFont * 0.4; // 컨테이너 안쪽 여백
@@ -128,15 +128,19 @@ Future<String> applyWatermark(
       Paint()..color = Color(settings.bgColorArgb),
     );
 
-    // 각 박스 텍스트 그리기
+    // 각 박스 텍스트 그리기 (회전 반영: footprint 중심 기준 시계방향 90°×turns)
     for (final l in laid) {
-      canvas.drawParagraph(
-        l.para,
-        Offset(
-          boxOffset.dx + pad + (l.x - minX),
-          boxOffset.dy + pad + (l.y - minY),
-        ),
-      );
+      final dox = boxOffset.dx + pad + (l.x - minX);
+      final doy = boxOffset.dy + pad + (l.y - minY);
+      if (l.turns % 4 == 0) {
+        canvas.drawParagraph(l.para, Offset(dox, doy));
+      } else {
+        canvas.save();
+        canvas.translate(dox + l.fw / 2, doy + l.fh / 2);
+        canvas.rotate(l.turns * math.pi / 2);
+        canvas.drawParagraph(l.para, Offset(-l.w / 2, -l.h / 2));
+        canvas.restore();
+      }
     }
 
     // PNG 바이트로 렌더링
@@ -180,9 +184,13 @@ class _LaidBox {
   final ui.Paragraph para;
   final double x;
   final double y;
-  final double w;
-  final double h;
-  _LaidBox(this.para, this.x, this.y, this.w, this.h);
+  final double w; // 파라그래프 자연 너비
+  final double h; // 파라그래프 높이
+  final int turns; // 시계방향 90°×turns
+  _LaidBox(this.para, this.x, this.y, this.w, this.h, this.turns);
+  bool get _swapped => turns % 2 != 0;
+  double get fw => _swapped ? h : w; // 회전 반영 footprint 너비
+  double get fh => _swapped ? w : h; // 회전 반영 footprint 높이
 }
 
 String _boxText(WatermarkBox b, DateTime now, String? address) {
