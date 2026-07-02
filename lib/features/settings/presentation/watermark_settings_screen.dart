@@ -266,7 +266,8 @@ String _previewBoxText(WatermarkBox b, DateTime now) {
           b.type == WatermarkLineType.customText ? '(텍스트1)' : '(텍스트2)';
       return switch (b.textContent) {
         WatermarkTextContent.year => '${now.year}',
-        WatermarkTextContent.address => '🎯 시/군/구/동',
+        WatermarkTextContent.address =>
+          '${String.fromCharCode(Icons.location_on.codePoint)} 시/군/구/동',
         WatermarkTextContent.text =>
           b.customText.trim().isEmpty ? placeholder : b.customText.trim(),
       };
@@ -556,6 +557,7 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
             fontSize: scaledFont,
             fontWeight: _fontWeight(b.weight),
             fontFamily: _fontFamily(b.fontFamily),
+            fontFamilyFallback: const ['MaterialIcons'],
             height: 1.25,
           ),
         ),
@@ -712,6 +714,7 @@ class _WatermarkPreviewState extends State<_WatermarkPreview> {
                   fontSize: box.fontSize * layout.shortSidePx / 480.0,
                   fontWeight: _fontWeight(box.weight),
                   fontFamily: _fontFamily(box.fontFamily),
+                  fontFamilyFallback: const ['MaterialIcons'],
                   height: 1.25,
                 ),
               ),

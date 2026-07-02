@@ -69,6 +69,7 @@ Future<String> applyWatermark(
               fontSize: scaledFont,
               fontWeight: fw,
               fontFamily: fam,
+              fontFamilyFallback: const ['MaterialIcons'],
             ))
             ..addText(text))
           .build()
@@ -87,6 +88,7 @@ Future<String> applyWatermark(
               fontSize: scaledFont,
               fontWeight: fw,
               fontFamily: fam,
+              fontFamilyFallback: const ['MaterialIcons'],
             ))
             ..addText(text))
           .build()
@@ -206,7 +208,7 @@ String _boxText(WatermarkBox b, DateTime now, String? address) {
         WatermarkTextContent.year => '${now.year}',
         WatermarkTextContent.address =>
           (address != null && address.trim().isNotEmpty)
-              ? '🎯 ${address.trim()}'
+              ? '${String.fromCharCode(Icons.location_on.codePoint)} ${address.trim()}'
               : '',
       };
   }
