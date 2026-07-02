@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math' show min;
@@ -41,8 +42,12 @@ class BackupState {
 class BackupNotifier extends AsyncNotifier<BackupState> {
   final _saf = SafService();
 
+  /// 출퇴근/프리셋 설정 백업 디바운스 타이머(짧은 시간 다수 호출 시 1회만 업로드)
+  Timer? _commuteBackupDebounce;
+
   @override
   Future<BackupState> build() async {
+    ref.onDispose(() => _commuteBackupDebounce?.cancel());
     final settings = await ref.watch(settingsProvider.future);
     final svc = ref.read(driveBackupServiceProvider);
     final isSignedIn = await svc.isSignedIn();
@@ -80,8 +85,16 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     await ref.read(settingsProvider.notifier).updateDriveBackup(includeMedia: value);
   }
 
-  /// 출퇴근 설정(지점 포함)을 드라이브에 업로드 — 백업 켜짐 + Wi-Fi일 때만
+  /// 출퇴근/프리셋 설정 백업을 예약 — 3초 디바운스로 마지막 호출 1회만 업로드.
+  /// (출조 저장 시 프리셋이 여러 개 한꺼번에 추가되는 상황의 중복 업로드 방지)
   Future<void> backupCommuteSettings() async {
+    _commuteBackupDebounce?.cancel();
+    _commuteBackupDebounce =
+        Timer(const Duration(seconds: 3), () => unawaited(_uploadCommuteSettings()));
+  }
+
+  /// 실제 업로드 — 백업 켜짐 + Wi-Fi일 때만
+  Future<void> _uploadCommuteSettings() async {
     final settings = await ref.read(settingsProvider.future);
     if (!settings.driveBackupEnabled) return;
     final svc = ref.read(driveBackupServiceProvider);

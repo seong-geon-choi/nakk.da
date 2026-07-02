@@ -118,6 +118,15 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
       'pmEnabled': s.commutePmEnabled,
       'customEnabled': s.commuteCustomEnabled,
       'weekdaysOnly': s.commuteWeekdaysOnly,
+      // 출조정보 입력값 재사용을 위한 프리셋 목록
+      'tackleRods': s.tackleRods,
+      'tackleReels': s.tackleReels,
+      'tackleLines': s.tackleLines,
+      'tackleRigs': s.tackleRigs,
+      'vesselNames': s.vesselNames,
+      'vesselPorts': s.vesselPorts,
+      'vesselPoints': s.vesselPoints,
+      'vesselFishTypes': s.vesselFishTypes,
     };
   }
 
@@ -147,8 +156,21 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
       commutePmEnabled: j['pmEnabled'] as bool?,
       commuteCustomEnabled: j['customEnabled'] as bool?,
       commuteWeekdaysOnly: j['weekdaysOnly'] as bool?,
+      tackleRods: _strList(j['tackleRods']),
+      tackleReels: _strList(j['tackleReels']),
+      tackleLines: _strList(j['tackleLines']),
+      tackleRigs: _strList(j['tackleRigs']),
+      vesselNames: _strList(j['vesselNames']),
+      vesselPorts: _strList(j['vesselPorts']),
+      vesselPoints: _strList(j['vesselPoints']),
+      vesselFishTypes: _strList(j['vesselFishTypes']),
     ));
   }
+
+  /// 백업 JSON의 문자열 배열 필드를 파싱. 없으면 null(기존값 유지).
+  static List<String>? _strList(dynamic v) => v == null
+      ? null
+      : (v as List<dynamic>).map((e) => e.toString()).toList();
 
   Future<void> updateCommuteEnabled(bool value) async {
     final c = state.valueOrNull;
@@ -366,6 +388,7 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     final updated = _copyTackle(c, field, [v, ...c.tacklePresetsFor(field)]);
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
+    unawaited(ref.read(backupProvider.notifier).backupCommuteSettings());
   }
 
   Future<void> removeTacklePreset(TackleField field, String value) async {
@@ -375,6 +398,7 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
         c, field, c.tacklePresetsFor(field).where((s) => s != value).toList());
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
+    unawaited(ref.read(backupProvider.notifier).backupCommuteSettings());
   }
 
   // ── 선사 프리셋 ───────────────────────────────────────
@@ -394,6 +418,7 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     final updated = _copyVessel(c, field, [v, ...c.vesselPresetsFor(field)]);
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
+    unawaited(ref.read(backupProvider.notifier).backupCommuteSettings());
   }
 
   Future<void> removeVesselPreset(VesselField field, String value) async {
@@ -403,6 +428,7 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
         c, field, c.vesselPresetsFor(field).where((s) => s != value).toList());
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
+    unawaited(ref.read(backupProvider.notifier).backupCommuteSettings());
   }
 
   Future<void> updateShareEnabled(bool value) async {
