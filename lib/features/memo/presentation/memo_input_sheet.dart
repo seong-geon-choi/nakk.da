@@ -149,8 +149,13 @@ class MemoInputSheet extends ConsumerStatefulWidget {
             containerPosX: arResult.posX!, containerPosY: arResult.posY!);
         await ref.read(settingsProvider.notifier).updateWatermark(effectiveWm);
       }
-      final wmAddress = ref.read(locationProvider).valueOrNull?.address ??
-          ref.read(locationProvider.notifier).cached?.address;
+      final needsAddress = effectiveWm != null &&
+          effectiveWm.enabled &&
+          effectiveWm.boxes.any((b) =>
+              b.visible && b.textContent == WatermarkTextContent.address);
+      final wmAddress = needsAddress
+          ? await ref.read(locationProvider.notifier).resolveWatermarkAddress()
+          : null;
       final rawPath = (arResult.applyWatermark && effectiveWm != null)
           ? await applyWatermark(arResult.path, effectiveWm.copyWith(enabled: true),
               address: wmAddress)

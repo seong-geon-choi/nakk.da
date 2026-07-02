@@ -198,8 +198,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       if (!mounted) return;
 
       final wmSettings = ref.read(settingsProvider).valueOrNull?.watermark;
-      final wmAddress = ref.read(locationProvider).valueOrNull?.address ??
-          ref.read(locationProvider.notifier).cached?.address;
+      final wmAddress = await _resolveWmAddress(wmSettings);
       final photoPath = (wmSettings != null && wmSettings.enabled)
           ? await applyWatermark(file.path, wmSettings, address: wmAddress)
           : file.path;
@@ -211,6 +210,15 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     } finally {
       if (mounted) setState(() => _capturing = false);
     }
+  }
+
+  /// 워터마크에 주소 박스가 켜져 있을 때만 역지오코딩해 주소를 반환.
+  Future<String?> _resolveWmAddress(WatermarkSettings? wm) async {
+    if (wm == null || !wm.enabled) return null;
+    final needsAddress = wm.boxes.any(
+        (b) => b.visible && b.textContent == WatermarkTextContent.address);
+    if (!needsAddress) return null;
+    return ref.read(locationProvider.notifier).resolveWatermarkAddress();
   }
 
   Future<void> _startRecording() async {

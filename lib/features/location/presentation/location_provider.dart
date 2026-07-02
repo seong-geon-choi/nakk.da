@@ -36,6 +36,18 @@ class LocationNotifier extends AsyncNotifier<LocationStatus?> {
   LocationStatus? get cached =>
       ref.read(locationServiceProvider).cachedLocation;
 
+  /// 워터마크용 주소 — 이미 확보된 주소가 있으면 그대로, 없으면 현재 GPS를
+  /// 역지오코딩해 시/군/구/동 문자열 반환. GPS/네트워크 실패 시 null.
+  Future<String?> resolveWatermarkAddress() async {
+    final existing = state.valueOrNull?.address ?? cached?.address;
+    if (existing != null && existing.trim().isNotEmpty) return existing;
+    final gps = await ref.read(locationServiceProvider).getCurrentLocation();
+    final lat = gps?.latitude;
+    final lng = gps?.longitude;
+    if (lat == null || lng == null) return null;
+    return reverseGeocode(lat, lng);
+  }
+
   /// GPS + 역지오코딩 + 기온 + 물때/수온을 병합한 풍부한 LocationStatus 반환
   Future<LocationStatus> buildEnrichedLocation({bool isMove = false}) async {
     // 1. GPS
