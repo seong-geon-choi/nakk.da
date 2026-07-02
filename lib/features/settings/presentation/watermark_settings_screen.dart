@@ -1017,9 +1017,9 @@ class _BoxCard extends StatelessWidget {
               Expanded(
                 child: Slider(
                   value: box.fontSize,
-                  min: 16,
-                  max: 80,
-                  divisions: 16,
+                  min: 4,
+                  max: 160,
+                  divisions: 39,
                   label: box.fontSize.toInt().toString(),
                   onChanged: (v) => onUpdate((b) => b.copyWith(fontSize: v)),
                 ),
