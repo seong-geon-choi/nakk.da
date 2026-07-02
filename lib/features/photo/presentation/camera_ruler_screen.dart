@@ -752,6 +752,7 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
                       fontSize: fonts[i],
                       fontWeight: _fontWeight(visible[i].weight),
                       fontFamily: _fontFam(visible[i].fontFamily),
+                      fontFamilyFallback: const ['MaterialIcons'],
                       shadows: const [Shadow(blurRadius: 2)],
                       height: 1.25,
                     ),
@@ -888,7 +889,13 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
         return b.timeFormat.isEmpty ? '' : _fmtTime(now, b.timeFormat);
       case WatermarkLineType.customText:
       case WatermarkLineType.customText2:
-        return b.customText.trim();
+        // 라이브뷰는 실제 주소를 알 수 없어 주소는 자리표시자로 표시(촬영 시 실제 주소로 대체)
+        return switch (b.textContent) {
+          WatermarkTextContent.text => b.customText.trim(),
+          WatermarkTextContent.year => '${now.year}',
+          WatermarkTextContent.address =>
+            '${String.fromCharCode(Icons.location_on.codePoint)} 시/군/구/동',
+        };
     }
   }
 

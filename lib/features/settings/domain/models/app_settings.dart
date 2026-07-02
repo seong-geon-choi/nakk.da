@@ -197,6 +197,130 @@ class WatermarkSettings {
         WatermarkPosition.bottomRight => (1.0, 1.0),
       };
 
+  /// 배포용 기본 워터마크 템플릿 3종(개발 기기에서 구성한 값).
+  static List<WatermarkSettings> defaultTemplates() => [
+        // 템플릿 1: 우하단 큰 시각 + 낚.다
+        WatermarkSettings(
+          enabled: false,
+          containerPosX: 0.6980602179600072,
+          containerPosY: 0.7945379171746418,
+          boxes: const [
+            WatermarkBox(
+              type: WatermarkLineType.date,
+              dx: 0.14778951319252573,
+              dy: 0.19443800019054883,
+              fontSize: 24,
+            ),
+            WatermarkBox(
+              type: WatermarkLineType.time,
+              dx: -0.3018272679026534,
+              dy: 0.09612376143292686,
+              fontSize: 76,
+              weight: WatermarkWeight.black,
+              fontFamily: WatermarkFont.heavy,
+            ),
+            WatermarkBox(
+              type: WatermarkLineType.customText,
+              customText: '낚.다',
+              dx: 0.3153880049542683,
+              dy: 0.1383987947789635,
+              fontSize: 20,
+              weight: WatermarkWeight.black,
+              textColor: 0xFFFFEB3B,
+            ),
+            WatermarkBox(
+              type: WatermarkLineType.customText2,
+              visible: false,
+              dy: 0.36,
+              fontSize: 32,
+            ),
+          ],
+        ),
+        // 템플릿 2: 하단 가로줄(영문월/일 + 연도 세로)
+        WatermarkSettings(
+          enabled: true,
+          containerPosX: 0.6438397043491538,
+          containerPosY: 0.9344313151716781,
+          boxes: const [
+            WatermarkBox(
+              type: WatermarkLineType.date,
+              dx: -0.4995875009676301,
+              dy: 0.9027435451600607,
+              fontSize: 68,
+              weight: WatermarkWeight.black,
+              fontFamily: WatermarkFont.serif,
+              dateFormat: 'MMM/dd',
+            ),
+            WatermarkBox(
+              type: WatermarkLineType.time,
+              dx: -0.0033448847328739952,
+              dy: 0.9982883137028391,
+              fontSize: 16,
+              weight: WatermarkWeight.black,
+            ),
+            WatermarkBox(
+              type: WatermarkLineType.customText,
+              customText: '낚.다',
+              dx: 0.0060226161305502535,
+              dy: 0.9332105087652436,
+              fontSize: 20,
+              weight: WatermarkWeight.black,
+              textColor: 0xFFFFEB3B,
+            ),
+            WatermarkBox(
+              type: WatermarkLineType.customText2,
+              dx: -0.5872637585895814,
+              dy: 0.9376754239710365,
+              fontSize: 24,
+              textContent: WatermarkTextContent.year,
+              quarterTurns: 3,
+            ),
+          ],
+        ),
+        // 템플릿 3: 우측 세로 배치(날짜시각·낚.다·주소, 90° 회전)
+        WatermarkSettings(
+          enabled: true,
+          containerPosX: 0.9619658407930992,
+          containerPosY: 0.669561523663918,
+          boxes: const [
+            WatermarkBox(
+              type: WatermarkLineType.date,
+              dx: 0.7088961252352086,
+              dy: 0.2374007955411586,
+              fontSize: 16,
+              dateFormat: 'yyyy-MM-dd HH:mm:ss',
+              quarterTurns: 1,
+            ),
+            WatermarkBox(
+              type: WatermarkLineType.time,
+              visible: false,
+              dx: 0.3477058875851515,
+              dy: 0.005553544207317113,
+              fontSize: 16,
+              quarterTurns: 1,
+            ),
+            WatermarkBox(
+              type: WatermarkLineType.customText,
+              customText: '낚.다',
+              dx: 0.7098239805640244,
+              dy: 0.5838466700111948,
+              fontSize: 16,
+              textColor: 0xFFFFEB3B,
+              quarterTurns: 1,
+            ),
+            WatermarkBox(
+              type: WatermarkLineType.customText2,
+              dx: 0.7047327553353657,
+              dy: 0.7083469893292684,
+              fontSize: 16,
+              textColor: 0xFF2196F3,
+              textContent: WatermarkTextContent.address,
+              quarterTurns: 1,
+            ),
+          ],
+        ),
+      ];
+
   WatermarkSettings({
     this.enabled = false,
     List<WatermarkBox>? boxes,
@@ -547,8 +671,8 @@ class AppSettings {
     this.vesselPorts = const [],
     this.vesselPoints = const [],
     this.vesselFishTypes = const [],
-  })  : watermarkTemplates = watermarkTemplates ??
-            [WatermarkSettings(), WatermarkSettings(), WatermarkSettings()],
+  })  : watermarkTemplates =
+            watermarkTemplates ?? WatermarkSettings.defaultTemplates(),
         fishSpecies = fishSpecies ?? kCommonFishSpecies,
         hiddenFishSpecies = hiddenFishSpecies ?? const [];
 

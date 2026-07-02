@@ -91,24 +91,33 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final khoaApiKey = prefs.getString(_khoaApiKeyKey);
     // 워터마크 템플릿 3슬롯. 신규 키 우선, 없으면 구버전 단일 워터마크에서 마이그레이션.
     List<WatermarkSettings> watermarkTemplates;
+    int defaultTemplateIndex = 0;
     final templatesJson = prefs.getString(_watermarkTemplatesKey);
     if (templatesJson != null) {
       final list = (jsonDecode(templatesJson) as List)
           .map((e) => WatermarkSettings.fromJson(e as Map<String, dynamic>))
           .toList();
+      final defaults = WatermarkSettings.defaultTemplates();
       watermarkTemplates = [
-        for (var i = 0; i < 3; i++)
-          i < list.length ? list[i] : WatermarkSettings(),
+        for (var i = 0; i < 3; i++) i < list.length ? list[i] : defaults[i],
       ];
     } else {
       final wmJson = prefs.getString(_watermarkKey);
-      final legacy = wmJson != null
-          ? WatermarkSettings.fromJson(jsonDecode(wmJson) as Map<String, dynamic>)
-          : WatermarkSettings();
-      watermarkTemplates = [legacy, WatermarkSettings(), WatermarkSettings()];
+      final defaults = WatermarkSettings.defaultTemplates();
+      if (wmJson != null) {
+        // 구버전 단일 워터마크 사용자: 기존 설정을 슬롯0에 보존
+        final legacy =
+            WatermarkSettings.fromJson(jsonDecode(wmJson) as Map<String, dynamic>);
+        watermarkTemplates = [legacy, defaults[1], defaults[2]];
+      } else {
+        // 신규 설치: 배포 기본 템플릿, 활성=템플릿2
+        watermarkTemplates = defaults;
+        defaultTemplateIndex = 1;
+      }
     }
     final watermarkTemplateIndex =
-        (prefs.getInt(_watermarkTemplateIndexKey) ?? 0).clamp(0, 2);
+        (prefs.getInt(_watermarkTemplateIndexKey) ?? defaultTemplateIndex)
+            .clamp(0, 2);
     final showTrackingButton = prefs.getBool(_showTrackingButtonKey) ?? true;
     final locationTrackingEnabled = prefs.getBool(_locationTrackingEnabledKey) ?? false;
     final trackingIntervalMeters = prefs.getInt(_trackingIntervalMetersKey) ?? 100;
