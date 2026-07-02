@@ -134,33 +134,29 @@ class _PeriodBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget chip(String label, _Period p) => Padding(
-          padding: const EdgeInsets.only(right: 8),
-          child: ChoiceChip(
-            label: Text(label),
-            selected: period == p,
-            onSelected: (_) => onChanged(p),
-          ),
+    Widget chip(String label, _Period p) => ChoiceChip(
+          label: Text(label),
+          selected: period == p,
+          onSelected: (_) => onChanged(p),
         );
     final r = customRange;
     final customLabel = r == null ? '기간 설정' : '${_fmt(r.start)}~${_fmt(r.end)}';
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: [
-            chip('전체', _Period.all),
-            chip('올해', _Period.year),
-            chip('이번 달', _Period.month),
-            ChoiceChip(
-              avatar: const Icon(Icons.date_range, size: 18),
-              label: Text(customLabel),
-              selected: period == _Period.custom,
-              onSelected: (_) => onPickRange(),
-            ),
-          ],
-        ),
+      child: Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          chip('전체', _Period.all),
+          chip('올해', _Period.year),
+          chip('이번 달', _Period.month),
+          ChoiceChip(
+            avatar: const Icon(Icons.date_range, size: 18),
+            label: Text(customLabel),
+            selected: period == _Period.custom,
+            onSelected: (_) => onPickRange(),
+          ),
+        ],
       ),
     );
   }
