@@ -22,7 +22,9 @@ import '../../../core/widgets/ad_banner_slot.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
   final String? filePath;
-  const MapScreen({super.key, this.filePath});
+  final double? targetLat; // 지정 시 해당 위치로 카메라 이동(출퇴근 지점 보기)
+  final double? targetLng;
+  const MapScreen({super.key, this.filePath, this.targetLat, this.targetLng});
 
   @override
   ConsumerState<MapScreen> createState() => _MapScreenState();
@@ -490,9 +492,17 @@ class _MapScreenState extends ConsumerState<MapScreen> {
             key: ValueKey('${_loadedDate.toIso8601String()}#$_reloadSeq'),
             mapController: _mapController,
             options: MapOptions(
-              initialCameraFit: _cameraFit(),
-              initialCenter: _initialCenter,
-              initialZoom: 15,
+              initialCameraFit: widget.targetLat != null ? null : _cameraFit(),
+              initialCenter: widget.targetLat != null
+                  ? LatLng(widget.targetLat!, widget.targetLng!)
+                  : _initialCenter,
+              initialZoom: widget.targetLat != null ? 16 : 15,
+              onMapReady: () {
+                if (widget.targetLat != null && mounted) {
+                  _mapController.move(
+                      LatLng(widget.targetLat!, widget.targetLng!), 16);
+                }
+              },
               onTap: (_, _) => setState(() => _selected = null),
               onLongPress: (_, latlng) => _onMapLongPress(latlng),
               onPositionChanged: (camera, hasGesture) {

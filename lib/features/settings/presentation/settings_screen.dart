@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'settings_provider.dart';
 import '../../backup/presentation/backup_provider.dart';
 import 'watermark_settings_screen.dart';
+import '../../map/presentation/map_screen.dart';
 import '../../permission/presentation/permission_provider.dart';
 import '../../file_list/presentation/file_list_provider.dart';
 import '../../file_list/domain/models/file_summary.dart';
@@ -1284,6 +1285,28 @@ class _CommuteSettingsScreen extends ConsumerWidget {
       onPicked(st.hour * 60 + st.minute, en.hour * 60 + en.minute);
     }
 
+    Future<void> goToPinOnMap(CommutePin p) async {
+      final ok = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('지도로 이동'),
+          content: const Text('지도상의 GPS 위치로 이동합니다.'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('취소')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('확인')),
+          ],
+        ),
+      );
+      if (ok != true || !context.mounted) return;
+      Navigator.of(context).push(MaterialPageRoute(
+        builder: (_) => MapScreen(targetLat: p.lat, targetLng: p.lng),
+      ));
+    }
+
     Widget windowTile({
       required String name,
       required IconData icon,
@@ -1379,7 +1402,11 @@ class _CommuteSettingsScreen extends ConsumerWidget {
               final p = s.commutePins[i];
               return ListTile(
                 dense: true,
-                leading: const Icon(Icons.place_outlined),
+                leading: IconButton(
+                  icon: const Icon(Icons.place_outlined),
+                  tooltip: '지도에서 위치 보기',
+                  onPressed: () => goToPinOnMap(p),
+                ),
                 title: Text(p.label.isNotEmpty ? p.label : '지점 ${i + 1}'),
                 subtitle: Text(
                     '${p.lat.toStringAsFixed(5)}, ${p.lng.toStringAsFixed(5)}'),
