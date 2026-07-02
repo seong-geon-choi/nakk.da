@@ -18,11 +18,9 @@ String _fmtOutingDate(DateTime d) {
 /// 날짜 화면 상단 '출조 정보' 요약 카드. 탭하면 편집 시트를 연다.
 class OutingSummaryCard extends StatelessWidget {
   final OutingInfo? outing;
-  final DateTime? date;
   final VoidCallback onTap;
 
-  const OutingSummaryCard(
-      {super.key, required this.outing, this.date, required this.onTap});
+  const OutingSummaryCard({super.key, required this.outing, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -58,24 +56,11 @@ class OutingSummaryCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: Text('출조정보 (선박/태클/조과)',
-                              style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w700,
-                                  color: cs.primary)),
-                        ),
-                        if (date != null)
-                          Text('🗓 ${_fmtOutingDate(date!)}',
-                              style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w600,
-                                  color:
-                                      cs.onSurface.withValues(alpha: 0.7))),
-                      ],
-                    ),
+                    Text('출조정보 (선박/태클/조과)',
+                        style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w700,
+                            color: cs.primary)),
                     if (empty)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
@@ -292,14 +277,24 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
             ),
             if (widget.date != null)
               Padding(
-                padding: const EdgeInsets.only(top: 2),
+                padding: const EdgeInsets.only(top: 4, bottom: 2),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text('🗓 출조일  ${_fmtOutingDate(widget.date!)}',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                          color: Theme.of(context).colorScheme.primary)),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('🗓 출조일',
+                          style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w700,
+                              color: Theme.of(context).colorScheme.primary)),
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(_fmtOutingDate(widget.date!),
+                            style: const TextStyle(fontSize: 14)),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             const SizedBox(height: 4),

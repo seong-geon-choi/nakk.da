@@ -1400,7 +1400,6 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
           children: [
             OutingSummaryCard(
               outing: dayFile?.outing,
-              date: outingDate,
               onTap: () {
                 final t = _outingTideInfo(dayFile);
                 OutingEditSheet.show(
