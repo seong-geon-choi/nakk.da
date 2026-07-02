@@ -1394,15 +1394,19 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
         if (!(settingsAsync.valueOrNull?.showComplexInput ?? false)) {
           return body;
         }
+        final outingDate = FileNameParser.parseDate(
+            path.replaceAll('\\', '/').split('/').last);
         return Column(
           children: [
             OutingSummaryCard(
               outing: dayFile?.outing,
+              date: outingDate,
               onTap: () {
                 final t = _outingTideInfo(dayFile);
                 OutingEditSheet.show(
                   context,
                   initial: dayFile?.outing,
+                  date: outingDate,
                   tides: t.tides,
                   tideName: t.name,
                   onSave: (o) => notifier.updateOuting(o),

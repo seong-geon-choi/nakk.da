@@ -7,12 +7,22 @@ import '../../../core/constants/app_constants.dart';
 import '../../../core/widgets/tide_curve_graph.dart';
 import '../domain/models/outing_info.dart';
 
+/// 출조일을 연-월-일(요일) 형태로 포맷 (예: 2026-07-03(금)).
+String _fmtOutingDate(DateTime d) {
+  const wd = ['월', '화', '수', '목', '금', '토', '일'];
+  final mm = d.month.toString().padLeft(2, '0');
+  final dd = d.day.toString().padLeft(2, '0');
+  return '${d.year}-$mm-$dd(${wd[d.weekday - 1]})';
+}
+
 /// 날짜 화면 상단 '출조 정보' 요약 카드. 탭하면 편집 시트를 연다.
 class OutingSummaryCard extends StatelessWidget {
   final OutingInfo? outing;
+  final DateTime? date;
   final VoidCallback onTap;
 
-  const OutingSummaryCard({super.key, required this.outing, required this.onTap});
+  const OutingSummaryCard(
+      {super.key, required this.outing, this.date, required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -48,11 +58,24 @@ class OutingSummaryCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('출조정보 (선박/태클/조과)',
-                        style: TextStyle(
-                            fontSize: 13,
-                            fontWeight: FontWeight.w700,
-                            color: cs.primary)),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text('출조정보 (선박/태클/조과)',
+                              style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w700,
+                                  color: cs.primary)),
+                        ),
+                        if (date != null)
+                          Text('🗓 ${_fmtOutingDate(date!)}',
+                              style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w600,
+                                  color:
+                                      cs.onSurface.withValues(alpha: 0.7))),
+                      ],
+                    ),
                     if (empty)
                       Padding(
                         padding: const EdgeInsets.only(top: 2),
@@ -97,6 +120,7 @@ class OutingSummaryCard extends StatelessWidget {
 /// 출조 정보(태클 3세트 + 최종 조과) 편집 바텀시트.
 class OutingEditSheet extends ConsumerStatefulWidget {
   final OutingInfo? initial;
+  final DateTime? date; // 출조일(.md 파일 날짜)
   final List<TideEvent> tides; // 당일 물때(조위 그래프용)
   final String? tideName; // 당일 물때명(예: 3물)
   final Future<void> Function(OutingInfo) onSave;
@@ -104,6 +128,7 @@ class OutingEditSheet extends ConsumerStatefulWidget {
   const OutingEditSheet({
     super.key,
     this.initial,
+    this.date,
     this.tides = const [],
     this.tideName,
     required this.onSave,
@@ -112,6 +137,7 @@ class OutingEditSheet extends ConsumerStatefulWidget {
   static Future<void> show(
     BuildContext context, {
     OutingInfo? initial,
+    DateTime? date,
     List<TideEvent> tides = const [],
     String? tideName,
     required Future<void> Function(OutingInfo) onSave,
@@ -123,7 +149,11 @@ class OutingEditSheet extends ConsumerStatefulWidget {
         maxWidth: math.min(MediaQuery.of(context).size.width, 600),
       ),
       builder: (_) => OutingEditSheet(
-          initial: initial, tides: tides, tideName: tideName, onSave: onSave),
+          initial: initial,
+          date: date,
+          tides: tides,
+          tideName: tideName,
+          onSave: onSave),
     );
   }
 
@@ -260,6 +290,18 @@ class _OutingEditSheetState extends ConsumerState<OutingEditSheet> {
               child: Text('출조 정보',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
             ),
+            if (widget.date != null)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('🗓 출조일  ${_fmtOutingDate(widget.date!)}',
+                      style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                          color: Theme.of(context).colorScheme.primary)),
+                ),
+              ),
             const SizedBox(height: 4),
             Flexible(
               child: SingleChildScrollView(
