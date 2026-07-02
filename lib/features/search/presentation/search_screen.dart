@@ -224,6 +224,7 @@ class _ResultList extends StatelessWidget {
     }
 
     return ListView.builder(
+      padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
       itemCount: items.length,
       itemBuilder: (context, index) {
         final item = items[index];

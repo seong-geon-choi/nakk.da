@@ -136,6 +136,7 @@ class _WatermarkSettingsScreenState
           Expanded(
             child: ListView(
               controller: _scrollController,
+              padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
               children: [
                 // ── 컨테이너 배경 ──
                 _Header('배경 (전체 박스를 감싸는 컨테이너)'),

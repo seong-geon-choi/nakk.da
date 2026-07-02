@@ -138,23 +138,32 @@ class _PeriodBar extends StatelessWidget {
           label: Text(label),
           selected: period == p,
           onSelected: (_) => onChanged(p),
+          visualDensity: VisualDensity.compact,
+          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+          labelPadding: const EdgeInsets.symmetric(horizontal: 6),
         );
     final r = customRange;
     final customLabel = r == null ? '기간 설정' : '${_fmt(r.start)}~${_fmt(r.end)}';
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Wrap(
-        spacing: 8,
-        runSpacing: 8,
+      child: Row(
         children: [
           chip('전체', _Period.all),
+          const SizedBox(width: 6),
           chip('올해', _Period.year),
+          const SizedBox(width: 6),
           chip('이번 달', _Period.month),
-          ChoiceChip(
-            avatar: const Icon(Icons.date_range, size: 18),
-            label: Text(customLabel),
-            selected: period == _Period.custom,
-            onSelected: (_) => onPickRange(),
+          const SizedBox(width: 6),
+          Flexible(
+            child: ChoiceChip(
+              avatar: const Icon(Icons.date_range, size: 16),
+              label: Text(customLabel, overflow: TextOverflow.ellipsis),
+              selected: period == _Period.custom,
+              onSelected: (_) => onPickRange(),
+              visualDensity: VisualDensity.compact,
+              materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+              labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+            ),
           ),
         ],
       ),

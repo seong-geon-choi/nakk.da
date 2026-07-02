@@ -57,6 +57,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
         data: (settings) => ListTileTheme(
           data: _subtitleTheme(context),
           child: ListView(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
           children: [
             // ── 저장 섹션 ─────────────────────────────
             const _SectionHeader(label: '저장'),
@@ -380,6 +381,7 @@ class _SaveLocationSubScreen extends ConsumerWidget {
         data: (settings) => ListTileTheme(
           data: _subtitleTheme(context),
           child: ListView(
+          padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
           children: [
             ListTile(
               leading: const Icon(Icons.folder_outlined),
@@ -548,6 +550,8 @@ class _FishSpeciesSubScreenState extends ConsumerState<_FishSpeciesSubScreen> {
                     ),
                   )
                 : ListView.separated(
+                    padding: EdgeInsets.only(
+                        bottom: MediaQuery.of(context).padding.bottom),
                     itemCount: filtered.length,
                     separatorBuilder: (_, _) =>
                         const Divider(height: 1, indent: 16, endIndent: 16),
@@ -746,6 +750,7 @@ class _PermissionSubScreenState extends ConsumerState<_PermissionSubScreen>
           return ListTileTheme(
             data: _subtitleTheme(context),
             child: ListView(
+              padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
               children: items.map((item) {
                 final (perm, label, desc) = item;
                 final isGranted = statuses[perm]?.isGranted ?? false;
@@ -797,6 +802,7 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
               groupValue: mode,
               onChanged: setMode,
               child: ListView(
+              padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
               children: [
                 RadioListTile<QuickLaunchMode>(
                   secondary: const Icon(Icons.vibration),
@@ -1192,6 +1198,7 @@ class _DevMenuSubScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('개발자 메뉴')),
       body: ListView(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
         children: [
           SwitchListTile(
             secondary: const Icon(Icons.ads_click_outlined),
@@ -1298,6 +1305,7 @@ class _CommuteSettingsScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(title: const Text('지하철 출퇴근 알림')),
       body: ListView(
+        padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
         children: [
           _CommuteRadiusSlider(value: s.commuteRadius),
           ListTile(
@@ -1543,6 +1551,7 @@ class _BackupSubScreen extends ConsumerWidget {
           return ListTileTheme(
             data: _subtitleTheme(context),
             child: ListView(
+              padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
               children: [
                 SwitchListTile(
                   secondary: const Icon(Icons.cloud_outlined),

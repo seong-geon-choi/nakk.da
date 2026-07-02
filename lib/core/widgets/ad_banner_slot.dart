@@ -21,11 +21,12 @@ class AdBannerSlot extends ConsumerWidget {
     final adsEnabled = ref.watch(
       settingsProvider.select((s) => s.valueOrNull?.adsEnabled ?? false),
     );
-    if (!adsEnabled) return const SizedBox.shrink();
-
-    final cs = Theme.of(context).colorScheme;
     // 하단 내비게이션 바(제스처/버튼)에 가려지지 않도록 시스템 인셋만큼 띄운다.
     final bottomInset = MediaQuery.of(context).padding.bottom;
+    // 광고가 꺼져 있어도 하단 시스템 바 영역은 예약해 본문이 가려지지 않게 한다.
+    if (!adsEnabled) return SizedBox(height: bottomInset);
+
+    final cs = Theme.of(context).colorScheme;
     return Container(
       width: double.infinity,
       color: cs.surfaceContainerHighest.withValues(alpha: 0.4),
