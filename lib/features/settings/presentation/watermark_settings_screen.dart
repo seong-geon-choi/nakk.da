@@ -266,7 +266,7 @@ String _previewBoxText(WatermarkBox b, DateTime now) {
           b.type == WatermarkLineType.customText ? '(텍스트1)' : '(텍스트2)';
       return switch (b.textContent) {
         WatermarkTextContent.year => '${now.year}',
-        WatermarkTextContent.address => '📍 시/군/구/동',
+        WatermarkTextContent.address => '🎯 시/군/구/동',
         WatermarkTextContent.text =>
           b.customText.trim().isEmpty ? placeholder : b.customText.trim(),
       };

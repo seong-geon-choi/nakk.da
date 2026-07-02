@@ -690,7 +690,9 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
         textScaler: TextScaler.noScaling,
       )..layout();
       // +2px: 시스템 글꼴 배율 무시(noScaling)와 함께 서브픽셀 줄바꿈 방지
-      sizes.add(Size(tp.width + 2, tp.height));
+      final nat = Size(tp.width + 2, tp.height);
+      // 박스 90°/270° 회전 시 footprint 가로·세로가 뒤바뀜
+      sizes.add(b.quarterTurns % 2 != 0 ? Size(nat.height, nat.width) : nat);
       positions.add(Offset(b.dx * shortSidePx, b.dy * shortSidePx));
     }
 
@@ -729,25 +731,36 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
             Positioned(
               left: pad + (positions[i].dx - minX),
               top: pad + (positions[i].dy - minY),
-              child: SizedBox(
-                width: sizes[i].width,
-                child: Text(
-                  _boxText(visible[i], now),
-                  textAlign: _align(visible[i].alignment),
-                  textScaler: TextScaler.noScaling,
-                  maxLines: 1,
-                  softWrap: false,
-                  overflow: TextOverflow.visible,
-                  style: TextStyle(
-                    color: Color(visible[i].textColor),
-                    fontSize: fonts[i],
-                    fontWeight: _fontWeight(visible[i].weight),
-                    fontFamily: _fontFam(visible[i].fontFamily),
-                    shadows: const [Shadow(blurRadius: 2)],
-                    height: 1.25,
+              child: Builder(builder: (_) {
+                final turns = visible[i].quarterTurns;
+                final swapped = turns % 2 != 0;
+                // footprint(sizes[i])에서 회전 전 자연 크기 복원
+                final natW = swapped ? sizes[i].height : sizes[i].width;
+                final natH = swapped ? sizes[i].width : sizes[i].height;
+                final t = SizedBox(
+                  width: natW,
+                  height: natH,
+                  child: Text(
+                    _boxText(visible[i], now),
+                    textAlign: _align(visible[i].alignment),
+                    textScaler: TextScaler.noScaling,
+                    maxLines: 1,
+                    softWrap: false,
+                    overflow: TextOverflow.visible,
+                    style: TextStyle(
+                      color: Color(visible[i].textColor),
+                      fontSize: fonts[i],
+                      fontWeight: _fontWeight(visible[i].weight),
+                      fontFamily: _fontFam(visible[i].fontFamily),
+                      shadows: const [Shadow(blurRadius: 2)],
+                      height: 1.25,
+                    ),
                   ),
-                ),
-              ),
+                );
+                return turns % 4 == 0
+                    ? t
+                    : RotatedBox(quarterTurns: turns, child: t);
+              }),
             ),
         ],
       ),

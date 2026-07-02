@@ -206,7 +206,7 @@ String _boxText(WatermarkBox b, DateTime now, String? address) {
         WatermarkTextContent.year => '${now.year}',
         WatermarkTextContent.address =>
           (address != null && address.trim().isNotEmpty)
-              ? '📍 ${address.trim()}'
+              ? '🎯 ${address.trim()}'
               : '',
       };
   }
