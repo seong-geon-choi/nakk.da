@@ -18,6 +18,9 @@
     <uses-permission android:name="android.permission.ACCESS_MEDIA_LOCATION"/>
     <!-- ARCore: optional (앱이 AR 없이도 동작) -->
     <uses-feature android:name="android.hardware.camera.ar" android:required="false"/>
+    <!-- 야외 낚시 기록 앱: GPS·가속도 센서 필수(센서 없는 기기 제외) -->
+    <uses-feature android:name="android.hardware.location.gps" android:required="true"/>
+    <uses-feature android:name="android.hardware.sensor.accelerometer" android:required="true"/>
 
     <application
         android:label="낚.다"
