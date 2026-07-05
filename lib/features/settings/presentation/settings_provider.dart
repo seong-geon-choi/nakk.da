@@ -447,6 +447,14 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     state = AsyncData(updated);
   }
 
+  Future<void> updateContributeImages(bool value) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(contributeImages: value);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
   Future<void> updateShowAddressInMemoName(bool value) async {
     final current = state.valueOrNull;
     if (current == null) return;

@@ -536,7 +536,8 @@ class AppSettings {
   final bool showAddressInMemoName;
   final MemoComplexity memoComplexity; // 메모 입력항목 복잡도(단순/복잡/일반)
   final bool shareEnabled; // 메모 공유 버튼 표시 여부 (향후 유료화 대비 토글)
-  final bool adsEnabled; // 광고 노출 여부 (개발자 메뉴 토글, 기본 off)
+  final bool adsEnabled; // 광고 노출 여부 (개발자 메뉴 토글, 기본 on)
+  final bool contributeImages; // AI 학습용 사진 제공 동의 (옵트인, 기본 off)
   final String? khoaApiKey;
   final List<WatermarkSettings> watermarkTemplates; // 사용자 템플릿 3슬롯
   final int watermarkTemplateIndex; // 활성 템플릿(0~2)
@@ -624,12 +625,13 @@ class AppSettings {
     this.saveDisplayPath = '',
     required this.photoSavePath,
     this.showLocationButton = true,
-    this.autoLocationOnFirstEntry = false,
+    this.autoLocationOnFirstEntry = true,
     this.autoSaveVoice = true,
     this.showAddressInMemoName = true,
     this.memoComplexity = MemoComplexity.complexFishing,
     this.shareEnabled = true,
-    this.adsEnabled = false,
+    this.adsEnabled = true,
+    this.contributeImages = false,
     this.khoaApiKey,
     List<WatermarkSettings>? watermarkTemplates,
     this.watermarkTemplateIndex = 0,
@@ -692,6 +694,7 @@ class AppSettings {
     MemoComplexity? memoComplexity,
     bool? shareEnabled,
     bool? adsEnabled,
+    bool? contributeImages,
     String? khoaApiKey,
     bool clearKhoaApiKey = false,
     List<WatermarkSettings>? watermarkTemplates,
@@ -748,6 +751,7 @@ class AppSettings {
       memoComplexity: memoComplexity ?? this.memoComplexity,
       shareEnabled: shareEnabled ?? this.shareEnabled,
       adsEnabled: adsEnabled ?? this.adsEnabled,
+      contributeImages: contributeImages ?? this.contributeImages,
       khoaApiKey: clearKhoaApiKey ? null : (khoaApiKey ?? this.khoaApiKey),
       watermarkTemplates: watermarkTemplates ?? this.watermarkTemplates,
       watermarkTemplateIndex:

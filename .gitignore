@@ -60,6 +60,7 @@ next.txt
 # ── 어류 도감 이미지 작업 백업 (로컬 전용) ─────────────────────
 .fish_originals_backup/
 .fish_backup_handmade/
+tools/*
 
 # ── 빌드 결과물 ────────────────────────────────────────────
 /android/app/debug

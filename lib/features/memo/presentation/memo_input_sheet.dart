@@ -1,5 +1,7 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
@@ -18,6 +20,9 @@ import '../../../core/services/ar_service.dart';
 import '../../../core/utils/exif_utils.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/widgets/saf_image.dart';
+import '../../../features/species_ai/domain/species_prediction.dart';
+import '../../../features/species_ai/presentation/species_recognizer_provider.dart';
+import '../../../features/species_ai/data/dataset_upload_service.dart';
 import '../../../core/widgets/video_player_widget.dart';
 import '../../../core/screens/gallery_picker_screen.dart';
 import '../../../core/constants/app_constants.dart';
@@ -295,6 +300,10 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
   String? _videoPath;
   bool _saving = false;
   bool _gpsUpdating = false;
+  List<SpeciesPrediction> _speciesCandidates = const [];
+  bool _recognizing = false;
+  // 최상위 후보가 이 확률 미만이면 '인식 불확실'로 표시
+  static const double _kConfidentThreshold = 0.5;
 
   bool get _isEditMode => widget.blockIndex != null && widget.existingEntry != null;
 
@@ -343,6 +352,48 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     if (widget.startWithVoice) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _startVoice());
     }
+    // 진입 시 이미 사진이 있으면(홈에서 첨부·기존 메모 편집) 어종 추천 실행
+    if (_photoPath != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _recognizePhoto());
+    }
+  }
+
+  /// SAF(content://) 또는 로컬 경로의 사진 바이트를 읽는다. (SafImage 로직과 동일)
+  Future<Uint8List?> _readPhotoBytes(String photoPath, String savePath) async {
+    final effective = (SafImage.isAbsolute(photoPath) && !File(photoPath).existsSync())
+        ? 'photos/${photoPath.split('/').last}'
+        : photoPath;
+    if (!SafImage.isAbsolute(effective) && SafService.isSafUri(savePath)) {
+      return SafService().readSafImage(savePath, effective);
+    }
+    final resolved =
+        SafImage.isAbsolute(effective) ? effective : '$savePath/$effective';
+    final f = File(resolved);
+    return await f.exists() ? f.readAsBytes() : null;
+  }
+
+  /// 현재 사진에서 어종 후보(상위 3개)를 추론해 칩으로 표시.
+  Future<void> _recognizePhoto() async {
+    final path = _photoPath;
+    if (path == null) return;
+    final rec = await ref.read(speciesRecognizerProvider.future);
+    if (rec == null || !mounted || _photoPath != path) return; // 모델 없거나 그새 사진 변경
+    setState(() => _recognizing = true);
+    final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+    try {
+      final bytes = await _readPhotoBytes(path, savePath);
+      if (bytes != null && mounted && _photoPath == path) {
+        final result = await rec.classifyBytes(bytes);
+        if (mounted && _photoPath == path) {
+          setState(() {
+            _speciesCandidates = result;
+            _recognizing = false;
+          });
+          return;
+        }
+      }
+    } catch (_) {}
+    if (mounted && _photoPath == path) setState(() => _recognizing = false);
   }
 
   /// 메모 텍스트에서 어종·길이를 인식해 필드에 반영한다.
@@ -683,10 +734,24 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               if (hasPhoto) ...[
-                SafImage(
-                  photoPath: _photoPath!,
-                  savePath: savePath,
-                  height: (MediaQuery.of(context).size.shortestSide * 0.3).clamp(100.0, 220.0),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(8),
+                  child: Stack(
+                    children: [
+                      SafImage(
+                        photoPath: _photoPath!,
+                        savePath: savePath,
+                        height: (MediaQuery.of(context).size.shortestSide * 0.3).clamp(100.0, 220.0),
+                      ),
+                      if (_recognizing || _speciesCandidates.isNotEmpty)
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          child: _buildPhotoOverlay(),
+                        ),
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 6),
                 Row(children: [
@@ -760,6 +825,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
       if (multi.isEmpty) return;
       final first = multi.first;
       setState(() {
+        _speciesCandidates = const [];
         if (first.isVideo) {
           _videoPath = first.path;
           _photoPath = null;
@@ -768,9 +834,11 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
           _videoPath = null;
         }
       });
+      if (!first.isVideo) _recognizePhoto();
       return;
     }
     setState(() {
+      _speciesCandidates = const [];
       if (result.isVideo) {
         _videoPath = result.path;
         _photoPath = null;
@@ -789,6 +857,7 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
         _timestamp = result.timestamp!;
       }
     });
+    if (!result.isVideo && _photoPath != null) _recognizePhoto();
   }
 
   // ── 조과 (어종/길이) ─────────────────────────────────────
@@ -846,6 +915,67 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 사진 위에 오버레이할 어종 추론 결과. 탭하면 어종 필드에 채운다.
+  /// 확신도가 낮으면(최상위 < 임계값) '인식 불확실' 문구를 표시한다.
+  Widget _buildPhotoOverlay() {
+    final uncertain = _speciesCandidates.isNotEmpty &&
+        _speciesCandidates.first.confidence < _kConfidentThreshold;
+    // 관련 항목(헤더+후보 칩)을 한 줄에 배치. 넘치면 가로 스크롤(줄바꿈 없음).
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+      color: Colors.black.withValues(alpha: 0.6), // 사진 밝기와 무관하게 일정한 대비
+      child: _recognizing
+          ? const Row(mainAxisSize: MainAxisSize.min, children: [
+              SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white)),
+              SizedBox(width: 8),
+              Text('어종 인식 중…',
+                  style: TextStyle(color: Colors.white, fontSize: 12)),
+            ])
+          : Row(
+              children: [
+                Text(uncertain ? '❓ 불확실' : '🤖 추천',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        for (int i = 0; i < _speciesCandidates.length; i++) ...[
+                          if (i > 0) const SizedBox(width: 6),
+                          _speciesChip(_speciesCandidates[i]),
+                        ],
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ),
+    );
+  }
+
+  Widget _speciesChip(SpeciesPrediction p) {
+    return ActionChip(
+      label: Text('${p.species} ${p.percent}%'),
+      labelStyle: const TextStyle(
+          fontSize: 12, color: Colors.black87, fontWeight: FontWeight.w600),
+      backgroundColor: Colors.white,
+      side: BorderSide.none,
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      onPressed: () => setState(() => _fishSpeciesCtrl.text = p.species),
     );
   }
 
@@ -940,6 +1070,15 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
           await ref.read(dayFileProvider(todayPath).notifier).addEntry(entry);
         }
       }
+      // AI 학습 데이터 기여(옵트인): 사용자가 확정한 {사진, 어종}을 업로드
+      final contribute =
+          ref.read(settingsProvider).valueOrNull?.contributeImages ?? false;
+      if (contribute &&
+          _photoPath != null &&
+          fishSpecies != null &&
+          fishSpecies.isNotEmpty) {
+        unawaited(_uploadContribution(_photoPath!, fishSpecies, savePath));
+      }
       if (mounted) Navigator.of(context).pop();
     } catch (e) {
       if (mounted) {
@@ -952,6 +1091,27 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
     }
   }
 
+  /// 확정된 사진을 학습 데이터로 업로드(옵트인·백그라운드). AI 추천과 일치하면 신뢰도 첨부.
+  Future<void> _uploadContribution(
+      String photoPath, String species, String savePath) async {
+    double? aiConf;
+    for (final c in _speciesCandidates) {
+      if (c.species == species) {
+        aiConf = c.confidence;
+        break;
+      }
+    }
+    try {
+      final bytes = await _readPhotoBytes(photoPath, savePath);
+      if (bytes == null) return;
+      await DatasetUploadService().upload(
+        photoBytes: bytes,
+        species: species,
+        dedupKey: photoPath,
+        aiConfidence: aiConf,
+      );
+    } catch (_) {}
+  }
 }
 
 class _VoiceButton extends StatelessWidget {

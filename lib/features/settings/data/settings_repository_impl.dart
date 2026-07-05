@@ -17,6 +17,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _memoComplexityKey = 'memo_complexity';
   static const _shareEnabledKey = 'share_enabled';
   static const _adsEnabledKey = 'ads_enabled';
+  static const _contributeImagesKey = 'contribute_images';
   static const _khoaApiKeyKey = 'khoa_api_key';
   static const _watermarkKey = 'watermark_settings'; // 구버전 단일 워터마크(마이그레이션)
   static const _watermarkTemplatesKey = 'watermark_templates';
@@ -73,7 +74,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
         : storedPhotoPath;
     final showLocationButton = prefs.getBool(_showLocationButtonKey) ?? true;
     final autoLocationOnFirstEntry =
-        prefs.getBool(_autoLocationOnFirstEntryKey) ?? false;
+        prefs.getBool(_autoLocationOnFirstEntryKey) ?? true;
     final autoSaveVoice = prefs.getBool(_autoSaveVoiceKey) ?? true;
     final showAddressInMemoName = prefs.getBool(_showAddressInMemoNameKey) ?? true;
     // 신규 키 우선. 없으면: 구버전 show_catch_input 있으면 이관(true→최소, false→일반),
@@ -87,7 +88,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
       },
     );
     final shareEnabled = prefs.getBool(_shareEnabledKey) ?? true;
-    final adsEnabled = prefs.getBool(_adsEnabledKey) ?? false;
+    final adsEnabled = prefs.getBool(_adsEnabledKey) ?? true;
+    final contributeImages = prefs.getBool(_contributeImagesKey) ?? false;
     final khoaApiKey = prefs.getString(_khoaApiKeyKey);
     // 워터마크 템플릿 3슬롯. 신규 키 우선, 없으면 구버전 단일 워터마크에서 마이그레이션.
     List<WatermarkSettings> watermarkTemplates;
@@ -192,6 +194,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       memoComplexity: memoComplexity,
       shareEnabled: shareEnabled,
       adsEnabled: adsEnabled,
+      contributeImages: contributeImages,
       khoaApiKey: khoaApiKey,
       watermarkTemplates: watermarkTemplates,
       watermarkTemplateIndex: watermarkTemplateIndex,
@@ -250,6 +253,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setString(_memoComplexityKey, settings.memoComplexity.name);
     await prefs.setBool(_shareEnabledKey, settings.shareEnabled);
     await prefs.setBool(_adsEnabledKey, settings.adsEnabled);
+    await prefs.setBool(_contributeImagesKey, settings.contributeImages);
     if (settings.khoaApiKey != null) {
       await prefs.setString(_khoaApiKeyKey, settings.khoaApiKey!);
     } else {

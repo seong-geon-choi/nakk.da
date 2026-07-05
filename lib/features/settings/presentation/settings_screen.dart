@@ -6,6 +6,7 @@ import 'settings_provider.dart';
 import '../../backup/presentation/backup_provider.dart';
 import 'watermark_settings_screen.dart';
 import '../../map/presentation/map_screen.dart';
+import '../../species_ai/presentation/species_test_screen.dart';
 import '../../permission/presentation/permission_provider.dart';
 import '../../file_list/presentation/file_list_provider.dart';
 import '../../file_list/domain/models/file_summary.dart';
@@ -60,39 +61,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
           child: ListView(
           padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
           children: [
-            // ── 저장 섹션 ─────────────────────────────
-            const _SectionHeader(label: '저장'),
-            ListTile(
-              leading: const Icon(Icons.folder_outlined),
-              title: const Text('저장 위치 변경'),
-              subtitle: Text(
-                settings.needsFolderSetup
-                    ? '폴더를 선택해 주세요'
-                    : '메모 저장 경로와 사진 저장 경로를 변경합니다',
-                style: settings.needsFolderSetup
-                    ? TextStyle(color: Theme.of(context).colorScheme.error)
-                    : null,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: settings.needsFolderSetup
-                  ? const Icon(Icons.warning_amber, color: Colors.orange)
-                  : const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const _SaveLocationSubScreen()),
-              ),
-            ),
-
             // ── 표시 섹션 ─────────────────────────────
             const _SectionHeader(label: '표시'),
-            SwitchListTile(
-              secondary: const Icon(Icons.add_location_alt_outlined),
-              title: const Text('현장 정보 추가 버튼 표시'),
-              subtitle: const Text('메인 화면 하단에 현장 정보 추가 버튼을 표시합니다'),
-              value: settings.showLocationButton,
-              onChanged: (v) =>
-                  ref.read(settingsProvider.notifier).updateShowLocationButton(v),
-            ),
             SwitchListTile(
               secondary: const Icon(Icons.my_location_outlined),
               title: const Text('첫 기록 시 현장 정보 자동 추가'),
@@ -110,14 +80,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               value: settings.autoSaveVoice,
               onChanged: (v) =>
                   ref.read(settingsProvider.notifier).updateAutoSaveVoice(v),
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.place_outlined),
-              title: const Text('메모 이름에 지역정보 표시'),
-              subtitle: const Text('메모 목록에서 날짜 옆에 촬영 지역 주소를 표시합니다'),
-              value: settings.showAddressInMemoName,
-              onChanged: (v) =>
-                  ref.read(settingsProvider.notifier).updateShowAddressInMemoName(v),
             ),
             ListTile(
               leading: const Icon(Icons.phishing),
@@ -160,15 +122,41 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
 
             // ── 어종 섹션 ─────────────────────────────
             const _SectionHeader(label: '어종'),
-            ListTile(
-              leading: const Icon(Icons.set_meal_outlined),
-              title: const Text('어종 목록 관리'),
-              subtitle: Text(
-                  '${settings.visibleFishSpecies.length}/${settings.fishSpecies.length} (선택가능/자동인식)'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const _FishSpeciesSubScreen()),
-              ),
+            SwitchListTile(
+              secondary: const Icon(Icons.cloud_upload_outlined),
+              title: const Text('AI 학습용 사진 제공'),
+              subtitle: const Text('확정한 어종 사진을 익명으로 업로드해 인식 개선에 사용(옵트인)'),
+              value: settings.contributeImages,
+              onChanged: (v) async {
+                if (v) {
+                  final ok = await showDialog<bool>(
+                    context: context,
+                    builder: (dctx) => AlertDialog(
+                      title: const Text('AI 학습용 사진 제공 동의'),
+                      content: const Text(
+                        '메모에 어종을 확정해 저장할 때, 그 사진과 어종 이름을 익명으로 '
+                        '개발자 서버에 전송해 어종 인식 정확도 개선에만 사용합니다.\n\n'
+                        '• 위치정보(EXIF GPS)는 제거 후 전송됩니다\n'
+                        '• 사진은 512px로 축소되어 전송됩니다\n'
+                        '• 계정·개인 식별정보는 전송하지 않습니다\n'
+                        '• 언제든 이 설정을 꺼서 중단할 수 있습니다',
+                      ),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(dctx).pop(false),
+                          child: const Text('취소'),
+                        ),
+                        FilledButton(
+                          onPressed: () => Navigator.of(dctx).pop(true),
+                          child: const Text('동의'),
+                        ),
+                      ],
+                    ),
+                  );
+                  if (ok != true) return;
+                }
+                ref.read(settingsProvider.notifier).updateContributeImages(v);
+              },
             ),
 
             // ── 사진 워터마크 섹션 ───────────────────────
@@ -267,6 +255,52 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             // ── 고급 섹션 ─────────────────────────────
             const _SectionHeader(label: '고급'),
             ListTile(
+              leading: const Icon(Icons.folder_outlined),
+              title: const Text('저장 위치 변경'),
+              subtitle: Text(
+                settings.needsFolderSetup
+                    ? '폴더를 선택해 주세요'
+                    : '메모 저장 경로와 사진 저장 경로를 변경합니다',
+                style: settings.needsFolderSetup
+                    ? TextStyle(color: Theme.of(context).colorScheme.error)
+                    : null,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+              trailing: settings.needsFolderSetup
+                  ? const Icon(Icons.warning_amber, color: Colors.orange)
+                  : const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const _SaveLocationSubScreen()),
+              ),
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.add_location_alt_outlined),
+              title: const Text('현장 정보 추가 버튼 표시'),
+              subtitle: const Text('메인 화면 하단에 현장 정보 추가 버튼을 표시합니다'),
+              value: settings.showLocationButton,
+              onChanged: (v) =>
+                  ref.read(settingsProvider.notifier).updateShowLocationButton(v),
+            ),
+            SwitchListTile(
+              secondary: const Icon(Icons.place_outlined),
+              title: const Text('메모 이름에 지역정보 표시'),
+              subtitle: const Text('메모 목록에서 날짜 옆에 촬영 지역 주소를 표시합니다'),
+              value: settings.showAddressInMemoName,
+              onChanged: (v) =>
+                  ref.read(settingsProvider.notifier).updateShowAddressInMemoName(v),
+            ),
+            ListTile(
+              leading: const Icon(Icons.set_meal_outlined),
+              title: const Text('어종 목록 관리'),
+              subtitle: Text(
+                  '${settings.visibleFishSpecies.length}/${settings.fishSpecies.length} (선택가능/자동인식)'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(
+                MaterialPageRoute(builder: (_) => const _FishSpeciesSubScreen()),
+              ),
+            ),
+            ListTile(
               leading: const Icon(Icons.edit_document),
               title: const Text('메모 원본 수정하기'),
               subtitle: const Text('마크다운 파일을 직접 편집합니다'),
@@ -281,16 +315,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             const SizedBox(height: 16),
             const _SectionHeader(label: 'About'),
             _AboutTile(),
-            ListTile(
-              leading: const Icon(Icons.vpn_key_outlined),
-              title: const Text('국립해양조사원 API 키'),
-              subtitle: Text(
-                settings.khoaApiKey?.isNotEmpty == true
-                    ? '사용자 키 적용 중'
-                    : '기본 키 사용 중',
-              ),
-              onTap: () => _showApiKeyDialog(context, ref, settings.khoaApiKey),
-            ),
             // 후원하기 기능 숨김(광고로 대체 예정). 복원하려면 아래 블록 주석 해제.
             // const SizedBox(height: 16),
             // const _SectionHeader(label: '개발자 후원'),
@@ -309,61 +333,62 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
     );
   }
 
-  Future<void> _showApiKeyDialog(
-    BuildContext context,
-    WidgetRef ref,
-    String? currentKey,
-  ) async {
-    final controller = TextEditingController(text: currentKey ?? '');
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('국립해양조사원 API 키'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            TextField(
-              controller: controller,
-              decoration: const InputDecoration(
-                labelText: 'API 키 (디코딩 키)',
-                border: OutlineInputBorder(),
-                hintText: '비워두면 기본 키 사용',
-              ),
+}
+
+Future<void> _showApiKeyDialog(
+  BuildContext context,
+  WidgetRef ref,
+  String? currentKey,
+) async {
+  final controller = TextEditingController(text: currentKey ?? '');
+  final confirmed = await showDialog<bool>(
+    context: context,
+    builder: (_) => AlertDialog(
+      title: const Text('국립해양조사원 API 키'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          TextField(
+            controller: controller,
+            decoration: const InputDecoration(
+              labelText: 'API 키 (디코딩 키)',
+              border: OutlineInputBorder(),
+              hintText: '비워두면 기본 키 사용',
             ),
-            const SizedBox(height: 8),
-            Text(
-              '기본 키: ${kDefaultKhoaApiKey.length > 8 ? '${kDefaultKhoaApiKey.substring(0, 8)}...' : kDefaultKhoaApiKey}\n'
-              'data.go.kr 마이페이지 → 개발계정 → 디코딩 키',
-              style: TextStyle(
-                fontSize: 12,
-                color: Theme.of(context)
-                    .colorScheme
-                    .onSurface
-                    .withValues(alpha: 0.6),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(false),
-            child: const Text('취소'),
           ),
-          FilledButton(
-            onPressed: () => Navigator.of(context).pop(true),
-            child: const Text('저장'),
+          const SizedBox(height: 8),
+          Text(
+            '기본 키: ${kDefaultKhoaApiKey.length > 8 ? '${kDefaultKhoaApiKey.substring(0, 8)}...' : kDefaultKhoaApiKey}\n'
+            'data.go.kr 마이페이지 → 개발계정 → 디코딩 키',
+            style: TextStyle(
+              fontSize: 12,
+              color: Theme.of(context)
+                  .colorScheme
+                  .onSurface
+                  .withValues(alpha: 0.6),
+            ),
           ),
         ],
       ),
-    );
-    if (confirmed == true && context.mounted) {
-      await ref
-          .read(settingsProvider.notifier)
-          .updateKhoaApiKey(controller.text.trim());
-    }
-    controller.dispose();
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(false),
+          child: const Text('취소'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(context).pop(true),
+          child: const Text('저장'),
+        ),
+      ],
+    ),
+  );
+  if (confirmed == true && context.mounted) {
+    await ref
+        .read(settingsProvider.notifier)
+        .updateKhoaApiKey(controller.text.trim());
   }
+  controller.dispose();
 }
 
 // ── 저장 위치 변경 하위 화면 ──────────────────────────────────────
@@ -1231,6 +1256,24 @@ class _DevMenuSubScreen extends ConsumerWidget {
                 await notifier.updateCommuteEnabled(v);
               },
             ),
+          ),
+          const Divider(),
+          ListTile(
+            leading: const Icon(Icons.smart_toy_outlined),
+            title: const Text('AI 어종 인식 테스트'),
+            subtitle: const Text('사진에서 어종 후보를 추론(모델 검증용)'),
+            onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const SpeciesTestScreen())),
+          ),
+          ListTile(
+            leading: const Icon(Icons.vpn_key_outlined),
+            title: const Text('국립해양조사원 API 키'),
+            subtitle: Text(
+              settings?.khoaApiKey?.isNotEmpty == true
+                  ? '사용자 키 적용 중'
+                  : '기본 키 사용 중',
+            ),
+            onTap: () => _showApiKeyDialog(context, ref, settings?.khoaApiKey),
           ),
         ],
       ),
