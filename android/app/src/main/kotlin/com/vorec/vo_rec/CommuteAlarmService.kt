@@ -139,7 +139,7 @@ class CommuteAlarmService : Service() {
             return START_STICKY
         }
         if (intent?.action == ACTION_STOP_MONITOR) {
-            // 사용자가 대기 알림을 스와이프 → 감시 자체 중단.
+            // 사용자가 대기 알림을 스와이프하거나 "중지" 버튼을 눌러 감시 자체 중단.
             // KEY_ENABLED=false로 명시적 중단을 기록(앱이 지도 아이콘을 정합화).
             getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .edit().putBoolean(KEY_ENABLED, false).apply()
@@ -337,6 +337,7 @@ class CommuteAlarmService : Service() {
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .setOngoing(false) // Android 13+에서 스와이프 가능하도록
             .setDeleteIntent(stopMonitorPi)
+            .addAction(0, "중지", stopMonitorPi)
             .build()
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(NOTIF_MONITOR, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
