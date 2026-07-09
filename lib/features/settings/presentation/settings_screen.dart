@@ -1801,13 +1801,16 @@ class _BackupSubScreen extends ConsumerWidget {
       );
       return;
     }
+    final includeMedia =
+        ref.read(backupProvider).valueOrNull?.includeMedia ?? false;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('복원'),
-        content: const Text(
+        content: Text(
           '드라이브 데이터를 로컬과 날짜 기준으로 병합합니다.\n'
-          '로컬에만 있는 데이터는 유지됩니다.',
+          '로컬에만 있는 데이터는 유지됩니다.\n\n'
+          '${includeMedia ? "동기화 범위: 메모 + 이미지·동영상" : "동기화 범위: 메모 파일만 (이미지·동영상 제외)"}',
         ),
         actions: [
           TextButton(

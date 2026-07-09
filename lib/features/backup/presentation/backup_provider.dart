@@ -341,10 +341,13 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
   }
 
   /// 드라이브 → 로컬 병합 복원
+  /// 동기화 범위가 "메모 파일만"이면 미디어(사진·동영상)는 복원하지 않는다.
   Future<RestoreResult> restore(String savePath) async {
     final progress = ref.read(restoreProgressProvider.notifier);
     progress.state = (0, 0);
     try {
+      final settings = await ref.read(settingsProvider.future);
+      final includeMedia = settings.driveBackupIncludeMedia;
       final svc = ref.read(driveBackupServiceProvider);
 
       // 출퇴근 설정(지점 포함) 먼저 복원
@@ -352,18 +355,21 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
 
       // 전체 복원 대상 파악 (total 확정)
       final mdFiles = await svc.listMdFiles();
-      final localMediaSet = (await _listMediaFiles(savePath)).toSet();
+      final localMediaSet =
+          includeMedia ? (await _listMediaFiles(savePath)).toSet() : <String>{};
       // 갤러리 원본(절대경로)이 이미 로컬에 있는 사진의 basename.
       // 원본이 있으면 photos/로 중복 다운로드하지 않는다(같은 기기 복원 시 사본 방지).
       final localOriginals = <String>{};
-      for (final name in await _listMdFiles(savePath)) {
-        final content = await _read(savePath, name);
-        if (content == null) continue;
-        for (final p in externalPhotoPaths(content)) {
-          if (File(p).existsSync()) localOriginals.add(p.split('/').last);
+      if (includeMedia) {
+        for (final name in await _listMdFiles(savePath)) {
+          final content = await _read(savePath, name);
+          if (content == null) continue;
+          for (final p in externalPhotoPaths(content)) {
+            if (File(p).existsSync()) localOriginals.add(p.split('/').last);
+          }
         }
       }
-      final driveMediaFiles = await svc.listMediaFiles();
+      final driveMediaFiles = includeMedia ? await svc.listMediaFiles() : [];
       // total = md 전체 + Drive 미디어 전체 (이미 로컬에 있어도 progress에 포함)
       final total = mdFiles.length + driveMediaFiles.length;
       int done = 0;
