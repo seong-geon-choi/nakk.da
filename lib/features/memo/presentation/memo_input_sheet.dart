@@ -373,9 +373,13 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
   }
 
   /// 현재 사진에서 어종 후보(상위 3개)를 추론해 칩으로 표시.
+  /// AI 학습용 사진 제공(contributeImages)에 동의한 사용자만 사용 가능.
   Future<void> _recognizePhoto() async {
     final path = _photoPath;
     if (path == null) return;
+    final contributeImages =
+        ref.read(settingsProvider).valueOrNull?.contributeImages ?? false;
+    if (!contributeImages) return;
     final rec = await ref.read(speciesRecognizerProvider.future);
     if (rec == null || !mounted || _photoPath != path) return; // 모델 없거나 그새 사진 변경
     setState(() => _recognizing = true);

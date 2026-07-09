@@ -28,7 +28,11 @@ class SpeciesRecognizer {
 
   /// 모델·라벨을 로드한다. OTA로 내려받은 로컬 파일을 우선 사용하고,
   /// 없거나 손상됐으면 번들 에셋으로 폴백한다.
+  ///
+  /// 로컬 파일을 읽기 전에 진행 중인 OTA 체크(main.dart에서 이미 시작됨)를
+  /// 기다려, 새 모델이 나온 콜드 스타트 안에서 바로 반영되게 한다.
   Future<void> load() async {
+    await ModelUpdateService().checkAndUpdate();
     if (await _tryLoadLocal()) return;
     await _loadFromAsset();
   }

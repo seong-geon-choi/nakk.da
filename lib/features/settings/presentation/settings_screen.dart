@@ -125,7 +125,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             SwitchListTile(
               secondary: const Icon(Icons.cloud_upload_outlined),
               title: const Text('AI 학습용 사진 제공'),
-              subtitle: const Text('확정한 어종 사진을 익명으로 업로드해 인식 개선에 사용(옵트인)'),
+              subtitle: const Text(
+                  '확정한 어종 사진을 익명으로 업로드해 인식 개선에 사용(옵트인)\n켜면 사진 추가 시 어종 추천 기능도 사용할 수 있습니다'),
               value: settings.contributeImages,
               onChanged: (v) async {
                 if (v) {

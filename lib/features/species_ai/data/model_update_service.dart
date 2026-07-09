@@ -29,6 +29,11 @@ class ModelUpdateService {
   bool get _configured =>
       kDatasetUploadUrl.isNotEmpty && kDatasetUploadToken.isNotEmpty;
 
+  // 앱 생애 1회만 실행되도록 공유되는 체크 작업.
+  // SpeciesRecognizer.load()가 이 Future를 기다려, 콜드 스타트 1회 안에
+  // "체크→다운로드→로드"가 이어지게 한다(안 그러면 다음 콜드 스타트에야 반영됨).
+  static Future<void>? _pending;
+
   /// 다운로드된 로컬 모델 폴더 경로(추론기와 공유).
   static Future<Directory> localDir() async {
     final base = await getApplicationDocumentsDirectory();
@@ -56,7 +61,9 @@ class ModelUpdateService {
     );
   }
 
-  Future<void> checkAndUpdate() async {
+  Future<void> checkAndUpdate() => _pending ??= _checkAndUpdate();
+
+  Future<void> _checkAndUpdate() async {
     if (!_configured) return;
     try {
       final prefs = await SharedPreferences.getInstance();
