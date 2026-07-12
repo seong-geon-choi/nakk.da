@@ -20,10 +20,11 @@ class PermissionStatusNotifier
     return ref.read(permissionServiceProvider).checkAll();
   }
 
-  Future<void> requestAll() async {
+  Future<void> requestAll({bool includeLocation = true}) async {
     state = const AsyncLoading();
-    final result =
-        await ref.read(permissionServiceProvider).requestAll();
+    final result = await ref
+        .read(permissionServiceProvider)
+        .requestAll(includeLocation: includeLocation);
     state = AsyncData(result);
     // RECORD_AUDIO가 허가되면 볼륨버튼 음성 서비스 기동 시도
     if (result[Permission.microphone]?.isGranted == true) {

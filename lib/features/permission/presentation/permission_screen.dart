@@ -4,6 +4,7 @@ import 'package:go_router/go_router.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/router/app_router.dart';
+import 'location_disclosure.dart';
 import 'permission_provider.dart';
 
 class PermissionScreen extends ConsumerStatefulWidget {
@@ -54,7 +55,13 @@ class _PermissionScreenState extends ConsumerState<PermissionScreen> {
                   minimumSize: const Size.fromHeight(56),
                 ),
                 onPressed: () async {
-                  await ref.read(permissionStatusProvider.notifier).requestAll();
+                  // 위치 권한 요청 전 명시적 공개+동의(정책 요건). 동의 여부에 따라
+                  // 위치 포함/제외로 나머지 권한을 요청한다.
+                  final locOk = await ensureLocationDisclosure(context);
+                  if (!context.mounted) return;
+                  await ref
+                      .read(permissionStatusProvider.notifier)
+                      .requestAll(includeLocation: locOk);
                   if (!context.mounted) return;
                   await _markDoneAndGo(context);
                 },
@@ -80,7 +87,7 @@ class _PermissionScreenState extends ConsumerState<PermissionScreen> {
       BuildContext context, AsyncValue<Map<Permission, PermissionStatus>> statusAsync) {
     final items = [
       (Permission.microphone, Icons.mic, '마이크', '음성 메모 녹음에 필요합니다'),
-      (Permission.locationWhenInUse, Icons.location_on, '위치', 'GPS 좌표를 메모에 기록합니다'),
+      (Permission.locationWhenInUse, Icons.location_on, '위치', 'GPS 좌표 기록·날씨/물때 조회에 사용(외부 전송 포함)'),
       (Permission.camera, Icons.camera_alt, '카메라', '사진 촬영 및 첨부에 필요합니다'),
       (Permission.photos, Icons.photo_library_outlined, '사진/동영상', '갤러리에서 사진과 동영상을 선택합니다'),
       (Permission.notification, Icons.notifications_outlined, '알림', '음성 메모 상태를 알림으로 표시합니다'),

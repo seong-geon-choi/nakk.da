@@ -8,6 +8,7 @@ import 'watermark_settings_screen.dart';
 import '../../map/presentation/map_screen.dart';
 import '../../species_ai/presentation/species_test_screen.dart';
 import '../../permission/presentation/permission_provider.dart';
+import '../../permission/presentation/location_disclosure.dart';
 import '../../file_list/presentation/file_list_provider.dart';
 import '../../file_list/domain/models/file_summary.dart';
 import '../../memo/presentation/memo_editor_screen.dart';
@@ -1288,6 +1289,11 @@ class _DevMenuSubScreen extends ConsumerWidget {
                 if (v) {
                   // 이미 승인된 권한은 다시 묻지 않음(경로기록과 위치 권한 공유)
                   if (!await Permission.locationWhenInUse.isGranted) {
+                    // 백그라운드 위치 사용 전 명시적 공개+동의(정책 요건).
+                    if (!context.mounted ||
+                        !await ensureLocationDisclosure(context)) {
+                      return;
+                    }
                     await Permission.locationWhenInUse.request();
                   }
                   if (!await Permission.notification.isGranted) {

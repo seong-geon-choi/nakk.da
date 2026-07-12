@@ -21,8 +21,12 @@ class PermissionServiceImpl implements PermissionService {
   }
 
   @override
-  Future<Map<Permission, PermissionStatus>> requestAll() async {
-    final result = await _required.request();
+  Future<Map<Permission, PermissionStatus>> requestAll({bool includeLocation = true}) async {
+    // 위치 명시적 공개에 동의하지 않은 경우 위치 권한은 요청하지 않는다.
+    final targets = includeLocation
+        ? _required
+        : _required.where((p) => p != Permission.locationWhenInUse).toList();
+    final result = await targets.request();
     return Map.fromEntries(result.entries.where((e) => _required.contains(e.key)));
   }
 

@@ -16,6 +16,7 @@ import '../../core/utils/date_formatter.dart';
 import '../../features/memo/domain/models/memo_entry.dart';
 import '../../features/memo/domain/models/day_file.dart';
 import '../../features/location/domain/models/location_status.dart';
+import '../../features/permission/presentation/location_disclosure.dart';
 import '../../features/tide/domain/models/tide_station.dart';
 import '../../features/memo/presentation/memo_provider.dart';
 import '../../features/backup/presentation/backup_provider.dart';
@@ -878,6 +879,7 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     }
 
     if (!await Permission.locationWhenInUse.isGranted) {
+      if (!mounted || !await ensureLocationDisclosure(context)) return;
       final status = await Permission.locationWhenInUse.request();
       if (!status.isGranted) return;
     }
@@ -1206,6 +1208,10 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
   // ── 공통 헬퍼 ────────────────────────────────────────────
   Future<bool> _requirePermission(Permission perm, String label) async {
     if (await perm.status.isGranted) return true;
+    // 위치 권한은 요청 전 명시적 공개+동의(정책 요건).
+    if (perm == Permission.locationWhenInUse || perm == Permission.locationAlways) {
+      if (!mounted || !await ensureLocationDisclosure(context)) return false;
+    }
     final result = await perm.request();
     if (result.isGranted) return true;
     if (result.isPermanentlyDenied && mounted) {
