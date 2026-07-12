@@ -54,7 +54,12 @@ def latest_release_notes(edits, package, edit_id, track):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Upload .aab to Google Play")
-    ap.add_argument("--aab", required=True, help=".aab 파일 경로")
+    ap.add_argument("--aab", help=".aab 파일 경로 (--promote-version-code와 함께 쓰면 불필요)")
+    ap.add_argument(
+        "--promote-version-code",
+        type=int,
+        help="새로 업로드하지 않고, 이미 다른 트랙에 올라간 이 versionCode를 --track에 배정",
+    )
     ap.add_argument("--key", required=True, help="서비스 계정 JSON 키 경로")
     ap.add_argument("--package", default="com.sgchoisg.nakkda", help="패키지명")
     ap.add_argument(
@@ -92,22 +97,28 @@ def main() -> int:
         edit_id = edits.insert(body={}, packageName=args.package).execute()["id"]
         print(f"[1/4] edit 생성: {edit_id}")
 
-        media = MediaFileUpload(
-            args.aab,
-            mimetype="application/octet-stream",
-            resumable=True,
-            chunksize=5 * 1024 * 1024,
-        )
-        request = edits.bundles().upload(
-            packageName=args.package, editId=edit_id, media_body=media
-        )
-        response = None
-        while response is None:
-            status, response = request.next_chunk()
-            if status:
-                print(f"      업로드 {int(status.progress() * 100)}%")
-        version_code = response["versionCode"]
-        print(f"[2/4] 번들 업로드 완료: versionCode={version_code}")
+        if args.promote_version_code:
+            version_code = args.promote_version_code
+            print(f"[2/4] 번들 업로드 생략, 기존 versionCode={version_code} 승격")
+        else:
+            if not args.aab:
+                sys.exit("[오류] --aab 또는 --promote-version-code 중 하나는 필요합니다")
+            media = MediaFileUpload(
+                args.aab,
+                mimetype="application/octet-stream",
+                resumable=True,
+                chunksize=5 * 1024 * 1024,
+            )
+            request = edits.bundles().upload(
+                packageName=args.package, editId=edit_id, media_body=media
+            )
+            response = None
+            while response is None:
+                status, response = request.next_chunk()
+                if status:
+                    print(f"      업로드 {int(status.progress() * 100)}%")
+            version_code = response["versionCode"]
+            print(f"[2/4] 번들 업로드 완료: versionCode={version_code}")
 
         release = {"status": args.status, "versionCodes": [str(version_code)]}
         if args.copy_notes:
