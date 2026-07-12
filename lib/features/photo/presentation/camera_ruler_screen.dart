@@ -42,6 +42,11 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   int _uiQuarterTurns = 0; // 0=세로, 1/3=가로
   StreamSubscription<AccelerometerEvent>? _accelSub;
 
+  // 워터마크 주소를 촬영 전에 미리 받아두는 작업(사용자가 구도를 잡는 동안 진행).
+  // 셔터 순간의 GPS+역지오코딩(≈1.3초) 대기를 없애기 위함.
+  Future<String?>? _wmAddressFuture;
+  String? _wmAddress; // 조회 완료된 주소(미리보기에 실시간 반영)
+
   @override
   void initState() {
     super.initState();
@@ -51,7 +56,26 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     _accelSub = accelerometerEventStream(
       samplingPeriod: const Duration(milliseconds: 200),
     ).listen(_onAccel);
+    _prefetchWmAddress();
     _loadPrefsAndInit();
+  }
+
+  /// 워터마크에 주소 박스가 켜져 있으면 화면 진입 시 미리 주소를 조회해둔다.
+  void _prefetchWmAddress() {
+    final wm = ref.read(settingsProvider).valueOrNull?.watermark;
+    if (wm == null || !wm.enabled) return;
+    final needsAddress = wm.boxes.any(
+        (b) => b.visible && b.textContent == WatermarkTextContent.address);
+    if (!needsAddress) return;
+    final future =
+        ref.read(locationProvider.notifier).resolveWatermarkAddress();
+    _wmAddressFuture = future;
+    // 조회가 끝나면 미리보기의 자리표시자(시/군/구/동)를 실제 주소로 교체.
+    future.then((addr) {
+      if (mounted && addr != null && addr.trim().isNotEmpty) {
+        setState(() => _wmAddress = addr);
+      }
+    });
   }
 
   void _onAccel(AccelerometerEvent e) {
@@ -68,6 +92,16 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       setState(() => _uiQuarterTurns = turns);
     }
   }
+
+  // 화면(Surface)이 세로로 고정돼 있어, 촬영 결과는 항상 세로로 저장된다.
+  // camera 플러그인의 lockCaptureOrientation은 프리뷰까지 함께 회전시켜
+  // (camera_preview.dart) 촬영 순간 화면이 깜빡 회전하므로 쓰지 않고,
+  // 대신 저장 파일을 우리가 직접 회전시킨다. 가속도계 방향(turns) → 시계방향 각도.
+  int _rotateDegreesForTurns(int turns) => switch (turns) {
+        1 => 90,
+        3 => 270,
+        _ => 0,
+      };
 
   /// 기기 방향에 맞춰 컨트롤(아이콘/텍스트)만 제자리에서 회전
   Widget _rot(Widget child) => AnimatedRotation(
@@ -194,14 +228,23 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     if (ctrl == null || !ctrl.value.isInitialized || _capturing) return;
     setState(() => _capturing = true);
     try {
+      // 촬영 방향은 셔터 누른 시점 값으로 고정(캡처 중 방향이 바뀌어도 일관되게).
+      final rotateDeg = _rotateDegreesForTurns(_uiQuarterTurns);
       final file = await ctrl.takePicture();
       if (!mounted) return;
 
       final wmSettings = ref.read(settingsProvider).valueOrNull?.watermark;
-      final wmAddress = await _resolveWmAddress(wmSettings);
+      // 화면 진입 시 미리 받아둔 주소를 재사용(대개 이미 완료됨). 없으면 즉석 조회.
+      final wmAddress =
+          await (_wmAddressFuture ?? _resolveWmAddress(wmSettings));
+      // 세로로 저장된 캡처를 실제 기기 방향으로 회전. 워터마크 경로는
+      // applyWatermark 내부 재인코딩 단계에서 함께 회전해 추가 비용이 없다.
       final photoPath = (wmSettings != null && wmSettings.enabled)
-          ? await applyWatermark(file.path, wmSettings, address: wmAddress)
-          : file.path;
+          ? await applyWatermark(file.path, wmSettings,
+              address: wmAddress, rotateDegrees: rotateDeg)
+          : (rotateDeg != 0
+              ? await rotateImageFile(file.path, rotateDeg)
+              : file.path);
 
       if (!mounted) return;
       Navigator.of(context).pop<({String path, bool isVideo})>(
@@ -347,6 +390,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               wm: wm,
               previewSize: ctrl.value.previewSize!,
               quarterTurns: _uiQuarterTurns,
+              address: _wmAddress,
               onMove: (x, y) => ref
                   .read(settingsProvider.notifier)
                   .updateWatermark(wm.copyWith(containerPosX: x, containerPosY: y)),
@@ -596,11 +640,13 @@ class _WatermarkOverlay extends StatefulWidget {
   final Size previewSize;
   final void Function(double, double)? onMove;
   final int quarterTurns; // 기기 방향에 맞춘 박스 회전
+  final String? address; // 조회 완료된 주소(null이면 자리표시자 표시)
   const _WatermarkOverlay(
       {required this.wm,
       required this.previewSize,
       this.onMove,
-      this.quarterTurns = 0});
+      this.quarterTurns = 0,
+      this.address});
 
   @override
   State<_WatermarkOverlay> createState() => _WatermarkOverlayState();
@@ -889,12 +935,14 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
         return b.timeFormat.isEmpty ? '' : _fmtTime(now, b.timeFormat);
       case WatermarkLineType.customText:
       case WatermarkLineType.customText2:
-        // 라이브뷰는 실제 주소를 알 수 없어 주소는 자리표시자로 표시(촬영 시 실제 주소로 대체)
+        // 주소는 조회 완료 전엔 자리표시자, 완료되면 실제 주소를 표시.
+        final addr = widget.address?.trim();
         return switch (b.textContent) {
           WatermarkTextContent.text => b.customText.trim(),
           WatermarkTextContent.year => '${now.year}',
           WatermarkTextContent.address =>
-            '${String.fromCharCode(Icons.location_on.codePoint)} 시/군/구/동',
+            '${String.fromCharCode(Icons.location_on.codePoint)} '
+                '${addr != null && addr.isNotEmpty ? addr : '시/군/구/동'}',
         };
     }
   }

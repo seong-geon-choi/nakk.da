@@ -9,10 +9,31 @@ import '../../features/settings/domain/models/app_settings.dart';
 /// 헤비(번들) 폰트 패밀리명 — pubspec.yaml fonts 등록명과 일치해야 함.
 const String kWatermarkHeavyFont = 'BlackHanSans';
 
+/// JPEG 파일을 시계방향 [degrees](0/90/180/270)만큼 회전해 새 경로를 반환.
+/// degrees가 0이거나 실패하면 원본 경로 그대로 반환.
+Future<String> rotateImageFile(String imagePath, int degrees) async {
+  if (degrees % 360 == 0) return imagePath;
+  try {
+    final tempDir = await getTemporaryDirectory();
+    final outPath = '${tempDir.path}/rot_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    final out = await FlutterImageCompress.compressAndGetFile(
+      imagePath,
+      outPath,
+      quality: 95,
+      rotate: degrees,
+    );
+    return out?.path ?? imagePath;
+  } catch (_) {
+    return imagePath;
+  }
+}
+
 /// 이미지에 워터마크(배경 컨테이너 + 독립 박스들)를 적용하고 JPEG 경로를 반환.
 /// 실패 시 원본 경로 반환.
+/// [rotateDegrees]: 워터마크를 굽기 전에 이미지를 시계방향으로 회전(0/90/180/270).
 Future<String> applyWatermark(
-    String imagePath, WatermarkSettings settings, {String? address}) async {
+    String imagePath, WatermarkSettings settings,
+    {String? address, int rotateDegrees = 0}) async {
   if (!settings.enabled) return imagePath;
 
   try {
@@ -21,18 +42,25 @@ Future<String> applyWatermark(
     final boxes = settings.boxes
         .where((b) => b.visible && _boxText(b, now, address).isNotEmpty)
         .toList();
-    if (boxes.isEmpty) return imagePath;
+    if (boxes.isEmpty) {
+      // 워터마크가 없어도 방향 보정은 필요.
+      return rotateDegrees % 360 == 0
+          ? imagePath
+          : await rotateImageFile(imagePath, rotateDegrees);
+    }
 
     final tempDir = await getTemporaryDirectory();
     final ts = DateTime.now().millisecondsSinceEpoch;
 
     // ui.instantiateImageCodec는 EXIF 방향을 무시하므로,
-    // 먼저 EXIF 회전을 픽셀에 반영한 JPEG로 정규화 (autoCorrectionAngle 기본값 true)
+    // 먼저 EXIF 회전을 픽셀에 반영한 JPEG로 정규화 (autoCorrectionAngle 기본값 true).
+    // 기기 방향에 따른 추가 회전(rotateDegrees)도 이 단계에서 함께 적용.
     final rotatedPath = '${tempDir.path}/wm_rot_$ts.jpg';
     final rotated = await FlutterImageCompress.compressAndGetFile(
       imagePath,
       rotatedPath,
       quality: 95,
+      rotate: rotateDegrees,
     );
     final srcPath = rotated?.path ?? imagePath;
 

@@ -24,7 +24,12 @@ Future<({String path, double? distanceCm, bool applyWatermark, double? posX, dou
           return b.timeFormat.isNotEmpty;
         case WatermarkLineType.customText:
         case WatermarkLineType.customText2:
-          return b.customText.trim().isNotEmpty;
+          // year·address는 촬영 시점에 계산되므로 customText가 비어 있어도 표시 대상.
+          return switch (b.textContent) {
+            WatermarkTextContent.text => b.customText.trim().isNotEmpty,
+            WatermarkTextContent.year => true,
+            WatermarkTextContent.address => true,
+          };
       }
     }
 
@@ -35,6 +40,7 @@ Future<({String path, double? distanceCm, bool applyWatermark, double? posX, dou
               'dateFormat': b.dateFormat,
               'timeFormat': b.timeFormat,
               'customText': b.customText.trim(),
+              'textContent': b.textContent.name,
               'dx': b.dx,
               'dy': b.dy,
               'fontSize': b.fontSize,
@@ -42,6 +48,7 @@ Future<({String path, double? distanceCm, bool applyWatermark, double? posX, dou
               'fontFamily': b.fontFamily.name,
               'color': b.textColor,
               'align': b.alignment.name,
+              'quarterTurns': b.quarterTurns,
             })
         .toList();
 

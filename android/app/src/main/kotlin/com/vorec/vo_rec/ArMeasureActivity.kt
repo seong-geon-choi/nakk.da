@@ -92,8 +92,9 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
 
     private data class WmBox(
         val type: String, val dateFormat: String, val timeFormat: String,
-        val customText: String, val dx: Float, val dy: Float, val fontSize: Float,
-        val weight: Int, val fontFamily: String, val color: Int, val align: String
+        val customText: String, val textContent: String, val dx: Float, val dy: Float,
+        val fontSize: Float, val weight: Int, val fontFamily: String, val color: Int,
+        val align: String, val quarterTurns: Int
     )
 
     @Volatile private var currentFrame: Frame? = null
@@ -484,13 +485,15 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
                     b.optString("dateFormat", "yyyy-MM-dd"),
                     b.optString("timeFormat", "HH:mm"),
                     b.optString("customText", ""),
+                    b.optString("textContent", "text"),
                     b.optDouble("dx", 0.0).toFloat(),
                     b.optDouble("dy", 0.0).toFloat(),
                     b.optDouble("fontSize", 32.0).toFloat(),
                     b.optInt("weight", 0),
                     b.optString("fontFamily", "sansSerif"),
                     b.optInt("color", Color.WHITE),
-                    b.optString("align", "left")
+                    b.optString("align", "left"),
+                    b.optInt("quarterTurns", 0)
                 ))
             }
             wmBoxes = list
@@ -551,14 +554,21 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         val cal = java.util.Calendar.getInstance()
         for (i in wmBoxes.indices) {
             if (i >= wmTextViews.size) break
-            val b = wmBoxes[i]
-            wmTextViews[i].text = when (b.type) {
-                "date" -> fmtWmDate(cal, b.dateFormat)
-                "time" -> if (b.timeFormat.isEmpty()) "" else fmtWmTime(cal, b.timeFormat)
-                else -> b.customText
-            }
+            wmTextViews[i].text = wmBoxText(wmBoxes[i], cal)
         }
         if (!wmDragging) wmOverlay.post { positionWatermark() }
+    }
+
+    // customText/customText2: 라이브 미리보기는 실제 주소를 알 수 없어 Flutter
+    // 카메라 미리보기(_WatermarkOverlay)와 동일하게 자리표시자로 표시(촬영 시 실제 주소로 대체)
+    private fun wmBoxText(b: WmBox, cal: java.util.Calendar): String = when (b.type) {
+        "date" -> fmtWmDate(cal, b.dateFormat)
+        "time" -> if (b.timeFormat.isEmpty()) "" else fmtWmTime(cal, b.timeFormat)
+        else -> when (b.textContent) {
+            "year" -> cal.get(java.util.Calendar.YEAR).toString()
+            "address" -> "📍 시/군/구/동"
+            else -> b.customText
+        }
     }
 
     /// wmPosX/wmPosY(0~1) 비율로 오버레이를 절대 배치
@@ -762,6 +772,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         val shortSidePx = resources.displayMetrics.widthPixels.toFloat()
         val fontScale = shortSidePx / 480f
         val heavyTf = loadHeavyTypeface()
+        val nowCal = java.util.Calendar.getInstance()
         val pxX = wmBoxes.map { it.dx * shortSidePx }
         val pxY = wmBoxes.map { it.dy * shortSidePx }
         val minPxX = pxX.minOrNull() ?: 0f
@@ -772,6 +783,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             val fpx = b.fontSize * fontScale
             if (fpx > maxFontPx) maxFontPx = fpx
             tvs.add(TextView(this).apply {
+                text = wmBoxText(b, nowCal)
                 setTextSize(android.util.TypedValue.COMPLEX_UNIT_PX, fpx)
                 setTextColor(b.color)
                 typeface = typefaceFor(b.fontFamily, b.weight, heavyTf)
@@ -784,7 +796,30 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
                 setShadowLayer(2f, 0f, 0f, Color.argb(160, 0, 0, 0))
             })
         }
+        // 자연 크기를 측정해두고, 박스가 회전(quarterTurns)된 경우 화면 점유
+        // footprint는 가로/세로가 뒤바뀐다 — Flutter _WatermarkOverlay·applyWatermark와 동일 계산.
+        val natW = FloatArray(wmBoxes.size)
+        val natH = FloatArray(wmBoxes.size)
+        val footW = FloatArray(wmBoxes.size)
+        val footH = FloatArray(wmBoxes.size)
+        var maxPxX = minPxX
+        var maxPxY = minPxY
+        for (i in wmBoxes.indices) {
+            tvs[i].measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
+            natW[i] = tvs[i].measuredWidth.toFloat()
+            natH[i] = tvs[i].measuredHeight.toFloat()
+            val swapped = wmBoxes[i].quarterTurns % 2 != 0
+            footW[i] = if (swapped) natH[i] else natW[i]
+            footH[i] = if (swapped) natW[i] else natH[i]
+            maxPxX = maxOf(maxPxX, pxX[i] + footW[i])
+            maxPxY = maxOf(maxPxY, pxY[i] + footH[i])
+        }
         val wmPad = (maxFontPx * 0.4f).toInt().coerceAtLeast(1)
+        // 컨테이너를 WRAP_CONTENT가 아닌 footprint 기준 고정 크기로 둔다 — rotation은
+        // 레이아웃 크기에 영향을 주지 않아, WRAP_CONTENT로는 회전된 박스만큼
+        // 배경이 넓어지지 않는다(잘려 보임).
+        val containerW = ((maxPxX - minPxX).toInt() + wmPad * 2).coerceAtLeast(1)
+        val containerH = ((maxPxY - minPxY).toInt() + wmPad * 2).coerceAtLeast(1)
         wmOverlay = FrameLayout(this).apply {
             setPadding(wmPad, wmPad, wmPad, wmPad)
             background = GradientDrawable().apply {
@@ -795,13 +830,14 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             visibility = if (applyWatermark && wmBoxes.isNotEmpty()) View.VISIBLE else View.GONE
             for (i in wmBoxes.indices) {
                 addView(tvs[i], FrameLayout.LayoutParams(
-                    FrameLayout.LayoutParams.WRAP_CONTENT,
-                    FrameLayout.LayoutParams.WRAP_CONTENT
+                    natW[i].toInt(), natH[i].toInt()
                 ).apply {
                     gravity = Gravity.TOP or Gravity.START
-                    leftMargin = (pxX[i] - minPxX).toInt()
-                    topMargin = (pxY[i] - minPxY).toInt()
+                    leftMargin = (pxX[i] - minPxX + (footW[i] - natW[i]) / 2f).toInt()
+                    topMargin = (pxY[i] - minPxY + (footH[i] - natH[i]) / 2f).toInt()
                 })
+                // 박스 자체 회전(시계방향 90°×quarterTurns) — footprint 중심 기준
+                tvs[i].rotation = wmBoxes[i].quarterTurns * 90f
             }
             // 컨테이너 전체 드래그
             setOnTouchListener { v, e ->
@@ -854,7 +890,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         }
         wmTextViews = tvs
         val wmParams = FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT
+            containerW, containerH
         ).apply { gravity = Gravity.TOP or Gravity.START }
         updateWmOverlay()
 
@@ -935,6 +971,10 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         }
 
         bottomArea = FrameLayout(this).apply {
+            // 가로 전환 시 '다시 측정' 버튼이 90° 회전하면 세로로 길어져 부모 높이를
+            // 넘는다. clip을 끄지 않으면 둥근 끝부분이 잘려 네모로 보인다(sideButtons와 동일).
+            clipChildren = false
+            clipToPadding = false
             setPadding(dpToPx(24), dpToPx(20), dpToPx(24), dpToPx(20))
             addView(resetBtn, resetParams)
             addView(shutterView, shutterParams)
