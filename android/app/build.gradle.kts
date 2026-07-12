@@ -54,6 +54,10 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
+            // R8 코드 축소·최적화(proguard-rules.pro 준비됨)는 실기기 전체 기능
+            // 검증 후 활성화 예정. 검증 전 프로덕션에 내보내지 않도록 현재는 비활성.
+            isMinifyEnabled = false
+            isShrinkResources = false
         }
     }
 }
