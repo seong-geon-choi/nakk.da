@@ -6,10 +6,12 @@ import android.content.pm.ServiceInfo
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
+import android.os.Bundle
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.Settings
+import androidx.core.view.WindowCompat
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -47,6 +49,17 @@ class MainActivity : FlutterActivity() {
                 accessibilityChannel?.invokeMethod("onVoiceResult", text)
             }
         }
+    }
+
+    // Android 15(SDK 35)부터 targetSdk 35 앱은 edge-to-edge가 기본 강제됨.
+    // 명시적으로 선언하지 않으면 시스템이 구버전 호환 경로(지원 중단된
+    // setStatusBarColor 등)로 폴백하므로, 여기서 직접 선언해 그 경로를 피한다.
+    // FlutterActivity가 ComponentActivity가 아닌 순수 Activity라
+    // androidx.activity의 enableEdgeToEdge() 헬퍼는 못 쓰고, 그 헬퍼가
+    // 내부적으로 하는 것과 동일한 WindowCompat 호출을 직접 한다.
+    override fun onCreate(savedInstanceState: Bundle?) {
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        super.onCreate(savedInstanceState)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
