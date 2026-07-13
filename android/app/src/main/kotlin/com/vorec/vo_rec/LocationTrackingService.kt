@@ -36,7 +36,7 @@ class LocationTrackingService : Service() {
 
         fun getQuickLaunchMode(context: Context): String =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                .getString(PREFS_QUICK_LAUNCH_MODE_KEY, "volume") ?: "volume"
+                .getString(PREFS_QUICK_LAUNCH_MODE_KEY, "shake") ?: "shake"
 
         fun getShakeThresholdG(context: Context): Float =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

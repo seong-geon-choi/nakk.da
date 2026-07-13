@@ -477,7 +477,7 @@ class WatermarkSettings {
 
 // ── 빠른 메모 실행 모드 ────────────────────────────────────────
 
-enum QuickLaunchMode { none, shake, volume }
+enum QuickLaunchMode { none, shake }
 
 // ── 앱 전체 설정 ───────────────────────────────────────────────
 

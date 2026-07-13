@@ -14,7 +14,6 @@ import '../../file_list/domain/models/file_summary.dart';
 import '../../memo/presentation/memo_editor_screen.dart';
 import '../../../core/constants/api_keys.dart';
 import '../../../core/widgets/permission_status_chip.dart';
-import '../../../core/services/accessibility_service.dart';
 import '../../../core/utils/media_scanner.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
@@ -802,7 +801,6 @@ class _PermissionSubScreenState extends ConsumerState<_PermissionSubScreen>
 String _quickLaunchModeLabel(QuickLaunchMode mode) {
   switch (mode) {
     case QuickLaunchMode.shake:  return '화면 흔들기';
-    case QuickLaunchMode.volume: return '볼륨 버튼';
     case QuickLaunchMode.none:   return '사용 안 함';
   }
 }
@@ -841,13 +839,11 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
                 if (mode == QuickLaunchMode.shake)
                   _ShakeSensitivitySlider(value: settings.shakeThresholdG),
                 RadioListTile<QuickLaunchMode>(
-                  secondary: const Icon(Icons.volume_up_outlined),
-                  title: const Text('볼륨 버튼'),
-                  subtitle: const Text('볼륨 ↑ 2회 연속으로 음성 메모 시작'),
-                  value: QuickLaunchMode.volume,
+                  secondary: const Icon(Icons.block),
+                  title: const Text('사용 안 함'),
+                  subtitle: const Text('빠른 메모 실행을 끕니다'),
+                  value: QuickLaunchMode.none,
                 ),
-                if (mode == QuickLaunchMode.volume)
-                  const _AccessibilityTile(),
               ],
               ),
             ),
@@ -943,118 +939,6 @@ class _CommuteRadiusSliderState extends ConsumerState<_CommuteRadiusSlider> {
           onChangeEnd: (v) =>
               ref.read(settingsProvider.notifier).updateCommuteRadius(v.round()),
         ),
-      ],
-    );
-  }
-}
-
-class _AccessibilityTile extends StatefulWidget {
-  const _AccessibilityTile();
-
-  @override
-  State<_AccessibilityTile> createState() => _AccessibilityTileState();
-}
-
-class _AccessibilityTileState extends State<_AccessibilityTile>
-    with WidgetsBindingObserver {
-  bool _enabled = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _refresh();
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _refresh();
-  }
-
-  Future<void> _refresh() async {
-    final enabled = await isAccessibilityServiceEnabled();
-    if (mounted) setState(() => _enabled = enabled);
-  }
-
-  /// 접근성 서비스 활성화 전, 정책상 요구되는 명시적 공개 + 동의 다이얼로그.
-  /// 무엇을(볼륨키 감지) · 왜(화면 꺼짐/잠금 상태 음성 메모) · 무엇을 안 하는지
-  /// (화면 내용·타 앱 정보 미수집)를 고지하고 명시적 동의를 받은 뒤에만 설정을 연다.
-  Future<void> _requestAccessibility() async {
-    final ok = await showDialog<bool>(
-      context: context,
-      builder: (dctx) => AlertDialog(
-        title: const Text('접근성 서비스 사용 안내'),
-        content: const Text(
-          '화면 터치가 어려운 상황(장갑 착용, 운동 제약 등)에서도 볼륨 버튼만으로 '
-          '음성 메모를 실행할 수 있도록, 이 기능은 접근성 서비스(AccessibilityService)를 '
-          '사용합니다.\n\n'
-          '• 볼륨 ↑ 버튼을 두 번 누르는 입력만 감지합니다\n'
-          '• 화면이 꺼져 있거나 잠긴 상태에서도 음성 메모를 시작하기 위한 용도입니다\n'
-          '• 화면에 표시되는 내용을 읽거나 다른 앱의 정보를 수집하지 않습니다\n'
-          '• 선택 기능이며, 설정에서 언제든 끌 수 있습니다\n\n'
-          '동의하시면 접근성 설정 화면으로 이동합니다.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(dctx).pop(false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.of(dctx).pop(true),
-            child: const Text('동의하고 설정 열기'),
-          ),
-        ],
-      ),
-    );
-    if (ok == true) await openAccessibilitySettings();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        SwitchListTile(
-          secondary: Icon(
-            _enabled ? Icons.lock_open : Icons.lock_outline,
-            color: _enabled ? Colors.green : null,
-          ),
-          title: const Text('잠금화면 · 화면 꺼짐 상태 지원'),
-          subtitle: Text(
-            _enabled
-                ? '활성화됨 — 화면 꺼짐·잠금 상태에서도 동작합니다'
-                : '화면 켜진 상태에서만 동작합니다',
-            style: _enabled ? const TextStyle(color: Colors.green) : null,
-          ),
-          value: _enabled,
-          onChanged: (v) async {
-            // 켤 때는 명시적 공개+동의 다이얼로그를 거친다. 끌 때는 바로 설정으로.
-            if (v && !_enabled) {
-              await _requestAccessibility();
-            } else {
-              await openAccessibilitySettings();
-            }
-          },
-        ),
-        if (!_enabled)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: Text(
-              '볼륨 ↑ 두 번으로 음성 메모를 입력할 수 있습니다.\n'
-              '잠금화면·화면 꺼짐 상태에서도 사용하려면 접근성 서비스를 활성화하세요.\n'
-              '활성화 → 접근성 → 설치된 서비스 → 낚.다 음성 메모 → 켜기',
-              style: TextStyle(
-                fontSize: 13,
-                color: Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.6),
-              ),
-            ),
-          ),
       ],
     );
   }

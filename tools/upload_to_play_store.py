@@ -85,6 +85,12 @@ def main() -> int:
         choices=["internal", "alpha", "beta", "production"],
         help="출시노트를 가져올 트랙 (기본: --track 과 동일)",
     )
+    ap.add_argument(
+        "--not-sent-for-review",
+        action="store_true",
+        help="검토 자동 제출 없이 커밋(대기 중 변경사항이 있어 자동 제출이 막힐 때). "
+             "커밋 후 Play Console에서 수동으로 검토 제출",
+    )
     args = ap.parse_args()
 
     creds = service_account.Credentials.from_service_account_file(
@@ -139,8 +145,15 @@ def main() -> int:
         ).execute()
         print(f"[3/4] 트랙 할당: {args.track} (status={args.status})")
 
-        edits.commit(packageName=args.package, editId=edit_id).execute()
-        print("[4/4] 커밋 완료. Play Console에서 검토 후 출시하세요.")
+        edits.commit(
+            packageName=args.package,
+            editId=edit_id,
+            changesNotSentForReview=args.not_sent_for_review,
+        ).execute()
+        if args.not_sent_for_review:
+            print("[4/4] 커밋 완료(검토 미제출). Play Console에서 검토 제출·출시하세요.")
+        else:
+            print("[4/4] 커밋 완료. Play Console에서 검토 후 출시하세요.")
         return 0
 
     except HttpError as e:

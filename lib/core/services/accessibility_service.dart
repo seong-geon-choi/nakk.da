@@ -2,20 +2,6 @@ import 'package:flutter/services.dart';
 
 const _channel = MethodChannel('com.sgchoisg.nakkda/accessibility');
 
-Future<bool> isAccessibilityServiceEnabled() async {
-  try {
-    return await _channel.invokeMethod<bool>('isServiceEnabled') ?? false;
-  } catch (_) {
-    return false;
-  }
-}
-
-Future<void> openAccessibilitySettings() async {
-  try {
-    await _channel.invokeMethod('openAccessibilitySettings');
-  } catch (_) {}
-}
-
 Future<String?> getPendingVoiceResult() async {
   try {
     return await _channel.invokeMethod<String?>('getPendingResult');

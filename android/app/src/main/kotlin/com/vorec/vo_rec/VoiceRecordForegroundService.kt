@@ -4,9 +4,7 @@ import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
 import android.hardware.*
-import android.media.AudioManager
 import android.os.*
-import android.provider.Settings
 import android.speech.*
 import androidx.core.app.NotificationCompat
 
@@ -21,11 +19,10 @@ class VoiceRecordForegroundService : Service() {
         const val EXTRA_MODE  = "mode"
         const val EXTRA_SHAKE_THRESHOLD = "shakeThresholdG"
 
-        private const val VOL_CHANGED        = "android.media.VOLUME_CHANGED_ACTION"
-        private const val EXTRA_STREAM_TYPE  = "android.media.EXTRA_VOLUME_STREAM_TYPE"
-        private const val EXTRA_STREAM_VALUE = "android.media.EXTRA_VOLUME_STREAM_VALUE"
-        private const val EXTRA_PREV_STREAM_VALUE = "android.media.EXTRA_PREV_VOLUME_STREAM_VALUE"
-        private const val DOUBLE_PRESS_MS    = 800L
+        // 음성 인식 결과 전달용(SharedPreferences + 브로드캐스트)
+        const val PREFS_NAME       = "nakkda_prefs"
+        const val PREFS_KEY        = "pending_voice_result"
+        const val BROADCAST_ACTION = "com.sgchoisg.nakkda.VOICE_RESULT"
 
         private const val DEFAULT_SHAKE_THRESHOLD_G = 3.5f
         private const val MIN_SHAKE_INTERVAL_MS  = 250L
@@ -56,47 +53,6 @@ class VoiceRecordForegroundService : Service() {
     private var speechRecognizer: SpeechRecognizer? = null
     private var wakeLock: PowerManager.WakeLock?    = null
     private var currentMode         = "shake"
-    private var volumeReceiverRegistered = false
-
-    // ── 볼륨 버튼 ──────────────────────────────────────────────
-    private var firstPressStreamType = -1
-    private var firstPressVolume     = -1
-    private var waitingSecondPress   = false
-
-    private val volumeReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) {
-            if (intent.action != VOL_CHANGED) return
-            val newVolume  = intent.getIntExtra(EXTRA_STREAM_VALUE, -1)
-            val prevVolume = intent.getIntExtra(EXTRA_PREV_STREAM_VALUE, -1)
-            val streamType = intent.getIntExtra(EXTRA_STREAM_TYPE, -1)
-            if (newVolume < prevVolume) return
-
-            if (waitingSecondPress) {
-                waitingSecondPress = false
-                handler.removeCallbacks(resetRunnable)
-                compensateVolume(firstPressStreamType, firstPressVolume)
-                handler.post { startVoiceRecording() }
-            } else {
-                waitingSecondPress    = true
-                firstPressStreamType  = streamType
-                firstPressVolume      = prevVolume
-                handler.removeCallbacks(resetRunnable)
-                handler.postDelayed(resetRunnable, DOUBLE_PRESS_MS)
-            }
-        }
-    }
-
-    private val resetRunnable = Runnable {
-        waitingSecondPress   = false
-        firstPressStreamType = -1
-        firstPressVolume     = -1
-    }
-
-    private fun compensateVolume(streamType: Int, targetVolume: Int) {
-        if (targetVolume < 0) return
-        (getSystemService(AUDIO_SERVICE) as AudioManager)
-            .setStreamVolume(streamType, targetVolume, AudioManager.FLAG_REMOVE_SOUND_AND_VIBRATE)
-    }
 
     // ── 흔들기 감지 ────────────────────────────────────────────
     private var sensorManager: SensorManager? = null
@@ -142,9 +98,6 @@ class VoiceRecordForegroundService : Service() {
             }
         } catch (e: SecurityException) { stopSelf(); return }
 
-        getSharedPreferences(VoiceRecordAccessibilityService.PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putBoolean(VoiceRecordAccessibilityService.PREFS_VOICE_RUNNING, true).apply()
-
         createResultNotificationChannel()
 
         currentMode = LocationTrackingService.getQuickLaunchMode(this)
@@ -154,8 +107,6 @@ class VoiceRecordForegroundService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            getSharedPreferences(VoiceRecordAccessibilityService.PREFS_NAME, Context.MODE_PRIVATE)
-                .edit().putBoolean(VoiceRecordAccessibilityService.PREFS_VOICE_RUNNING, false).apply()
             stopSelf()
             return START_NOT_STICKY
         }
@@ -175,7 +126,6 @@ class VoiceRecordForegroundService : Service() {
     }
 
     override fun onDestroy() {
-        detachVolume()
         detachShake()
         handler.removeCallbacksAndMessages(null)
         resultNotifHandler.removeCallbacksAndMessages(null)
@@ -189,28 +139,9 @@ class VoiceRecordForegroundService : Service() {
     // ── 모드 적용 ──────────────────────────────────────────────
     private fun applyMode(mode: String) {
         when (mode) {
-            "shake"  -> { detachVolume(); attachShake() }
-            "volume" -> { detachShake();  attachVolume() }
-            else     -> { detachVolume(); detachShake() }   // "none"
+            "shake"  -> attachShake()
+            else     -> detachShake()   // "none"
         }
-    }
-
-    private fun attachVolume() {
-        if (volumeReceiverRegistered) return
-        val filter = IntentFilter(VOL_CHANGED)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(volumeReceiver, filter, RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(volumeReceiver, filter)
-        }
-        volumeReceiverRegistered = true
-    }
-
-    private fun detachVolume() {
-        if (!volumeReceiverRegistered) return
-        try { unregisterReceiver(volumeReceiver) } catch (_: Exception) {}
-        volumeReceiverRegistered = false
     }
 
     private fun attachShake() {
@@ -283,28 +214,17 @@ class VoiceRecordForegroundService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val (title, body) = when (currentMode) {
-            "shake"  -> "음성 메모 대기 중" to "흔들기 3회로 음성 메모를 시작합니다"
             "none"   -> "음성 메모 서비스" to "빠른 실행이 비활성화되어 있습니다"
-            else     -> "음성 메모 대기 중" to "볼륨 ↑ 2회로 음성 메모를 시작합니다"
+            else     -> "음성 메모 대기 중" to "흔들기 3회로 음성 메모를 시작합니다"
         }
-        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
+        return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(body)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true).setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .addAction(android.R.drawable.ic_delete, "중지", stopPi)
-
-        if (currentMode == "volume" && !isAccessibilityServiceEnabled()) {
-            builder.setStyle(
-                NotificationCompat.BigTextStyle().bigText(
-                    "볼륨 ↑ 2회로 음성 메모를 시작합니다\n\n" +
-                    "잠금화면·화면 꺼짐 상태에서도 사용하려면\n" +
-                    "설정 → 잠금화면·화면 꺼짐 상태 지원을 활성화하세요"
-                )
-            )
-        }
-        return builder.build()
+            .build()
     }
 
     private fun showRecordingNotification() {
@@ -351,12 +271,12 @@ class VoiceRecordForegroundService : Service() {
 
     // ── 헬퍼 ───────────────────────────────────────────────────
     private fun saveResult(text: String) {
-        getSharedPreferences(VoiceRecordAccessibilityService.PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putString(VoiceRecordAccessibilityService.PREFS_KEY, text).apply()
+        getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putString(PREFS_KEY, text).apply()
     }
 
     private fun broadcastResult(text: String) {
-        sendBroadcast(Intent(VoiceRecordAccessibilityService.BROADCAST_ACTION).apply {
+        sendBroadcast(Intent(BROADCAST_ACTION).apply {
             putExtra("result", text); setPackage(packageName)
         })
     }
@@ -379,13 +299,6 @@ class VoiceRecordForegroundService : Service() {
     private fun releaseWakeLock() {
         if (wakeLock?.isHeld == true) wakeLock?.release()
         wakeLock = null
-    }
-
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        val target = "$packageName/${VoiceRecordAccessibilityService::class.java.name}"
-        val enabled = Settings.Secure.getString(
-            contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES) ?: return false
-        return enabled.split(":").any { it.equals(target, ignoreCase = true) }
     }
 
     private fun createNotificationChannel() {

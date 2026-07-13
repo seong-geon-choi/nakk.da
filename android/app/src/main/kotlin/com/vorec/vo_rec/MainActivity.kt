@@ -10,7 +10,6 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
-import android.provider.Settings
 import androidx.core.view.WindowCompat
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.embedding.android.FlutterActivity
@@ -595,7 +594,7 @@ class MainActivity : FlutterActivity() {
                         result.success(active)
                     }
                     "setQuickLaunchMode" -> {
-                        val mode = call.argument<String>("mode") ?: "volume"
+                        val mode = call.argument<String>("mode") ?: "shake"
                         val threshold =
                             (call.argument<Double>("shakeThresholdG") ?: 3.5).toFloat()
                         getSharedPreferences(LocationTrackingService.PREFS_NAME, Context.MODE_PRIVATE)
@@ -616,26 +615,16 @@ class MainActivity : FlutterActivity() {
         )
         accessibilityChannel?.setMethodCallHandler { call, result ->
             when (call.method) {
-                "isServiceEnabled" -> {
-                    val enabled = isAccessibilityServiceEnabled()
-                    result.success(enabled)
-                }
-                "openAccessibilitySettings" -> {
-                    startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    })
-                    result.success(null)
-                }
                 "getPendingResult" -> {
                     val prefs = getSharedPreferences(
-                        VoiceRecordAccessibilityService.PREFS_NAME, Context.MODE_PRIVATE
+                        VoiceRecordForegroundService.PREFS_NAME, Context.MODE_PRIVATE
                     )
-                    result.success(prefs.getString(VoiceRecordAccessibilityService.PREFS_KEY, null))
+                    result.success(prefs.getString(VoiceRecordForegroundService.PREFS_KEY, null))
                 }
                 "clearPendingResult" -> {
                     getSharedPreferences(
-                        VoiceRecordAccessibilityService.PREFS_NAME, Context.MODE_PRIVATE
-                    ).edit().remove(VoiceRecordAccessibilityService.PREFS_KEY).apply()
+                        VoiceRecordForegroundService.PREFS_NAME, Context.MODE_PRIVATE
+                    ).edit().remove(VoiceRecordForegroundService.PREFS_KEY).apply()
                     result.success(null)
                 }
                 "startVoiceService" -> {
@@ -648,15 +637,6 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
-    }
-
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        val target = "${packageName}/${VoiceRecordAccessibilityService::class.java.name}"
-        val enabled = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-        return enabled.split(":").any { it.equals(target, ignoreCase = true) }
     }
 
     @Deprecated("Deprecated in Java")
@@ -974,7 +954,7 @@ class MainActivity : FlutterActivity() {
             VoiceRecordForegroundService.start(
                 this, mode, LocationTrackingService.getShakeThresholdG(this))
         }
-        val filter = IntentFilter(VoiceRecordAccessibilityService.BROADCAST_ACTION)
+        val filter = IntentFilter(VoiceRecordForegroundService.BROADCAST_ACTION)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(voiceResultReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
         } else {
