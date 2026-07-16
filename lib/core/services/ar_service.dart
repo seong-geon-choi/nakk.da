@@ -6,7 +6,7 @@ const _channel = MethodChannel('com.sgchoisg.nakkda/ar');
 
 /// ARCore 측정 화면을 실행하고 결과를 반환.
 /// 취소 또는 오류 시 null 반환.
-Future<({String path, double? distanceCm, bool applyWatermark, double? posX, double? posY})?> launchArMeasure({
+Future<({String path, double? distanceCm, bool applyWatermark, double? posX, double? posY, int uiTurns})?> launchArMeasure({
   bool watermarkEnabled = false,
   WatermarkSettings? watermarkSettings,
 }) async {
@@ -71,5 +71,6 @@ Future<({String path, double? distanceCm, bool applyWatermark, double? posX, dou
     applyWatermark: result['applyWatermark'] as bool? ?? false,
     posX: (result['posX'] as num?)?.toDouble(),
     posY: (result['posY'] as num?)?.toDouble(),
+    uiTurns: (result['uiTurns'] as num?)?.toInt() ?? 0,
   );
 }

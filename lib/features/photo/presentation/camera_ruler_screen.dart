@@ -93,15 +93,9 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     }
   }
 
-  // 화면(Surface)이 세로로 고정돼 있어, 촬영 결과는 항상 세로로 저장된다.
-  // camera 플러그인의 lockCaptureOrientation은 프리뷰까지 함께 회전시켜
-  // (camera_preview.dart) 촬영 순간 화면이 깜빡 회전하므로 쓰지 않고,
-  // 대신 저장 파일을 우리가 직접 회전시킨다. 가속도계 방향(turns) → 시계방향 각도.
-  int _rotateDegreesForTurns(int turns) => switch (turns) {
-        1 => 90,
-        3 => 270,
-        _ => 0,
-      };
+  // 저장 사진 회전 각도는 rotateDegreesForTurns(watermark.dart)에 규약으로 일원화.
+  // camera 플러그인 lockCaptureOrientation은 프리뷰까지 회전시켜 촬영 순간 화면이
+  // 깜빡이므로 쓰지 않고, 세로로 저장된 파일을 그 규약대로 직접 회전한다.
 
   /// 기기 방향에 맞춰 컨트롤(아이콘/텍스트)만 제자리에서 회전
   Widget _rot(Widget child) => AnimatedRotation(
@@ -229,7 +223,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     setState(() => _capturing = true);
     try {
       // 촬영 방향은 셔터 누른 시점 값으로 고정(캡처 중 방향이 바뀌어도 일관되게).
-      final rotateDeg = _rotateDegreesForTurns(_uiQuarterTurns);
+      final rotateDeg = rotateDegreesForTurns(_uiQuarterTurns);
       final file = await ctrl.takePicture();
       if (!mounted) return;
 

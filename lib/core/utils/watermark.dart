@@ -9,6 +9,19 @@ import '../../features/settings/domain/models/app_settings.dart';
 /// 헤비(번들) 폰트 패밀리명 — pubspec.yaml fonts 등록명과 일치해야 함.
 const String kWatermarkHeavyFont = 'BlackHanSans';
 
+/// ── 저장 사진 방향 규약 (단일 기준. 카메라·AR 공용) ─────────────────
+/// turns: 0=세로(portrait), 1=가로, 3=가로(1의 반대). _onAccel·accelListener 공통 공식.
+///  · 컨트롤/워터마크 제자리 회전(프리뷰): 시계방향 turns×90° (_rot, Kotlin applyUiRotation).
+///  · 저장 사진 회전: 아래 값. 카메라·AR 모두 촬영 서피스가 세로로 고정돼 결과가 항상
+///    세로로 저장되므로, 실제 방향으로 세우려면 컨트롤 회전의 보각(1→270, 3→90)만큼
+///    이미지를 돌린다. 반대로 넣으면 가로 사진이 상하 반전된다.
+/// 회전 후 [applyWatermark]가 그 위에 워터마크를 구워 프리뷰와 위치가 일치한다.
+int rotateDegreesForTurns(int turns) => switch (turns) {
+      1 => 270,
+      3 => 90,
+      _ => 0,
+    };
+
 /// JPEG 파일을 시계방향 [degrees](0/90/180/270)만큼 회전해 새 경로를 반환.
 /// degrees가 0이거나 실패하면 원본 경로 그대로 반환.
 Future<String> rotateImageFile(String imagePath, int degrees) async {

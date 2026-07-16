@@ -161,10 +161,29 @@ class MemoInputSheet extends ConsumerStatefulWidget {
       final wmAddress = needsAddress
           ? await ref.read(locationProvider.notifier).resolveWatermarkAddress()
           : null;
-      final rawPath = (arResult.applyWatermark && effectiveWm != null)
-          ? await applyWatermark(arResult.path, effectiveWm.copyWith(enabled: true),
-              address: wmAddress)
-          : arResult.path;
+      // 세로로 캡처된 AR 사진을 기기 방향(turns)대로 회전(카메라와 동일 규약).
+      final rotateDeg = rotateDegreesForTurns(arResult.uiTurns);
+      // applyWatermark는 이미지를 rotateDeg로 회전한 '뒤' 굽는데, posX/posY는 세로
+      // 프리뷰 좌표계 기준이라 그대로 두면 축이 어긋난다. 저장 회전과 동일한 회전을
+      // 위치에도 적용해 프리뷰 위치와 맞춘다(원본 위치는 이미 위에서 설정에 저장됨).
+      var bakeWm = effectiveWm;
+      if (effectiveWm != null &&
+          arResult.posX != null &&
+          arResult.posY != null) {
+        final px = arResult.posX!, py = arResult.posY!;
+        final (double bpx, double bpy) = switch (arResult.uiTurns) {
+          1 => (py, 1 - px),
+          3 => (1 - py, px),
+          _ => (px, py),
+        };
+        bakeWm = effectiveWm.copyWith(containerPosX: bpx, containerPosY: bpy);
+      }
+      final rawPath = (arResult.applyWatermark && bakeWm != null)
+          ? await applyWatermark(arResult.path, bakeWm.copyWith(enabled: true),
+              address: wmAddress, rotateDegrees: rotateDeg)
+          : (rotateDeg != 0
+              ? await rotateImageFile(arResult.path, rotateDeg)
+              : arResult.path);
       exifSourcePath = rawPath;
       path = await saveToGallery(rawPath, relativePath: relPath);
       length = arResult.distanceCm;

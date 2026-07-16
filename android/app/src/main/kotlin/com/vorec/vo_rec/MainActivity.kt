@@ -656,9 +656,10 @@ class MainActivity : FlutterActivity() {
                     data.getFloatExtra(ArMeasureActivity.EXTRA_POS_X, 1f).toDouble() else null
                 val posY = if (data.hasExtra(ArMeasureActivity.EXTRA_POS_Y))
                     data.getFloatExtra(ArMeasureActivity.EXTRA_POS_Y, 1f).toDouble() else null
+                val uiTurns = data.getIntExtra(ArMeasureActivity.EXTRA_UI_TURNS, 0)
                 pending?.success(mapOf(
                     "path" to path, "distanceCm" to dist, "applyWatermark" to applyWm,
-                    "posX" to posX, "posY" to posY))
+                    "posX" to posX, "posY" to posY, "uiTurns" to uiTurns))
             } else {
                 pending?.success(null)
             }

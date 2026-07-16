@@ -47,6 +47,7 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
         const val EXTRA_APPLY_WATERMARK  = "applyWatermark"
         const val EXTRA_POS_X = "posX"
         const val EXTRA_POS_Y = "posY"
+        const val EXTRA_UI_TURNS = "uiTurns"
         private const val TAG = "ArMeasureActivity"
     }
 
@@ -116,7 +117,9 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
     private var isDragging = false
     private val dragThresholdPx by lazy { 20 * resources.displayMetrics.density }
 
-    // ── 기기 방향 → 컨트롤/워터마크 제자리 회전 (일반 카메라와 동일한 가속도계 방식) ──
+    // ── 기기 방향 규약: 단일 기준은 camera_ruler_screen.dart의 _rotateDegreesForTurns 주석 ──
+    // turns 정의·컨트롤 회전(시계 turns×90°)은 일반 카메라와 동일. AR은 화면을 그대로
+    // 캡처(WYSIWYG·세로 고정)하므로 저장 사진 회전은 없다(그 회전은 카메라 전용).
     private var sensorManager: SensorManager? = null
     private var uiTurns = 0                       // 0=세로, 1/3=가로
     private var rotatableViews: List<View> = emptyList()
@@ -610,6 +613,8 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
                     putExtra(EXTRA_APPLY_WATERMARK, applyWatermark)
                     putExtra(EXTRA_POS_X, wmPosX)
                     putExtra(EXTRA_POS_Y, wmPosY)
+                    // 기기 방향(0=세로, 1/3=가로). Dart가 카메라와 동일 규약으로 저장 회전.
+                    putExtra(EXTRA_UI_TURNS, uiTurns)
                 })
                 finish()
             } else {
@@ -663,10 +668,17 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
             typeface = Typeface.DEFAULT_BOLD
         }
         val tb = Rect(); tp.getTextBounds(label, 0, label.length, tb)
+        // 이 비트맵은 세로로 캡처된 뒤 Dart에서 기기 방향(uiTurns)만큼 회전된다.
+        // 라벨이 같이 눕지 않도록 앵커(mx,my) 기준 uiTurns×90° 만큼 미리 역회전해 두면,
+        // 이미지 회전 후 라벨이 똑바로 선다(uiTurns×90 + 저장회전 = 360°). 선·점은 공간
+        // 요소라 회전에 함께 따라가야 하므로 그대로 둔다.
+        canvas.save()
+        canvas.rotate((uiTurns * 90).toFloat(), mx, my)
         canvas.drawRoundRect(
             RectF(mx - tb.width()/2f - ph, my - tb.height() - pv, mx + tb.width()/2f + ph, my + pv),
             corner, corner, Paint().apply { color = 0xCC000000.toInt() })
         canvas.drawText(label, mx, my, tp)
+        canvas.restore()
         return out
     }
 
