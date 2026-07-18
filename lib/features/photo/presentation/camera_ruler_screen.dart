@@ -234,10 +234,24 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       // 화면 진입 시 미리 받아둔 주소를 재사용(대개 이미 완료됨). 없으면 즉석 조회.
       final wmAddress =
           await (_wmAddressFuture ?? _resolveWmAddress(wmSettings));
+      // applyWatermark는 이미지를 rotateDeg로 회전한 '뒤' 그 위에 굽는데,
+      // containerPosX/Y는 세로 프리뷰 좌표계 기준이라 그대로 두면 가로에서 축이
+      // 회전만큼 어긋난다(AR 경로와 동일 문제). 저장 회전과 같은 회전을 위치에도
+      // 적용해 프리뷰 위치와 맞춘다. 세로(turns=0)는 그대로.
+      var bakeWm = wmSettings;
+      if (wmSettings != null) {
+        final px = wmSettings.containerPosX, py = wmSettings.containerPosY;
+        final (double bpx, double bpy) = switch (_uiQuarterTurns) {
+          1 => (py, 1 - px),
+          3 => (1 - py, px),
+          _ => (px, py),
+        };
+        bakeWm = wmSettings.copyWith(containerPosX: bpx, containerPosY: bpy);
+      }
       // 세로로 저장된 캡처를 실제 기기 방향으로 회전. 워터마크 경로는
       // applyWatermark 내부 재인코딩 단계에서 함께 회전해 추가 비용이 없다.
-      final photoPath = (wmSettings != null && wmSettings.enabled)
-          ? await applyWatermark(file.path, wmSettings,
+      final photoPath = (bakeWm != null && bakeWm.enabled)
+          ? await applyWatermark(file.path, bakeWm,
               address: wmAddress, rotateDegrees: rotateDeg)
           : (rotateDeg != 0
               ? await rotateImageFile(file.path, rotateDeg)
