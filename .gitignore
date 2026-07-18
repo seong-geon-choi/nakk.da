@@ -66,6 +66,10 @@ tools/*
 /android/app/debug
 /android/app/profile
 /android/app/release
+/android/build/
+
+# ── 로컬 백업 폴더 (저장소에서 제외) ───────────────────────────
+android - 복사본/
 
 # ── 심볼화 / 난독화 ────────────────────────────────────────
 app.*.symbols
