@@ -32,6 +32,13 @@
 
         <!-- ARCore optional support declaration -->
         <meta-data android:name="com.google.ar.core" android:value="optional"/>
+
+        <!-- AdMob App ID. AppLovin MAX의 AdMob 어댑터가 런타임에 요구한다(없으면 크래시).
+             광고 SDK 추가 전까지는 아무 것도 읽지 않아 비활성. 광고단위 ID(/…)는 코드가
+             아닌 MAX 대시보드에 넣는다 — docs/ad-mediation-plan.md §3. -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-5653160308014888~5591553231"/>
         <activity
             android:name=".MainActivity"
             android:exported="true"
