@@ -144,14 +144,17 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    final ctrl = _ctrl;
-    if (ctrl == null || !ctrl.value.isInitialized) return;
     if (state == AppLifecycleState.inactive) {
+      // 알림창 내림·홈버튼 등으로 화면을 벗어나면 카메라 리소스를 해제한다.
+      final ctrl = _ctrl;
+      if (ctrl == null || !ctrl.value.isInitialized) return;
       if (_isRecording) _stopRecording();
       ctrl.dispose();
       _ctrl = null;
     } else if (state == AppLifecycleState.resumed) {
-      _initCamera();
+      // 복귀 시 해제돼 있으면 재초기화한다. inactive에서 _ctrl을 null로 비웠으므로
+      // 여기서 null 여부로만 판단해야 한다(가드를 위로 두면 재초기화가 막힌다).
+      if (_ctrl == null) _initCamera();
     }
   }
 
