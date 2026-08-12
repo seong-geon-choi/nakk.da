@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'app.dart';
 import 'features/species_ai/data/model_update_service.dart';
 
@@ -9,6 +10,8 @@ void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   final prefs = await SharedPreferences.getInstance();
   final firstLaunch = !(prefs.getBool('first_launch_done') ?? false);
+  // 광고 SDK 초기화(비동기, 앱 시작을 막지 않음). 실제 노출은 설정 토글에 따름.
+  unawaited(MobileAds.instance.initialize());
   runApp(ProviderScope(child: App(firstLaunch: firstLaunch)));
   // 콜드 스타트 1회: 원격 모델 변경 확인 후 백그라운드 다운로드(다음 실행부터 반영)
   // AI 학습용 사진 제공(contribute_images)에 동의한 사용자만 어종 인식을 쓰므로,
