@@ -27,6 +27,10 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   double _maxZoom = 1.0;
   double _currentZoom = 1.0;
   double _baseZoom = 1.0;
+  // 한 손가락 가로 스와이프로 사진/동영상 모드 전환을 판정하기 위한 누적값.
+  // 핀치 줌과의 제스처 충돌을 없애려고 가로 드래그 대신 scale 콜백에서 처리한다.
+  double _scaleSwipeDx = 0;
+  int _scaleMaxPointers = 0;
   String? _toastMsg;
   bool _toastVisible = false;
   Timer? _toastTimer;
@@ -377,19 +381,33 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                 await _ctrl?.setExposurePoint(Offset(x, y));
               } catch (_) {}
             },
-            onScaleStart: (d) { _baseZoom = _currentZoom; },
-            onScaleUpdate: (d) {
-              if (d.pointerCount < 2) return;
-              final newZoom = (_baseZoom * d.scale).clamp(_minZoom, _maxZoom);
-              setState(() => _currentZoom = newZoom);
-              _ctrl?.setZoomLevel(newZoom);
+            onScaleStart: (d) {
+              _baseZoom = _currentZoom;
+              _scaleSwipeDx = 0;
+              _scaleMaxPointers = d.pointerCount;
             },
-            onHorizontalDragEnd: (d) {
+            onScaleUpdate: (d) {
+              _scaleMaxPointers = math.max(_scaleMaxPointers, d.pointerCount);
+              if (d.pointerCount >= 2) {
+                // 두 손가락: 핀치 줌
+                final newZoom =
+                    (_baseZoom * d.scale).clamp(_minZoom, _maxZoom);
+                if (newZoom != _currentZoom) {
+                  setState(() => _currentZoom = newZoom);
+                  _ctrl?.setZoomLevel(newZoom);
+                }
+              } else {
+                // 한 손가락: 가로 이동 누적(모드 전환 판정용)
+                _scaleSwipeDx += d.focalPointDelta.dx;
+              }
+            },
+            onScaleEnd: (d) {
               if (_isRecording) return;
-              final v = d.primaryVelocity ?? 0;
-              if (v < -300 && !_isVideoMode) {
+              // 핀치(2손가락)였으면 모드 전환 안 함
+              if (_scaleMaxPointers >= 2 || _scaleSwipeDx.abs() < 80) return;
+              if (_scaleSwipeDx < 0 && !_isVideoMode) {
                 _switchMode(true);
-              } else if (v > 300 && _isVideoMode) {
+              } else if (_scaleSwipeDx > 0 && _isVideoMode) {
                 _switchMode(false);
               }
             },
@@ -523,6 +541,26 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // 현재 줌 배율 표시 (기기가 줌을 지원할 때만)
+                    if (_maxZoom > _minZoom + 0.01) ...[
+                      _rot(Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 12, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(14),
+                        ),
+                        child: Text(
+                          '${_currentZoom.toStringAsFixed(1)}x',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      )),
+                      const SizedBox(height: 10),
+                    ],
                     // 모드 선택 탭
                     Row(
                       mainAxisAlignment: MainAxisAlignment.center,
