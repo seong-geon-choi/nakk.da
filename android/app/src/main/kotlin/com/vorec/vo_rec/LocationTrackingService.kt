@@ -28,6 +28,7 @@ class LocationTrackingService : Service() {
         const val PREFS_ACTIVE_KEY = "tracking_active"
         const val PREFS_QUICK_LAUNCH_MODE_KEY = "quick_launch_mode"
         const val PREFS_SHAKE_THRESHOLD_KEY = "shake_threshold_g"
+        const val PREFS_SHAKE_ACTION_KEY = "shake_action"
         @JvmField val pendingLock = Any()
         private const val EXTRA_INTERVAL = "intervalMeters"
         private const val UPDATE_INTERVAL_MS = 5000L   // 위치 갱신 주기
@@ -41,6 +42,10 @@ class LocationTrackingService : Service() {
         fun getShakeThresholdG(context: Context): Float =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getFloat(PREFS_SHAKE_THRESHOLD_KEY, 3.5f)
+
+        fun getShakeAction(context: Context): String =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(PREFS_SHAKE_ACTION_KEY, "voice") ?: "voice"
 
         fun start(context: Context, intervalMeters: Int) {
             val intent = Intent(context, LocationTrackingService::class.java)

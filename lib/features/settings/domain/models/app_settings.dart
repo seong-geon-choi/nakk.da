@@ -479,6 +479,9 @@ class WatermarkSettings {
 
 enum QuickLaunchMode { none, shake }
 
+/// 흔들기 실행 시 동작: 음성 메모(기본) / 카메라
+enum ShakeAction { voice, camera }
+
 // ── 앱 전체 설정 ───────────────────────────────────────────────
 
 /// 출퇴근 알림음 모드
@@ -545,6 +548,7 @@ class AppSettings {
   final bool locationTrackingEnabled;
   final int trackingIntervalMeters;
   final QuickLaunchMode quickLaunchMode;
+  final ShakeAction shakeAction; // 흔들기 실행 동작(음성/카메라)
   final double shakeThresholdG; // 흔들기 감지 가속도 임계값(G), 2.5~5.0
   final bool driveBackupEnabled;
   final bool driveBackupIncludeMedia;
@@ -639,6 +643,7 @@ class AppSettings {
     this.locationTrackingEnabled = false,
     this.trackingIntervalMeters = 100,
     this.quickLaunchMode = QuickLaunchMode.shake,
+    this.shakeAction = ShakeAction.voice,
     this.shakeThresholdG = 3.5,
     this.driveBackupEnabled = false,
     this.driveBackupIncludeMedia = false,
@@ -703,6 +708,7 @@ class AppSettings {
     bool? locationTrackingEnabled,
     int? trackingIntervalMeters,
     QuickLaunchMode? quickLaunchMode,
+    ShakeAction? shakeAction,
     double? shakeThresholdG,
     bool? driveBackupEnabled,
     bool? driveBackupIncludeMedia,
@@ -760,6 +766,7 @@ class AppSettings {
       locationTrackingEnabled: locationTrackingEnabled ?? this.locationTrackingEnabled,
       trackingIntervalMeters: trackingIntervalMeters ?? this.trackingIntervalMeters,
       quickLaunchMode: quickLaunchMode ?? this.quickLaunchMode,
+      shakeAction: shakeAction ?? this.shakeAction,
       shakeThresholdG: shakeThresholdG ?? this.shakeThresholdG,
       driveBackupEnabled: driveBackupEnabled ?? this.driveBackupEnabled,
       driveBackupIncludeMedia: driveBackupIncludeMedia ?? this.driveBackupIncludeMedia,

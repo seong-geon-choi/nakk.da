@@ -597,12 +597,14 @@ class MainActivity : FlutterActivity() {
                         val mode = call.argument<String>("mode") ?: "shake"
                         val threshold =
                             (call.argument<Double>("shakeThresholdG") ?: 3.5).toFloat()
+                        val action = call.argument<String>("shakeAction") ?: "voice"
                         getSharedPreferences(LocationTrackingService.PREFS_NAME, Context.MODE_PRIVATE)
                             .edit()
                             .putString(LocationTrackingService.PREFS_QUICK_LAUNCH_MODE_KEY, mode)
                             .putFloat(LocationTrackingService.PREFS_SHAKE_THRESHOLD_KEY, threshold)
+                            .putString(LocationTrackingService.PREFS_SHAKE_ACTION_KEY, action)
                             .apply()
-                        VoiceRecordForegroundService.start(this, mode, threshold)
+                        VoiceRecordForegroundService.start(this, mode, threshold, action)
                         result.success(null)
                     }
                     else -> result.notImplemented()

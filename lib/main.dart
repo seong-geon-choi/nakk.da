@@ -4,7 +4,16 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:google_mobile_ads/google_mobile_ads.dart';
 import 'app.dart';
+import 'features/photo/presentation/camera_lock_host.dart';
 import 'features/species_ai/data/model_update_service.dart';
+
+/// 흔들기 → 잠금화면 위 카메라 전용 진입점(CameraLockActivity가 실행).
+/// 앱 전체가 아닌 카메라 화면만 렌더한다.
+@pragma('vm:entry-point')
+void cameraLockMain() {
+  WidgetsFlutterBinding.ensureInitialized();
+  runApp(const ProviderScope(child: CameraLockApp()));
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();

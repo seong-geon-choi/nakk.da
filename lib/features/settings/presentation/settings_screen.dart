@@ -833,11 +833,22 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
                 RadioListTile<QuickLaunchMode>(
                   secondary: const Icon(Icons.vibration),
                   title: const Text('화면 흔들기'),
-                  subtitle: const Text('1.5초 내 3회 흔들면 음성 메모 시작'),
+                  subtitle: const Text('1.5초 내 3회 흔들면 실행'),
                   value: QuickLaunchMode.shake,
                 ),
-                if (mode == QuickLaunchMode.shake)
+                if (mode == QuickLaunchMode.shake) ...[
                   _ShakeSensitivitySlider(value: settings.shakeThresholdG),
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: Text('흔들면 실행할 동작',
+                          style: Theme.of(context).textTheme.labelLarge),
+                    ),
+                  ),
+                  _ShakeActionSelector(action: settings.shakeAction),
+                ],
                 RadioListTile<QuickLaunchMode>(
                   secondary: const Icon(Icons.block),
                   title: const Text('사용 안 함'),
@@ -849,6 +860,44 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
             ),
           );
         },
+      ),
+    );
+  }
+}
+
+/// 흔들면 실행할 동작(음성 메모 / 카메라) 선택.
+/// 카메라 선택 시, 잠금화면 위 카메라 실행에 필요한 알림 권한을 요청한다.
+class _ShakeActionSelector extends ConsumerWidget {
+  final ShakeAction action;
+  const _ShakeActionSelector({required this.action});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return RadioGroup<ShakeAction>(
+      groupValue: action,
+      onChanged: (v) async {
+        if (v == null) return;
+        if (v == ShakeAction.camera &&
+            !await Permission.notification.isGranted) {
+          await Permission.notification.request();
+        }
+        await ref.read(settingsProvider.notifier).updateShakeAction(v);
+      },
+      child: const Column(
+        children: [
+          RadioListTile<ShakeAction>(
+            secondary: Icon(Icons.mic_none),
+            title: Text('음성 메모'),
+            subtitle: Text('흔들면 음성 인식으로 메모를 남깁니다'),
+            value: ShakeAction.voice,
+          ),
+          RadioListTile<ShakeAction>(
+            secondary: Icon(Icons.photo_camera_outlined),
+            title: Text('카메라'),
+            subtitle: Text('잠금화면에서도 흔들면 카메라가 열립니다'),
+            value: ShakeAction.camera,
+          ),
+        ],
       ),
     );
   }

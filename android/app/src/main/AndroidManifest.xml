@@ -67,6 +67,20 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
+        <!-- 흔들기 → 잠금화면 위 카메라 전용 액티비티. 카메라 화면만 렌더(앱 전체 노출 방지).
+             최근앱 제외 + 잠금화면 위 표시(showWhenLocked/turnScreenOn). -->
+        <activity
+            android:name=".CameraLockActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:showWhenLocked="true"
+            android:turnScreenOn="true"
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustNothing"/>
+
         <activity
             android:name=".ArMeasureActivity"
             android:exported="false"

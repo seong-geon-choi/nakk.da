@@ -13,11 +13,16 @@ class VoiceRecordForegroundService : Service() {
     companion object {
         private const val CHANNEL_ID        = "nakkda_voice_channel"
         private const val RESULT_CHANNEL_ID = "nakkda_result_channel"
+        private const val CAMERA_CHANNEL_ID = "nakkda_shake_camera_channel"
         private const val NOTIFICATION_ID        = 1002
         private const val RESULT_NOTIFICATION_ID = 1003
+        private const val CAMERA_NOTIFICATION_ID = 1005
         const val ACTION_STOP = "com.sgchoisg.nakkda.STOP_VOICE_SERVICE"
         const val EXTRA_MODE  = "mode"
         const val EXTRA_SHAKE_THRESHOLD = "shakeThresholdG"
+        const val EXTRA_SHAKE_ACTION = "shakeAction"
+        // 흔들기로 카메라를 연 뒤 재실행까지의 쿨다운(연속 흔들림 오발동 방지)
+        private const val CAMERA_COOLDOWN_MS = 5000L
 
         // 음성 인식 결과 전달용(SharedPreferences + 브로드캐스트)
         const val PREFS_NAME       = "nakkda_prefs"
@@ -33,11 +38,13 @@ class VoiceRecordForegroundService : Service() {
             context: Context,
             mode: String = "shake",
             shakeThresholdG: Float = DEFAULT_SHAKE_THRESHOLD_G,
+            shakeAction: String = "voice",
         ) {
             val intent = Intent(context, VoiceRecordForegroundService::class.java)
                 .apply {
                     putExtra(EXTRA_MODE, mode)
                     putExtra(EXTRA_SHAKE_THRESHOLD, shakeThresholdG)
+                    putExtra(EXTRA_SHAKE_ACTION, shakeAction)
                 }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)
@@ -53,6 +60,8 @@ class VoiceRecordForegroundService : Service() {
     private var speechRecognizer: SpeechRecognizer? = null
     private var wakeLock: PowerManager.WakeLock?    = null
     private var currentMode         = "shake"
+    private var currentAction       = "voice"   // "voice" | "camera"
+    private var lastCameraLaunchTime = 0L
 
     // ── 흔들기 감지 ────────────────────────────────────────────
     private var sensorManager: SensorManager? = null
@@ -77,7 +86,7 @@ class VoiceRecordForegroundService : Service() {
                     shakeCount++
                     if (shakeCount >= REQUIRED_SHAKES) {
                         shakeCount = 0; windowStartTime = 0L
-                        handler.post { startVoiceRecording() }
+                        handler.post { onShakeTriggered() }
                     }
                 }
             }
@@ -99,9 +108,11 @@ class VoiceRecordForegroundService : Service() {
         } catch (e: SecurityException) { stopSelf(); return }
 
         createResultNotificationChannel()
+        createCameraNotificationChannel()
 
         currentMode = LocationTrackingService.getQuickLaunchMode(this)
         shakeThresholdG = LocationTrackingService.getShakeThresholdG(this)
+        currentAction = LocationTrackingService.getShakeAction(this)
         applyMode(currentMode)
     }
 
@@ -113,6 +124,7 @@ class VoiceRecordForegroundService : Service() {
         val newMode = intent?.getStringExtra(EXTRA_MODE) ?: currentMode
         val newThreshold =
             intent?.getFloatExtra(EXTRA_SHAKE_THRESHOLD, shakeThresholdG) ?: shakeThresholdG
+        currentAction = intent?.getStringExtra(EXTRA_SHAKE_ACTION) ?: currentAction
         // 모드가 바뀌거나, 흔들기 모드에서 임계값이 바뀌면 센서 리스너를 다시 붙인다.
         if (newMode != currentMode ||
             (newMode == "shake" && newThreshold != shakeThresholdG)) {
@@ -157,6 +169,44 @@ class VoiceRecordForegroundService : Service() {
         sensorManager?.unregisterListener(sensorListener)
         sensorManager = null
         sensorListenerRegistered = false
+    }
+
+    // ── 흔들기 트리거 분기 ─────────────────────────────────────
+    private fun onShakeTriggered() {
+        if (currentAction == "camera") launchCameraOverLock()
+        else startVoiceRecording()
+    }
+
+    /**
+     * 흔들기 → 카메라 전용 액티비티를 잠금화면 위로 실행.
+     * 백그라운드/잠금 상태에서 액티비티를 띄우려면 전면 인텐트(full-screen intent)가
+     * 필요하다(출퇴근 알람 AlarmActivity와 동일 메커니즘). 연속 흔들림 오발동을
+     * 막기 위해 쿨다운을 둔다.
+     */
+    private fun launchCameraOverLock() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastCameraLaunchTime < CAMERA_COOLDOWN_MS) return
+        lastCameraLaunchTime = now
+        vibrate(longArrayOf(0, 80))
+
+        val fullScreen = Intent(this, CameraLockActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        val fullScreenPi = PendingIntent.getActivity(
+            this, 0, fullScreen,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notif = NotificationCompat.Builder(this, CAMERA_CHANNEL_ID)
+            .setContentTitle("카메라 실행")
+            .setContentText("흔들기로 카메라를 엽니다")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
+            .setAutoCancel(true)
+            .setFullScreenIntent(fullScreenPi, true)
+            .setContentIntent(fullScreenPi)
+            .build()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(CAMERA_NOTIFICATION_ID, notif)
     }
 
     // ── 음성 녹음 ──────────────────────────────────────────────
@@ -213,9 +263,10 @@ class VoiceRecordForegroundService : Service() {
             Intent(this, VoiceRecordForegroundService::class.java).apply { action = ACTION_STOP },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        val (title, body) = when (currentMode) {
-            "none"   -> "음성 메모 서비스" to "빠른 실행이 비활성화되어 있습니다"
-            else     -> "음성 메모 대기 중" to "흔들기 3회로 음성 메모를 시작합니다"
+        val (title, body) = when {
+            currentMode == "none" -> "빠른 실행 서비스" to "빠른 실행이 비활성화되어 있습니다"
+            currentAction == "camera" -> "카메라 대기 중" to "흔들기 3회로 카메라를 엽니다"
+            else -> "음성 메모 대기 중" to "흔들기 3회로 음성 메모를 시작합니다"
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
@@ -312,6 +363,15 @@ class VoiceRecordForegroundService : Service() {
     private fun createResultNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val ch = NotificationChannel(RESULT_CHANNEL_ID, "음성 메모 결과", NotificationManager.IMPORTANCE_HIGH)
+                .apply { setShowBadge(false); setSound(null, null); enableVibration(false) }
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(ch)
+        }
+    }
+
+    // 전면 인텐트로 잠금화면 위 카메라를 띄우려면 채널이 HIGH 중요도여야 한다.
+    private fun createCameraNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val ch = NotificationChannel(CAMERA_CHANNEL_ID, "흔들기 카메라 실행", NotificationManager.IMPORTANCE_HIGH)
                 .apply { setShowBadge(false); setSound(null, null); enableVibration(false) }
             (getSystemService(NOTIFICATION_SERVICE) as NotificationManager).createNotificationChannel(ch)
         }

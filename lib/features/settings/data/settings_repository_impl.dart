@@ -26,6 +26,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _locationTrackingEnabledKey = 'location_tracking_enabled';
   static const _trackingIntervalMetersKey = 'tracking_interval_meters';
   static const _quickLaunchModeKey = 'quick_launch_mode';
+  static const _shakeActionKey = 'shake_action';
   static const _shakeThresholdGKey = 'shake_threshold_g';
   static const _driveBackupEnabledKey = 'drive_backup_enabled';
   static const _driveBackupIncludeMediaKey = 'drive_backup_include_media';
@@ -128,6 +129,11 @@ class SettingsRepositoryImpl implements SettingsRepository {
       (e) => e.name == quickLaunchModeStr,
       orElse: () => QuickLaunchMode.shake,
     );
+    final shakeActionStr = prefs.getString(_shakeActionKey) ?? 'voice';
+    final shakeAction = ShakeAction.values.firstWhere(
+      (e) => e.name == shakeActionStr,
+      orElse: () => ShakeAction.voice,
+    );
     final shakeThresholdG = prefs.getDouble(_shakeThresholdGKey) ?? 3.5;
     final driveBackupEnabled = prefs.getBool(_driveBackupEnabledKey) ?? false;
     final driveBackupIncludeMedia = prefs.getBool(_driveBackupIncludeMediaKey) ?? false;
@@ -202,6 +208,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       locationTrackingEnabled: locationTrackingEnabled,
       trackingIntervalMeters: trackingIntervalMeters,
       quickLaunchMode: quickLaunchMode,
+      shakeAction: shakeAction,
       shakeThresholdG: shakeThresholdG,
       driveBackupEnabled: driveBackupEnabled,
       driveBackupIncludeMedia: driveBackupIncludeMedia,
@@ -267,6 +274,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setBool(_locationTrackingEnabledKey, settings.locationTrackingEnabled);
     await prefs.setInt(_trackingIntervalMetersKey, settings.trackingIntervalMeters);
     await prefs.setString(_quickLaunchModeKey, settings.quickLaunchMode.name);
+    await prefs.setString(_shakeActionKey, settings.shakeAction.name);
     await prefs.setDouble(_shakeThresholdGKey, settings.shakeThresholdG);
     await prefs.setBool(_driveBackupEnabledKey, settings.driveBackupEnabled);
     await prefs.setBool(_driveBackupIncludeMediaKey, settings.driveBackupIncludeMedia);

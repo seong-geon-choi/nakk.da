@@ -18,6 +18,7 @@ export '../domain/models/app_settings.dart'
         WatermarkWeight,
         WatermarkTextContent,
         QuickLaunchMode,
+        ShakeAction,
         CommuteSoundMode,
         CommuteWindow,
         CommutePin,
@@ -39,8 +40,10 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     final repo = ref.read(settingsRepositoryProvider);
     var settings = await repo.load();
     // 앱 시작 시 저장된 모드·민감도를 Android 서비스에 동기화
-    await TrackingService()
-        .setQuickLaunchMode(settings.quickLaunchMode.name, settings.shakeThresholdG);
+    await TrackingService().setQuickLaunchMode(
+        settings.quickLaunchMode.name,
+        settings.shakeThresholdG,
+        settings.shakeAction.name);
     // 출퇴근 알림 추적 중이면, 네이티브가 사용자 스와이프로 중단됐는지 확인 후 정합화.
     // 중단됐으면 지도 아이콘을 끄고(active=false), 아니면 네이티브 재동기화.
     if (settings.commuteTracking) {
@@ -541,7 +544,19 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     final updated = current.copyWith(quickLaunchMode: mode);
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
-    await TrackingService().setQuickLaunchMode(mode.name, updated.shakeThresholdG);
+    await TrackingService().setQuickLaunchMode(
+        mode.name, updated.shakeThresholdG, updated.shakeAction.name);
+  }
+
+  /// 흔들기 실행 동작(음성/카메라) 변경 후 네이티브에 반영.
+  Future<void> updateShakeAction(ShakeAction action) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(shakeAction: action);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+    await TrackingService().setQuickLaunchMode(
+        updated.quickLaunchMode.name, updated.shakeThresholdG, action.name);
   }
 
   /// 흔들기 감지 가속도 임계값(G) 변경. 2.5~5.0으로 제한하고 즉시 네이티브에 반영.
@@ -552,8 +567,8 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     final updated = current.copyWith(shakeThresholdG: clamped);
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
-    await TrackingService()
-        .setQuickLaunchMode(updated.quickLaunchMode.name, clamped);
+    await TrackingService().setQuickLaunchMode(
+        updated.quickLaunchMode.name, clamped, updated.shakeAction.name);
   }
 
   Future<void> updateTrackingIntervalMeters(int value) async {
