@@ -5,6 +5,7 @@ import android.content.*
 import android.content.pm.ServiceInfo
 import android.hardware.*
 import android.os.*
+import android.provider.Settings
 import android.speech.*
 import androidx.core.app.NotificationCompat
 
@@ -191,6 +192,18 @@ class VoiceRecordForegroundService : Service() {
 
         val fullScreen = Intent(this, CameraLockActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+
+        // 오버레이 권한("다른 앱 위에 표시")이 있으면 백그라운드에서 액티비티를 직접
+        // 실행할 수 있다(잠금/해제 상태 모두 즉시). 전면 인텐트와 달리 앱이 오래
+        // 백그라운드에 있어도 신뢰성 있게 뜬다.
+        if (Settings.canDrawOverlays(this)) {
+            try {
+                startActivity(fullScreen)
+                return
+            } catch (_: Exception) { /* 실패 시 아래 전면 인텐트로 폴백 */ }
+        }
+
+        // 폴백: 전면 인텐트 알림(잠금 상태에선 바로, 아니면 탭 필요 — Android 14+ 제한).
         val fullScreenPi = PendingIntent.getActivity(
             this, 0, fullScreen,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE

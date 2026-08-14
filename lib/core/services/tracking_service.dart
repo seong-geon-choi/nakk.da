@@ -48,6 +48,23 @@ class TrackingService {
     } catch (_) {}
   }
 
+  /// 오버레이("다른 앱 위에 표시") 권한 보유 여부. 흔들기→카메라를 백그라운드에서
+  /// 바로 실행하려면 필요.
+  Future<bool> canDrawOverlays() async {
+    try {
+      return await _channel.invokeMethod<bool>('canDrawOverlays') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 오버레이 권한 설정 화면을 연다.
+  Future<void> requestOverlayPermission() async {
+    try {
+      await _channel.invokeMethod('requestOverlayPermission');
+    } catch (_) {}
+  }
+
   /// 출퇴근 알림 설정을 네이티브에 동기화(활성 시 스케줄/서비스 갱신).
   Future<void> commuteSync(Map<String, dynamic> config) async {
     try {

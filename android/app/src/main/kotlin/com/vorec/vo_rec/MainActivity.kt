@@ -10,6 +10,7 @@ import android.os.Bundle
 import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
+import android.provider.Settings
 import androidx.core.view.WindowCompat
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.embedding.android.FlutterActivity
@@ -605,6 +606,20 @@ class MainActivity : FlutterActivity() {
                             .putString(LocationTrackingService.PREFS_SHAKE_ACTION_KEY, action)
                             .apply()
                         VoiceRecordForegroundService.start(this, mode, threshold, action)
+                        result.success(null)
+                    }
+                    "canDrawOverlays" -> {
+                        result.success(Settings.canDrawOverlays(this))
+                    }
+                    "requestOverlayPermission" -> {
+                        try {
+                            startActivity(
+                                Intent(
+                                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                    Uri.parse("package:$packageName")
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        } catch (_: Exception) {}
                         result.success(null)
                     }
                     else -> result.notImplemented()
