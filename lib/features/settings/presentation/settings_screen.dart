@@ -13,8 +13,9 @@ import '../../file_list/presentation/file_list_provider.dart';
 import '../../file_list/domain/models/file_summary.dart';
 import '../../memo/presentation/memo_editor_screen.dart';
 import '../../../core/constants/api_keys.dart';
-import '../../../core/widgets/permission_status_chip.dart';
 import '../../../core/utils/media_scanner.dart';
+import '../../../core/services/tracking_service.dart';
+import '../../permission/presentation/permission_center.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -230,12 +231,12 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                     Icons.security_outlined,
                     color: allGranted ? null : Colors.orange,
                   ),
-                  title: const Text('권한 설정'),
+                  title: const Text('권한 점검'),
                   subtitle: Text('$granted / $total 허용됨'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => Navigator.of(context).push(
                     MaterialPageRoute(
-                        builder: (_) => const _PermissionSubScreen()),
+                        builder: (_) => const PermissionCenterScreen()),
                   ),
                 );
               },
@@ -728,74 +729,6 @@ class _TrackingIntervalSubScreenState
 
 // ── 권한 설정 하위 화면 ───────────────────────────────────────────
 
-class _PermissionSubScreen extends ConsumerStatefulWidget {
-  const _PermissionSubScreen();
-
-  @override
-  ConsumerState<_PermissionSubScreen> createState() =>
-      _PermissionSubScreenState();
-}
-
-class _PermissionSubScreenState extends ConsumerState<_PermissionSubScreen>
-    with WidgetsBindingObserver {
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      ref.invalidate(permissionStatusProvider);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final permAsync = ref.watch(permissionStatusProvider);
-    return Scaffold(
-      appBar: AppBar(title: const Text('권한 설정')),
-      body: permAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (_, _) => const Center(child: Text('권한 확인 실패')),
-        data: (statuses) {
-          const items = [
-            (Permission.microphone, '마이크', '음성 메모 녹음'),
-            (Permission.locationWhenInUse, '위치', 'GPS 좌표 기록'),
-            (Permission.camera, '카메라', '사진 촬영'),
-            (Permission.photos, '사진', '갤러리 사진 선택'),
-            (Permission.videos, '동영상', '갤러리 동영상 선택'),
-            (Permission.notification, '알림', '음성 메모 상태 표시'),
-          ];
-          return ListTileTheme(
-            data: _subtitleTheme(context),
-            child: ListView(
-              padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
-              children: items.map((item) {
-                final (perm, label, desc) = item;
-                final isGranted = statuses[perm]?.isGranted ?? false;
-                return ListTile(
-                  title: Text(label),
-                  subtitle: Text(desc),
-                  trailing: PermissionStatusChip(isGranted: isGranted),
-                  onTap: () async => await openAppSettings(),
-                );
-              }).toList(),
-            ),
-          );
-        },
-      ),
-    );
-  }
-}
-
 // ── 빠른 메모 실행 하위 화면 ─────────────────────────────────────
 
 String _quickLaunchModeLabel(QuickLaunchMode mode) {
@@ -877,11 +810,37 @@ class _ShakeActionSelector extends ConsumerWidget {
       groupValue: action,
       onChanged: (v) async {
         if (v == null) return;
-        if (v == ShakeAction.camera &&
-            !await Permission.notification.isGranted) {
+        await ref.read(settingsProvider.notifier).updateShakeAction(v);
+        if (v != ShakeAction.camera) return;
+        if (!await Permission.notification.isGranted) {
           await Permission.notification.request();
         }
-        await ref.read(settingsProvider.notifier).updateShakeAction(v);
+        // 잠금/해제 상태 모두에서 흔들면 카메라가 바로 뜨게 하려면 오버레이 권한 필요.
+        // 없으면 알림으로만 표시되어 탭해야 열린다.
+        final tracking = TrackingService();
+        if (await tracking.canDrawOverlays() || !context.mounted) return;
+        final go = await showDialog<bool>(
+          context: context,
+          builder: (_) => AlertDialog(
+            title: const Text('권한 필요: 다른 앱 위에 표시'),
+            content: const Text(
+              '흔들면 잠금화면에서도 카메라가 바로 뜨게 하려면 '
+              '"다른 앱 위에 표시" 권한이 필요합니다.\n\n'
+              '허용하지 않으면 알림으로만 표시되어 탭해야 열립니다.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: const Text('나중에'),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, true),
+                child: const Text('설정 열기'),
+              ),
+            ],
+          ),
+        );
+        if (go == true) await tracking.requestOverlayPermission();
       },
       child: const Column(
         children: [
