@@ -39,13 +39,15 @@ class VoiceRecordForegroundService : Service() {
             context: Context,
             mode: String = "shake",
             shakeThresholdG: Float = DEFAULT_SHAKE_THRESHOLD_G,
-            shakeAction: String = "voice",
+            shakeAction: String? = null,
         ) {
             val intent = Intent(context, VoiceRecordForegroundService::class.java)
                 .apply {
                     putExtra(EXTRA_MODE, mode)
                     putExtra(EXTRA_SHAKE_THRESHOLD, shakeThresholdG)
-                    putExtra(EXTRA_SHAKE_ACTION, shakeAction)
+                    // action 미지정(null) 호출은 기존 동작을 덮어쓰지 않는다.
+                    // (앱 시작·음성서비스 기동 등에서 카메라 설정이 음성으로 리셋되던 버그 방지)
+                    if (shakeAction != null) putExtra(EXTRA_SHAKE_ACTION, shakeAction)
                 }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 context.startForegroundService(intent)

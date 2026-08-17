@@ -1,7 +1,5 @@
 package com.sgchoisg.nakkda
 
-import android.app.KeyguardManager
-import android.content.Context
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
@@ -25,17 +23,17 @@ class CameraLockActivity : FlutterActivity() {
     override fun getDartEntrypointFunctionName(): String = "cameraLockMain"
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 잠금화면 '위'에 카메라만 표시(보안 잠금은 해제하지 않음). requestDismissKeyguard는
+        // 보안 잠금에서 PIN/지문 인증창을 카메라 위로 띄워 "잠금화면 뒤로 실행"처럼 보이므로
+        // 쓰지 않는다. setShowWhenLocked만으로 기본 카메라처럼 잠금 위 촬영이 가능하다.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
             setShowWhenLocked(true)
             setTurnScreenOn(true)
-            (getSystemService(Context.KEYGUARD_SERVICE) as KeyguardManager)
-                .requestDismissKeyguard(this, null)
         } else {
             @Suppress("DEPRECATION")
             window.addFlags(
                 WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED or
-                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON or
-                    WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD
+                    WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON
             )
         }
         super.onCreate(savedInstanceState)

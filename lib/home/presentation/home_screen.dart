@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -40,6 +41,7 @@ import 'dart:io';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:share_plus/share_plus.dart';
 
 /// 당일 현황 블록 중 물때가 가장 많은 것을 조위 그래프용으로 선택(물때명 포함).
@@ -1094,8 +1096,18 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
       // 홈 전용: 음성 접근성 결과 수신 + 앱 시작 시 폴더설정·업데이트 안내
       WidgetsBinding.instance.addObserver(this);
       setVoiceResultHandler(_handleVoiceResult);
+      // 저장 폴더가 설정되는 순간(빈→설정) 대기 중인 흔들기 사진을 즉시 처리.
+      ref.listenManual(
+        settingsProvider.select((s) => s.valueOrNull?.savePath ?? ''),
+        (prev, next) {
+          if ((prev == null || prev.isEmpty) && next.isNotEmpty) {
+            _checkPendingShakePhotos();
+          }
+        },
+      );
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _checkPendingVoiceResult();
+        _checkPendingShakePhotos();
         _autoSetupSaveFolderIfNeeded();
         _maybePromptUpdate();
       });
@@ -1112,6 +1124,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (_isEntryPoint && state == AppLifecycleState.resumed) {
       _checkPendingVoiceResult();
+      _checkPendingShakePhotos();
     }
   }
 
@@ -1146,10 +1159,40 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
   }
 
   Future<void> _autoSetupSaveFolderIfNeeded() async {
-    final settings = ref.read(settingsProvider).valueOrNull;
-    if (settings == null || !settings.needsFolderSetup) return;
-    if (!mounted) return;
-    await ref.read(settingsProvider.notifier).pickSaveFolder();
+    // 콜드 스타트 시 설정이 아직 로드 전이면 valueOrNull이 null이라 안내를 놓친다.
+    // future로 로드를 기다린 뒤 확인한다.
+    late final bool needsSetup;
+    try {
+      needsSetup = (await ref.read(settingsProvider.future)).needsFolderSetup;
+    } catch (_) {
+      return;
+    }
+    if (!needsSetup || !mounted) return;
+    // 왜 필요한지 안내한 뒤 폴더 선택을 연다(무음으로 시스템 폴더 피커만 뜨면 혼란).
+    final ok = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => AlertDialog(
+        title: const Text('저장 폴더 설정 필요'),
+        content: const Text(
+          '메모와 사진을 저장할 폴더를 먼저 지정해야 합니다.\n'
+          '지정하지 않으면 메모·사진이 저장되지 않습니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('나중에'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('폴더 선택'),
+          ),
+        ],
+      ),
+    );
+    if (ok == true && mounted) {
+      await ref.read(settingsProvider.notifier).pickSaveFolder();
+    }
   }
 
   void _handleVoiceResult(String text) {
@@ -1172,6 +1215,71 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
       if (!mounted) return;
       _handleVoiceResult(text);
     }
+  }
+
+  /// 잠금화면 흔들기 카메라(별도 엔진)가 대기열에 넣은 촬영을 처리한다.
+  /// 갤러리 저장 + 해당 날짜 메모 등록은 채널이 모두 있는 메인 앱에서 수행.
+  Future<void> _checkPendingShakePhotos() async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList('pending_shake_photos') ?? [];
+    if (list.isEmpty) return;
+    final settings = ref.read(settingsProvider).valueOrNull;
+    final savePath = settings?.savePath ?? '';
+    if (settings == null || savePath.isEmpty) {
+      // 저장 폴더 미설정: 큐를 지우지 않고, 폴더 설정 후 다시 처리되게 남겨둔다.
+      if (mounted) {
+        showAppToast(context, '저장 폴더를 설정하면 흔들기 사진이 메모에 등록됩니다');
+      }
+      return;
+    }
+    await prefs.remove('pending_shake_photos');
+    final relPath = _shakePhotoRelPath(settings.photoSavePath);
+    final repo = ref.read(memoRepositoryProvider);
+    final backup = ref.read(backupProvider.notifier);
+    int added = 0;
+    for (final s in list) {
+      try {
+        final j = jsonDecode(s) as Map<String, dynamic>;
+        final srcPath = j['path'] as String;
+        final isVideo = j['isVideo'] as bool? ?? false;
+        final ts = DateTime.tryParse(j['ts'] as String? ?? '') ?? DateTime.now();
+        final lat = (j['lat'] as num?)?.toDouble();
+        final lng = (j['lng'] as num?)?.toDouble();
+        final stored =
+            await saveToGallery(srcPath, relativePath: relPath) ?? srcPath;
+        final day = DateTime(ts.year, ts.month, ts.day);
+        await repo.appendEntry(
+          day,
+          MemoEntry(
+            timestamp: ts,
+            latitude: lat,
+            longitude: lng,
+            photoPath: isVideo ? null : stored,
+            videoPath: isVideo ? stored : null,
+          ),
+          savePath,
+        );
+        unawaited(backup.syncMdFile(day, savePath));
+        unawaited(backup.syncMediaFile(stored));
+        try { await File(srcPath).delete(); } catch (_) {}
+        added++;
+      } catch (_) {/* 개별 실패는 건너뜀 */}
+    }
+    if (added > 0 && mounted) {
+      ref.invalidate(dayFileProvider(_filePath));
+      ref.invalidate(fileListProvider);
+      showAppToast(context, '흔들기 사진 $added장을 메모에 추가했습니다');
+    }
+  }
+
+  /// photoSavePath에서 MediaStore 상대 경로 추출(memo_input_sheet와 동일 규칙).
+  String _shakePhotoRelPath(String photoSavePath) {
+    final lower = photoSavePath.toLowerCase();
+    for (final marker in ['dcim/', 'pictures/', 'downloads/']) {
+      final idx = lower.indexOf(marker);
+      if (idx >= 0) return photoSavePath.substring(idx);
+    }
+    return 'DCIM/nakkda';
   }
 
   Future<void> _saveVoiceDirectly(String text) async {
