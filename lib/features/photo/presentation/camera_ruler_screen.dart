@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
 import '../../settings/presentation/settings_provider.dart';
 import '../../location/presentation/location_provider.dart';
 import '../../../core/utils/watermark.dart';
@@ -22,6 +23,8 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     with WidgetsBindingObserver {
   CameraController? _ctrl;
   String? _error;
+  bool _permissionDenied = false; // _error가 권한 문제일 때 '설정 열기' 노출용
+  bool _initializing = false; // 권한 다이얼로그 resume 등으로 인한 중복 초기화 방지
   bool _capturing = false;
   double _minZoom = 1.0;
   double _maxZoom = 1.0;
@@ -163,35 +166,73 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   }
 
   Future<void> _initCamera() async {
+    if (_initializing) return; // 권한 다이얼로그 전후 resume으로 인한 중복 진입 방지
+    _initializing = true;
     try {
-      final cameras = await availableCameras();
-      if (cameras.isEmpty) {
-        if (mounted) setState(() => _error = '카메라를 찾을 수 없습니다');
+      // 카메라 권한을 먼저 확인·요청한다. 거부 상태면 원시 예외 대신 안내를 띄운다
+      // (잠금 흔들기 카메라 등 사전 요청 없이 진입하는 경로 포함).
+      var camStatus = await Permission.camera.status;
+      if (!camStatus.isGranted) camStatus = await Permission.camera.request();
+      if (!camStatus.isGranted) {
+        if (mounted) {
+          setState(() {
+            _permissionDenied = true;
+            _error = '카메라 권한이 필요합니다.\n설정에서 카메라 권한을 허용해 주세요.';
+          });
+        }
         return;
       }
-      final back = cameras.firstWhere(
-        (c) => c.lensDirection == CameraLensDirection.back,
-        orElse: () => cameras.first,
-      );
-      final ctrl = CameraController(
-        back,
-        _isVideoMode ? _videoResolution : ResolutionPreset.high,
-        enableAudio: _isVideoMode,
-        imageFormatGroup: ImageFormatGroup.jpeg,
-      );
-      await ctrl.initialize();
-      _minZoom = await ctrl.getMinZoomLevel();
-      _maxZoom = await ctrl.getMaxZoomLevel();
-      if (!mounted) {
-        ctrl.dispose();
-        return;
+      // 권한을 방금 허용한 직후엔 카메라 HAL 준비 지연으로 첫 초기화가 실패할 수
+      // 있어, 짧게 재시도한다(오류 노출 없이 자동 복구).
+      for (var attempt = 1; attempt <= 3; attempt++) {
+        try {
+          final cameras = await availableCameras();
+          if (cameras.isEmpty) {
+            if (mounted) setState(() => _error = '카메라를 찾을 수 없습니다');
+            return;
+          }
+          final back = cameras.firstWhere(
+            (c) => c.lensDirection == CameraLensDirection.back,
+            orElse: () => cameras.first,
+          );
+          final ctrl = CameraController(
+            back,
+            _isVideoMode ? _videoResolution : ResolutionPreset.high,
+            enableAudio: _isVideoMode,
+            imageFormatGroup: ImageFormatGroup.jpeg,
+          );
+          await ctrl.initialize();
+          _minZoom = await ctrl.getMinZoomLevel();
+          _maxZoom = await ctrl.getMaxZoomLevel();
+          if (!mounted) {
+            ctrl.dispose();
+            return;
+          }
+          setState(() {
+            _ctrl = ctrl;
+            _currentZoom = _minZoom;
+            _error = null;
+            _permissionDenied = false;
+          });
+          return; // 성공
+        } catch (e) {
+          if (attempt < 3) {
+            await Future.delayed(const Duration(milliseconds: 400));
+            continue; // 재시도
+          }
+          if (!mounted) return;
+          if (!await Permission.camera.isGranted) {
+            setState(() {
+              _permissionDenied = true;
+              _error = '카메라 권한이 필요합니다.\n설정에서 카메라 권한을 허용해 주세요.';
+            });
+          } else {
+            setState(() => _error = '카메라를 열 수 없습니다. 잠시 후 다시 시도해 주세요.');
+          }
+        }
       }
-      setState(() {
-        _ctrl = ctrl;
-        _currentZoom = _minZoom;
-      });
-    } catch (e) {
-      if (mounted) setState(() => _error = '카메라 오류: $e');
+    } finally {
+      _initializing = false;
     }
   }
 
@@ -343,6 +384,11 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                   style: const TextStyle(color: Colors.white),
                   textAlign: TextAlign.center),
               const SizedBox(height: 16),
+              if (_permissionDenied)
+                FilledButton(
+                  onPressed: () => openAppSettings(),
+                  child: const Text('설정 열기'),
+                ),
               TextButton(
                 onPressed: () => Navigator.of(context).pop(),
                 child: const Text('돌아가기',
