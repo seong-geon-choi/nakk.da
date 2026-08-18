@@ -89,6 +89,8 @@ class _CameraLockHostState extends ConsumerState<_CameraLockHost> {
     final lng = loc?.longitude ?? cached?.longitude;
 
     final prefs = await SharedPreferences.getInstance();
+    // 메인 앱이 처리하며 큐를 비웠을 수 있으니 디스크 최신 상태를 읽고 append한다.
+    await prefs.reload();
     final list = prefs.getStringList(kPendingShakePhotosKey) ?? [];
     list.add(jsonEncode({
       'path': dest,

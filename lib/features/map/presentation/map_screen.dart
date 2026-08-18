@@ -45,6 +45,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   MapController _mapController = MapController();
   double _zoom = 14;
   String _savePath = '';
+  // 출퇴근 지점 드래그 이동 상태: 길게 눌러 이동 모드에 들어간 핀의 인덱스와
+  // 드래그 중 실시간 위치. 지도 위젯 좌표 변환용 키.
+  final GlobalKey _mapStackKey = GlobalKey();
+  int? _draggingPin;
+  LatLng? _dragLatLng;
 
   @override
   void dispose() {
@@ -432,6 +437,47 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
+  /// 드래그 중이면 실시간 위치, 아니면 저장된 지점 위치를 반환.
+  LatLng _pinLatLng(int index, CommutePin pin) =>
+      (index == _draggingPin && _dragLatLng != null)
+          ? _dragLatLng!
+          : LatLng(pin.lat, pin.lng);
+
+  /// 지점 핀을 길게 누르면 이동 모드 진입(핀이 커지고 빨간색으로 표시됨).
+  void _onPinDragStart(int index) {
+    setState(() {
+      _draggingPin = index;
+      _dragLatLng = null; // 첫 이동 전까지는 저장된 위치 유지
+    });
+    _showToastMessage('드래그하여 지점 위치를 옮기세요');
+  }
+
+  /// 드래그 중: 손가락 화면 좌표를 지도 위경도로 변환해 핀을 따라 이동.
+  void _onPinDragUpdate(Offset globalPosition) {
+    if (_draggingPin == null) return;
+    final box = _mapStackKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box == null) return;
+    final local = box.globalToLocal(globalPosition);
+    final latlng =
+        _mapController.camera.pointToLatLng(math.Point(local.dx, local.dy));
+    setState(() => _dragLatLng = latlng);
+  }
+
+  /// 드래그 종료: 변경된 위치를 저장하고 이동 모드 해제.
+  Future<void> _onPinDragEnd(int index) async {
+    final latlng = _dragLatLng;
+    setState(() {
+      _draggingPin = null;
+      _dragLatLng = null;
+    });
+    if (latlng != null) {
+      await ref
+          .read(settingsProvider.notifier)
+          .updateCommutePinLocation(index, latlng.latitude, latlng.longitude);
+      if (mounted) _showToastMessage('지점 위치를 이동했습니다');
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final showTrackingButton =
@@ -487,6 +533,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         children: [
           Expanded(
             child: Stack(
+        key: _mapStackKey,
         children: [
           FlutterMap(
             key: ValueKey('${_loadedDate.toIso8601String()}#$_reloadSeq'),
@@ -517,31 +564,41 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
                 userAgentPackageName: 'com.sgchoisg.nakkda',
               ),
-              // 출퇴근 알림 지점: 반경 원 + 핀(탭하면 삭제)
+              // 출퇴근 알림 지점: 반경 원 + 핀(탭하면 삭제, 길게 눌러 드래그 이동)
               if (commuteEnabled && commuteActive && commutePins.isNotEmpty) ...[
                 CircleLayer(
-                  circles: commutePins
-                      .map((p) => CircleMarker(
-                            point: LatLng(p.lat, p.lng),
-                            radius: commuteRadius.toDouble(),
-                            useRadiusInMeter: true,
-                            color: const Color(0x2218A0FF),
-                            borderColor: const Color(0xFF1976D2),
-                            borderStrokeWidth: 2,
-                          ))
-                      .toList(),
+                  circles: [
+                    for (var i = 0; i < commutePins.length; i++)
+                      CircleMarker(
+                        point: _pinLatLng(i, commutePins[i]),
+                        radius: commuteRadius.toDouble(),
+                        useRadiusInMeter: true,
+                        color: const Color(0x2218A0FF),
+                        borderColor: const Color(0xFF1976D2),
+                        borderStrokeWidth: 2,
+                      ),
+                  ],
                 ),
                 MarkerLayer(
                   markers: [
                     for (var i = 0; i < commutePins.length; i++)
                       Marker(
-                        point: LatLng(commutePins[i].lat, commutePins[i].lng),
+                        point: _pinLatLng(i, commutePins[i]),
                         width: 40,
                         height: 40,
                         child: GestureDetector(
                           onTap: () => _removeCommutePin(i),
-                          child: const Icon(Icons.train,
-                              color: Color(0xFF1976D2), size: 32),
+                          onLongPressStart: (_) => _onPinDragStart(i),
+                          onLongPressMoveUpdate: (d) =>
+                              _onPinDragUpdate(d.globalPosition),
+                          onLongPressEnd: (_) => _onPinDragEnd(i),
+                          child: Icon(
+                            Icons.train,
+                            color: _draggingPin == i
+                                ? const Color(0xFFD32F2F)
+                                : const Color(0xFF1976D2),
+                            size: _draggingPin == i ? 40 : 32,
+                          ),
                         ),
                       ),
                   ],

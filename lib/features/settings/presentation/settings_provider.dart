@@ -278,6 +278,17 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     await _applyCommute(c.copyWith(commutePins: pins));
   }
 
+  Future<void> updateCommutePinLocation(
+      int index, double lat, double lng) async {
+    final c = state.valueOrNull;
+    if (c == null || index < 0 || index >= c.commutePins.length) return;
+    final pins = [...c.commutePins];
+    final p = pins[index];
+    pins[index] =
+        CommutePin(lat: lat, lng: lng, label: p.label, window: p.window);
+    await _applyCommute(c.copyWith(commutePins: pins));
+  }
+
   final _saf = SafService();
 
   /// SAF 폴더 피커를 열고 선택된 폴더를 savePath로 저장

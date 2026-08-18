@@ -1221,6 +1221,10 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
   /// 갤러리 저장 + 해당 날짜 메모 등록은 채널이 모두 있는 메인 앱에서 수행.
   Future<void> _checkPendingShakePhotos() async {
     final prefs = await SharedPreferences.getInstance();
+    // 흔들기 카메라는 별도 엔진(CameraLockActivity)에서 큐를 디스크에 쓴다.
+    // 메인 앱의 prefs 인메모리 캐시는 시작 시점 값(빈 큐)이라, reload로 디스크를
+    // 다시 읽지 않으면 별도 엔진이 방금 쓴 촬영을 못 본다.
+    await prefs.reload();
     final list = prefs.getStringList('pending_shake_photos') ?? [];
     if (list.isEmpty) return;
     final settings = ref.read(settingsProvider).valueOrNull;
