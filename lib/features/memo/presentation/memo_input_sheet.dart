@@ -28,6 +28,10 @@ import '../../../core/screens/gallery_picker_screen.dart';
 import '../../../core/constants/app_constants.dart';
 import '../../../core/utils/species_detector.dart';
 
+/// AR 안전 경고를 이번 앱 실행(프로세스)에서 이미 확인했는지 여부.
+/// 세션당 1회만 표시하고, 앱을 새로 켜면(프로세스 재시작) 다시 표시된다.
+bool _arSafetyAcknowledgedThisSession = false;
+
 class MemoInputSheet extends ConsumerStatefulWidget {
   final bool startWithVoice;
   final MemoEntry? existingEntry;
@@ -143,8 +147,12 @@ class MemoInputSheet extends ConsumerStatefulWidget {
     if (source == PhotoSource.arCamera) {
       // 가족 정책(AR 특별 제한): AR 섹션 시작 즉시 안전 경고 표시.
       // 부모 감독의 중요성과 주변 환경 인식을 안내하고, 확인해야만 진행한다.
-      final agreed = await _showArSafetyWarning(context);
-      if (agreed != true || !context.mounted) return null;
+      // 이번 앱 실행에서 아직 확인하지 않았을 때만 표시(세션당 1회).
+      if (!_arSafetyAcknowledgedThisSession) {
+        final agreed = await _showArSafetyWarning(context);
+        if (agreed != true || !context.mounted) return null;
+        _arSafetyAcknowledgedThisSession = true;
+      }
       final wmSettings = settings?.watermark;
       final arResult = await launchArMeasure(
         watermarkEnabled: wmSettings?.enabled ?? false,
