@@ -72,6 +72,8 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
 
     private var session: Session? = null
     private var installRequested = false
+    // 카메라 권한 직후·타 앱 점유 등으로 첫 resume이 실패할 때 재시도한 횟수.
+    private var cameraResumeRetries = 0
     private var includeLength = true
     private var applyWatermark = false
 
@@ -158,9 +160,28 @@ class ArMeasureActivity : Activity(), GLSurfaceView.Renderer {
 
     override fun onResume() {
         super.onResume()
+        resumeArSession()
+    }
+
+    /// ARCore 세션을 재개한다. 카메라가 잠시 준비되지 않아 resume이 실패하면
+    /// (권한 허용 직후 HAL 지연·타 앱 점유 등) 세션을 닫고 짧게 재시도한다.
+    /// 재시도로 회복되지 않을 때만 사용자에게 알리고 화면을 닫는다.
+    private fun resumeArSession() {
         if (!initSession()) return
+        try {
+            session?.resume()
+        } catch (e: CameraNotAvailableException) {
+            Log.w(TAG, "Camera not available on resume, retrying", e)
+            session?.close(); session = null
+            if (cameraResumeRetries++ < 3) {
+                msgHandler.postDelayed({ if (!isFinishing) resumeArSession() }, 400)
+            } else {
+                toast("카메라를 사용할 수 없습니다. 잠시 후 다시 시도해 주세요"); finish()
+            }
+            return
+        }
+        cameraResumeRetries = 0
         displayRotationHelper.onResume()
-        session?.resume()
         glSurfaceView.onResume()
         if (applyWatermark) wmHandler.post(wmRunnable)
         sensorManager = (getSystemService(Context.SENSOR_SERVICE) as SensorManager).also { sm ->
