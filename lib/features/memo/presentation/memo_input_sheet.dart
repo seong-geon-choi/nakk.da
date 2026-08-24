@@ -141,6 +141,10 @@ class MemoInputSheet extends ConsumerStatefulWidget {
     String? exifSourcePath;
 
     if (source == PhotoSource.arCamera) {
+      // 가족 정책(AR 특별 제한): AR 섹션 시작 즉시 안전 경고 표시.
+      // 부모 감독의 중요성과 주변 환경 인식을 안내하고, 확인해야만 진행한다.
+      final agreed = await _showArSafetyWarning(context);
+      if (agreed != true || !context.mounted) return null;
       final wmSettings = settings?.watermark;
       final arResult = await launchArMeasure(
         watermarkEnabled: wmSettings?.enabled ?? false,
@@ -302,6 +306,43 @@ class MemoInputSheet extends ConsumerStatefulWidget {
       if (idx >= 0) return photoSavePath.substring(idx);
     }
     return 'DCIM/nakkda';
+  }
+
+  /// AR(증강현실) 진입 즉시 표시하는 안전 경고. 가족 정책(AR 특별 제한) 준수용.
+  /// '시작'을 눌러야 true를 반환한다.
+  static Future<bool?> _showArSafetyWarning(BuildContext context) {
+    return showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        icon: const Icon(Icons.warning_amber_rounded,
+            color: Color(0xFFEF6C00), size: 32),
+        title: const Text('AR 사용 안전 안내'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('증강현실(AR) 카메라를 사용하기 전에 확인해 주세요.'),
+            SizedBox(height: 12),
+            Text('• 어린이가 사용할 때는 반드시 보호자의 감독이 필요합니다.'),
+            SizedBox(height: 8),
+            Text('• 화면에 집중하면 주변 상황을 알아차리기 어렵습니다. '
+                '물가·계단·도로 등 위험한 장소에서는 각별히 주의하고, '
+                '이동 중에는 주변 환경을 계속 살펴 주세요.'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('확인하고 시작'),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
