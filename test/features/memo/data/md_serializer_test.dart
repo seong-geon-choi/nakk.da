@@ -350,5 +350,25 @@ void main() {
       expect(parsed[0].lng, 127.5678);
       expect(parsed[0].timestamp, DateTime(2026, 6, 2, 9, 5, 7));
     });
+
+    test('parseTrackPoints: 찍은 좌표(marked) 왕복 — ✓ 접미사 보존', () {
+      final pts = [
+        TrackPoint(
+            lat: 37.1234,
+            lng: 127.5678,
+            timestamp: DateTime(2026, 6, 2, 9, 5, 7),
+            marked: true),
+        TrackPoint(
+            lat: 37.2000,
+            lng: 127.6000,
+            timestamp: DateTime(2026, 6, 2, 9, 6, 0)),
+      ];
+      final serialized = MdSerializer.trackCommentsFor(pts);
+      expect(serialized.contains('| ✓'), isTrue);
+      final parsed = MdSerializer.parseTrackPoints(serialized);
+      expect(parsed.length, 2);
+      expect(parsed[0].marked, isTrue);
+      expect(parsed[1].marked, isFalse);
+    });
   });
 }

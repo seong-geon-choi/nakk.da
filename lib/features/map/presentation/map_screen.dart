@@ -19,6 +19,7 @@ import '../../../core/widgets/saf_image.dart';
 import '../../../core/widgets/video_player_widget.dart';
 import '../../../core/widgets/app_toast.dart';
 import '../../../core/widgets/ad_banner_slot.dart';
+import '../../../core/widgets/check_mark.dart';
 
 class MapScreen extends ConsumerStatefulWidget {
   final String? filePath;
@@ -493,6 +494,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final placed = _spreadPoints();
     final placedSorted = List<_PlacedPoint>.from(placed)
       ..sort((a, b) => a.point.timestamp.compareTo(b.point.timestamp));
+    // 좌표 보기 연결 노드 수 = 메모 지점 + 사용자가 찍은 좌표
+    final markedCount = _trackPoints.where((p) => p.marked).length;
+    final lineNodeCount = placed.length + markedCount;
     // 메모 타임스탬프를 파일명 날짜 + HH:mm 으로 재구성해 트래킹과 동일한 기준으로 비교
     DateTime memoFullTs(_PlacedPoint p) => DateTime(
           _loadedDate.year, _loadedDate.month, _loadedDate.day,
@@ -507,11 +511,14 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         ]..sort((a, b) => a.key.compareTo(b.key));
         return combined.map((e) => e.value).toList();
       }
-      final memoOnly = [
+      // 좌표 보기(메모지점 연결)일 때도 사용자가 찍은 좌표는 함께 선으로 연결
+      final memoAndMarked = [
         for (final p in placedSorted)
           MapEntry(memoFullTs(p), LatLng(p.point.lat, p.point.lng)),
+        for (final p in _trackPoints)
+          if (p.marked) MapEntry(p.timestamp, LatLng(p.lat, p.lng)),
       ]..sort((a, b) => a.key.compareTo(b.key));
-      return memoOnly.map((e) => e.value).toList();
+      return memoAndMarked.map((e) => e.value).toList();
     }();
     return Scaffold(
       appBar: AppBar(
@@ -621,6 +628,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               if ((_showTrack || _showTimes) && _trackPoints.isNotEmpty)
                 CircleLayer(
                   circles: _trackPoints
+                      .where((p) => !p.marked) // 찍은 좌표는 아래에서 체크 표시로 렌더
                       .map((p) => CircleMarker(
                             point: LatLng(p.lat, p.lng),
                             radius: 4,
@@ -638,6 +646,34 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                       color: const Color(0xCCFF6D00),
                       strokeWidth: 2.5,
                     ),
+                  ],
+                ),
+              // 사용자가 '좌표 찍기'로 남긴 지점: 항상 눈에 띄는 체크 표시로 렌더.
+              // 연결선(폴리라인)보다 뒤에 두어 선이 체크 표시를 덮지 않게 한다.
+              if (markedCount > 0)
+                MarkerLayer(
+                  markers: [
+                    for (final p in _trackPoints)
+                      if (p.marked)
+                        Marker(
+                          point: LatLng(p.lat, p.lng),
+                          width: 30,
+                          height: 30,
+                          child: Container(
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: const Color(0xFF6A1B9A),
+                              border: Border.all(color: Colors.white, width: 2),
+                              boxShadow: const [
+                                BoxShadow(
+                                    blurRadius: 4, color: Color(0x66000000)),
+                              ],
+                            ),
+                            child: const Center(
+                              child: CheckMark(size: 20, strokeWidth: 3.0),
+                            ),
+                          ),
+                        ),
                   ],
                 ),
               if (_showLines && _showDistances && placedSorted.length >= 2)
@@ -892,18 +928,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     _divider(),
                     _toolBtn(
                       _showLines ? Icons.timeline : Icons.timeline_outlined,
-                      placed.length >= 2
+                      lineNodeCount >= 2
                           ? (_showLines
                               ? Theme.of(context).colorScheme.primary
                               : null)
                           : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
-                      placed.length >= 2
+                      lineNodeCount >= 2
                           ? () {
                               setState(() => _showLines = !_showLines);
                               _showToastMessage(
                                   _showLines ? '메모지점 연결 켜짐' : '메모지점 연결 꺼짐');
                             }
-                          : () => _showToastMessage('GPS 메모가 2개 이상 필요합니다'),
+                          : () => _showToastMessage('연결할 지점이 2개 이상 필요합니다'),
                     ),
                     _toolBtn(
                       Icons.straighten,

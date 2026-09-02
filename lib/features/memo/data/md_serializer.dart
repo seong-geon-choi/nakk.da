@@ -465,9 +465,9 @@ class MdSerializer {
 
   // ── 트래킹 포인트 파싱/쓰기 ──────────────────────────────
 
-  // 신 포맷: track:날짜시각 | 🛰 lat, lng
+  // 신 포맷: track:날짜시각 | 🛰 lat, lng [| ✓]  (✓ = 사용자가 찍은 좌표)
   static final _trackRe = RegExp(
-      r'^\[//\]: # \(track:(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|\s*🛰\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)\)$');
+      r'^\[//\]: # \(track:(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|\s*🛰\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)(\s*\|\s*✓)?\)$');
   // 구 포맷 하위호환: track:lat,lng,날짜시각
   static final _trackReOld = RegExp(
       r'^\[//\]: # \(track:(-?\d+\.\d+),(-?\d+\.\d+),(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\)$');
@@ -482,7 +482,8 @@ class MdSerializer {
         final lat = double.tryParse(m.group(2)!);
         final lng = double.tryParse(m.group(3)!);
         if (lat != null && lng != null && dt != null) {
-          points.add(TrackPoint(lat: lat, lng: lng, timestamp: dt));
+          points.add(TrackPoint(
+              lat: lat, lng: lng, timestamp: dt, marked: m.group(4) != null));
         }
         continue;
       }
@@ -504,7 +505,7 @@ class MdSerializer {
     // 메모 헤더와 동일한 '날짜시각 | 🛰 GPS' 순서로 기록 (숨김 주석)
     final joined = points
         .map((p) =>
-            '[//]: # (track:${_fmtDt(p.timestamp)} | 🛰 ${_fmt(p.lat)}, ${_fmt(p.lng)})')
+            '[//]: # (track:${_fmtDt(p.timestamp)} | 🛰 ${_fmt(p.lat)}, ${_fmt(p.lng)}${p.marked ? ' | ✓' : ''})')
         .join('\n');
     return '$joined\n';
   }

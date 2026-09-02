@@ -3,11 +3,14 @@ import 'package:flutter/services.dart';
 class TrackPoint {
   final double lat, lng;
   final DateTime timestamp;
+  // 사용자가 '좌표 찍기'로 직접 남긴 지점. 자동 경로 점과 구별해 지도에 체크 표시로 렌더.
+  final bool marked;
 
   const TrackPoint({
     required this.lat,
     required this.lng,
     required this.timestamp,
+    this.marked = false,
   });
 
   static TrackPoint? fromString(String s) {

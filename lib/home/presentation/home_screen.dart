@@ -37,6 +37,7 @@ import '../../core/services/saf_service.dart';
 import '../../core/services/memo_share_service.dart';
 import '../../core/services/app_update_service.dart';
 import '../../core/widgets/app_toast.dart';
+import '../../core/widgets/check_mark.dart';
 import 'dart:io';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -765,6 +766,7 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     with WidgetsBindingObserver {
   bool _isActive = false;
   int _trackCount = 0;
+  int _markCount = 0; // 오늘 사용자가 '좌표 찍기'로 남긴 지점 수
   Timer? _flushTimer;
   double _right = 16;
   double _bottom = 172;
@@ -860,7 +862,13 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
       }
     }
     final dayFile = await repo.loadDayFile(today, settings.savePath);
-    if (mounted) setState(() => _trackCount = dayFile?.trackPoints.length ?? 0);
+    if (mounted) {
+      setState(() {
+        _trackCount = dayFile?.trackPoints.length ?? 0;
+        _markCount =
+            dayFile?.trackPoints.where((p) => p.marked).length ?? 0;
+      });
+    }
   }
 
   void _startFlushTimer() {
@@ -954,78 +962,167 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     await _refreshCount();
   }
 
+  /// '좌표 찍기': 현재 위치를 사용자가 찍은 지점(marked)으로 기록한다.
+  /// 이동 경로 점과 같은 트랙 주석으로 저장되어 경로/좌표 연결선에 함께 포함되고,
+  /// 지도에서는 체크 표시로 구별해 렌더된다.
+  Future<void> _onMarkTap() async {
+    final settings = ref.read(settingsProvider).valueOrNull;
+    if (settings == null || settings.savePath.isEmpty) return;
+    double? lat = ref.read(locationProvider).valueOrNull?.latitude;
+    double? lng = ref.read(locationProvider).valueOrNull?.longitude;
+    if (lat == null) {
+      final cached = ref.read(locationProvider.notifier).cached;
+      lat = cached?.latitude;
+      lng = cached?.longitude;
+    }
+    if (lat == null) {
+      try {
+        final pos = await Geolocator.getLastKnownPosition();
+        if (pos != null) { lat = pos.latitude; lng = pos.longitude; }
+      } catch (_) {}
+    }
+    if (lat == null || lng == null) {
+      if (mounted) showAppToast(context, '현재 위치를 확인할 수 없습니다');
+      return;
+    }
+    final now = DateTime.now();
+    await ref.read(memoRepositoryProvider).appendTrackPoints(
+      DateTime(now.year, now.month, now.day),
+      [TrackPoint(lat: lat, lng: lng, timestamp: now, marked: true)],
+      settings.savePath,
+    );
+    await _refreshCount();
+    if (mounted) showAppToast(context, '좌표를 찍었습니다');
+  }
+
   @override
   Widget build(BuildContext context) {
     final mq = MediaQuery.of(context);
     return Positioned(
       right: _right.clamp(0.0, mq.size.width - 64.0),
       bottom: _bottom.clamp(0.0, mq.size.height - 200.0),
-      child: GestureDetector(
-        onTap: _onTap,
-        onPanUpdate: (details) {
-          setState(() {
-            _right -= details.delta.dx;
-            _bottom -= details.delta.dy;
-          });
-        },
-        onPanEnd: (_) {
-          ref
-              .read(settingsProvider.notifier)
-              .updateTrackingFabPosition(_right, _bottom);
-        },
-        child: Container(
-          width: 60,
-          height: 60,
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            gradient: LinearGradient(
-              begin: Alignment.topCenter,
-              end: Alignment.bottomCenter,
-              colors: _isActive
-                  ? [
-                      Color.alphaBlend(const Color(0x70FFFFFF), Colors.green.shade600),
-                      Color.alphaBlend(const Color(0x55000000), Colors.green.shade600),
-                    ]
-                  : [
-                      Color.alphaBlend(
-                          const Color(0x70FFFFFF),
-                          Theme.of(context).colorScheme.secondary),
-                      Color.alphaBlend(
-                          const Color(0x55000000),
-                          Theme.of(context).colorScheme.secondary),
-                    ],
-            ),
-            boxShadow: const [
-              BoxShadow(blurRadius: 2, offset: Offset(0, 4), color: Color(0x99000000)),
-              BoxShadow(blurRadius: 12, offset: Offset(0, 8), color: Color(0x44000000)),
-            ],
-          ),
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(
-                _isActive ? Icons.route : Icons.route_outlined,
-                color: _isActive ? Colors.white : Theme.of(context).colorScheme.onSecondary,
-                size: 22,
-              ),
-              Text(
-                _isActive ? '기록 중' : '경로 기록',
-                style: TextStyle(
-                  color: _isActive ? Colors.white : Theme.of(context).colorScheme.onSecondary,
-                  fontSize: 9,
-                  fontWeight: FontWeight.w600,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          // 경로 기록 활성 시에만 그 위쪽에 '좌표 찍기' 버튼 노출
+          if (_isActive) ...[
+            _buildMarkButton(context),
+            const SizedBox(height: 10),
+          ],
+          GestureDetector(
+            onTap: _onTap,
+            onPanUpdate: (details) {
+              setState(() {
+                _right -= details.delta.dx;
+                _bottom -= details.delta.dy;
+              });
+            },
+            onPanEnd: (_) {
+              ref
+                  .read(settingsProvider.notifier)
+                  .updateTrackingFabPosition(_right, _bottom);
+            },
+            child: Container(
+              width: 60,
+              height: 60,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: _isActive
+                      ? [
+                          Color.alphaBlend(const Color(0x70FFFFFF), Colors.green.shade600),
+                          Color.alphaBlend(const Color(0x55000000), Colors.green.shade600),
+                        ]
+                      : [
+                          Color.alphaBlend(
+                              const Color(0x70FFFFFF),
+                              Theme.of(context).colorScheme.secondary),
+                          Color.alphaBlend(
+                              const Color(0x55000000),
+                              Theme.of(context).colorScheme.secondary),
+                        ],
                 ),
+                boxShadow: const [
+                  BoxShadow(blurRadius: 2, offset: Offset(0, 4), color: Color(0x99000000)),
+                  BoxShadow(blurRadius: 12, offset: Offset(0, 8), color: Color(0x44000000)),
+                ],
               ),
-              if (_trackCount > 0)
-                Text(
-                  '$_trackCount',
-                  style: TextStyle(
-                    color: _isActive ? Colors.white70 : Theme.of(context).colorScheme.onSecondary.withValues(alpha: 0.7),
-                    fontSize: 8,
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    _isActive ? Icons.route : Icons.route_outlined,
+                    color: _isActive ? Colors.white : Theme.of(context).colorScheme.onSecondary,
+                    size: 22,
                   ),
-                ),
+                  Text(
+                    _isActive ? '기록 중' : '경로 기록',
+                    style: TextStyle(
+                      color: _isActive ? Colors.white : Theme.of(context).colorScheme.onSecondary,
+                      fontSize: 9,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  if (_trackCount > 0)
+                    Text(
+                      '$_trackCount',
+                      style: TextStyle(
+                        color: _isActive ? Colors.white70 : Theme.of(context).colorScheme.onSecondary.withValues(alpha: 0.7),
+                        fontSize: 8,
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 경로 기록 중 현재 위치를 좌표로 찍는 버튼(경로 기록 버튼 위에 배치).
+  Widget _buildMarkButton(BuildContext context) {
+    return GestureDetector(
+      onTap: _onMarkTap,
+      child: Container(
+        width: 60,
+        height: 60,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color.alphaBlend(const Color(0x70FFFFFF), Colors.deepPurple.shade400),
+              Color.alphaBlend(const Color(0x55000000), Colors.deepPurple.shade400),
             ],
           ),
+          boxShadow: const [
+            BoxShadow(blurRadius: 2, offset: Offset(0, 4), color: Color(0x99000000)),
+            BoxShadow(blurRadius: 12, offset: Offset(0, 8), color: Color(0x44000000)),
+          ],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CheckMark(size: 22, strokeWidth: 3.2),
+            const Text(
+              '좌표 찍기',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            if (_markCount > 0)
+              Text(
+                '$_markCount',
+                style: const TextStyle(color: Colors.white70, fontSize: 8),
+              ),
+          ],
         ),
       ),
     );
