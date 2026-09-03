@@ -25,3 +25,13 @@
 # ── 앱 네이티브 진입점(Activity/Service는 매니페스트 참조라 자동 keep이지만
 #    메서드 채널 핸들러 등을 포함해 안전차원에서 앱 패키지 전체 보존) ──
 -keep class com.sgchoisg.nakkda.** { *; }
+
+# ── 공통 방어 규칙(리플렉션·JNI·enum 관련 릴리스 크래시 예방) ──
+-keepattributes *Annotation*, Signature, InnerClasses, EnclosingMethod
+-keepclassmembers class * {
+    native <methods>;
+}
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}

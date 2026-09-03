@@ -54,10 +54,15 @@ android {
     buildTypes {
         release {
             signingConfig = signingConfigs.getByName("release")
-            // R8 코드 축소·최적화(proguard-rules.pro 준비됨)는 실기기 전체 기능
-            // 검증 후 활성화 예정. 검증 전 프로덕션에 내보내지 않도록 현재는 비활성.
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // R8 코드 축소·난독화 활성(Play 앱 최적화 '난독화' 기준 충족).
+            // keep 규칙은 proguard-rules.pro 참조. mapping.txt는 AAB에 포함되어
+            // Play Console이 크래시 역난독화에 자동 사용한다.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }
