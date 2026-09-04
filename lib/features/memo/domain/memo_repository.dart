@@ -11,6 +11,7 @@ abstract interface class MemoRepository {
   Future<void> appendEntries(DateTime date, List<MemoEntry> entries, String savePath);
   Future<void> appendLocationBlock(DateTime date, LocationStatus loc, String savePath);
   Future<void> appendTrackPoints(DateTime date, List<TrackPoint> points, String savePath);
+  Future<void> replaceTrackPoints(DateTime date, List<TrackPoint> points, String savePath);
   Future<void> removeBlock(DateTime date, int blockIndex, String savePath);
   Future<void> replaceBlock(DateTime date, int blockIndex, dynamic newBlock, String savePath);
 }

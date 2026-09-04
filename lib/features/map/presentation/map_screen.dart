@@ -325,16 +325,31 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   double _pixelsToDeg(double pixels) =>
       pixels * 360.0 / (256.0 * math.pow(2.0, _zoom));
 
-  // 겹치는 포인트를 중심점 주변에 원형으로 분산 배치
-  List<_PlacedPoint> _spreadPoints() {
-    if (_points.isEmpty) return [];
+  // 겹치는 마커(메모 지점 + 사용자가 찍은 좌표)를 중심점 주변에 원형으로 분산 배치.
+  // 메모와 찍은 좌표를 한 그룹으로 함께 분산해 서로 겹치지 않게 한다. 연결선은
+  // 항상 실제 GPS 좌표로 그리므로(표시 위치와 무관), 궤적 왜곡 없이 마커만 벌린다.
+  // 반환: (메모 배치 목록, 찍은 좌표 → 표시 위치 맵)
+  (List<_PlacedPoint>, Map<TrackPoint, LatLng>) _layoutMarkers() {
     final threshold = _thresholdDeg();
-    final remaining = List<_GpsPoint>.from(_points);
-    final result = <_PlacedPoint>[];
+    final remaining = <_SpreadItem>[
+      for (final p in _points) _SpreadItem(lat: p.lat, lng: p.lng, memo: p),
+      for (final p in _trackPoints)
+        if (p.marked) _SpreadItem(lat: p.lat, lng: p.lng, marked: p),
+    ];
+    final memoOut = <_PlacedPoint>[];
+    final markedOut = <TrackPoint, LatLng>{};
+
+    void emit(_SpreadItem it, double lat, double lng) {
+      if (it.memo != null) {
+        memoOut.add(_PlacedPoint(it.memo!, lat, lng));
+      } else if (it.marked != null) {
+        markedOut[it.marked!] = LatLng(lat, lng);
+      }
+    }
 
     while (remaining.isNotEmpty) {
       final pivot = remaining.removeAt(0);
-      final group = <_GpsPoint>[pivot];
+      final group = <_SpreadItem>[pivot];
       remaining.removeWhere((p) {
         if ((p.lat - pivot.lat).abs() < threshold &&
             (p.lng - pivot.lng).abs() < threshold) {
@@ -345,7 +360,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       });
 
       if (group.length == 1) {
-        result.add(_PlacedPoint(group.first, group.first.lat, group.first.lng));
+        emit(group.first, group.first.lat, group.first.lng);
       } else {
         final centerLat =
             group.map((p) => p.lat).reduce((a, b) => a + b) / group.length;
@@ -354,15 +369,31 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         final radius = _pixelsToDeg(9.8 / math.sin(math.pi / group.length));
         for (int i = 0; i < group.length; i++) {
           final angle = (2 * math.pi * i) / group.length - math.pi / 2;
-          result.add(_PlacedPoint(
-            group[i],
-            centerLat + radius * math.sin(angle),
-            centerLng + radius * math.cos(angle),
-          ));
+          emit(group[i], centerLat + radius * math.sin(angle),
+              centerLng + radius * math.cos(angle));
         }
       }
     }
-    return result;
+    return (memoOut, markedOut);
+  }
+
+  // 자동 경로 점이 메모/찍은 좌표와 사실상 같은 지점이면 표시를 생략한다(메모 밑에
+  // 숨김). 연결선은 실제 좌표로 그대로 통과하므로 궤적에는 영향 없다.
+  bool _routePointHidden(TrackPoint p, double threshold) {
+    for (final m in _points) {
+      if ((m.lat - p.lat).abs() < threshold &&
+          (m.lng - p.lng).abs() < threshold) {
+        return true;
+      }
+    }
+    for (final m in _trackPoints) {
+      if (m.marked &&
+          (m.lat - p.lat).abs() < threshold &&
+          (m.lng - p.lng).abs() < threshold) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // 지도 길게 누르기 → 출퇴근 알림 지점 추가(최대 3개)
@@ -479,6 +510,54 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     }
   }
 
+  /// 이동경로/찍은 좌표를 누르면 저장 시각을 토스트로 표시한다.
+  void _showTrackTime(TrackPoint p) {
+    final t = p.timestamp;
+    final hh = t.hour.toString().padLeft(2, '0');
+    final mm = t.minute.toString().padLeft(2, '0');
+    final ss = t.second.toString().padLeft(2, '0');
+    final label = p.marked ? '찍은 좌표' : '이동경로';
+    _showToastMessage('$label 저장 시각 $hh:$mm:$ss');
+  }
+
+  /// 이동경로/찍은 좌표를 길게 누르면 삭제 여부를 확인하고 MD 파일에서 제거한다.
+  Future<void> _confirmDeleteTrackPoint(TrackPoint p) async {
+    final label = p.marked ? '찍은 좌표' : '이동경로 좌표';
+    final time = DateFormatter.toTimeString(p.timestamp);
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('$label 삭제'),
+        content: Text('$time 좌표를 삭제할까요?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('삭제'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+    if (savePath.isEmpty) return;
+    final remaining = _trackPoints
+        .where((q) => !(q.lat == p.lat &&
+            q.lng == p.lng &&
+            q.timestamp == p.timestamp &&
+            q.marked == p.marked))
+        .toList();
+    await ref
+        .read(memoRepositoryProvider)
+        .replaceTrackPoints(_loadedDate, remaining, savePath);
+    if (!mounted) return;
+    setState(() => _trackPoints = remaining);
+    _showToastMessage('$label를 삭제했습니다');
+  }
+
   @override
   Widget build(BuildContext context) {
     final showTrackingButton =
@@ -491,7 +570,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         .select((s) => s.valueOrNull?.commuteRadius ?? 200));
     final commuteActive = ref.watch(settingsProvider
         .select((s) => s.valueOrNull?.commuteAlarmActive ?? true));
-    final placed = _spreadPoints();
+    final (placed, markedDisplay) = _layoutMarkers();
+    final markerThreshold = _thresholdDeg();
     final placedSorted = List<_PlacedPoint>.from(placed)
       ..sort((a, b) => a.point.timestamp.compareTo(b.point.timestamp));
     // 좌표 보기 연결 노드 수 = 메모 지점 + 사용자가 찍은 좌표
@@ -625,18 +705,36 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     ),
                   ],
                 ),
+              // 이동경로 좌표: 길게 누르면 삭제할 수 있게 마커로 렌더(투명한 큰
+              // 히트 영역 안에 작은 점). 찍은 좌표는 아래에서 체크 표시로 렌더.
               if ((_showTrack || _showTimes) && _trackPoints.isNotEmpty)
-                CircleLayer(
-                  circles: _trackPoints
-                      .where((p) => !p.marked) // 찍은 좌표는 아래에서 체크 표시로 렌더
-                      .map((p) => CircleMarker(
-                            point: LatLng(p.lat, p.lng),
-                            radius: 4,
-                            color: const Color(0xCCFF6D00),
-                            borderColor: Colors.white,
-                            borderStrokeWidth: 1,
-                          ))
-                      .toList(),
+                MarkerLayer(
+                  markers: [
+                    for (final p in _trackPoints)
+                      if (!p.marked && !_routePointHidden(p, markerThreshold))
+                        Marker(
+                          point: LatLng(p.lat, p.lng),
+                          width: 24,
+                          height: 24,
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => _showTrackTime(p),
+                            onLongPress: () => _confirmDeleteTrackPoint(p),
+                            child: Center(
+                              child: Container(
+                                width: 9,
+                                height: 9,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: const Color(0xCCFF6D00),
+                                  border: Border.all(
+                                      color: Colors.white, width: 1),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                  ],
                 ),
               if (_showLines && linePoints.length >= 2)
                 PolylineLayer(
@@ -656,21 +754,27 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     for (final p in _trackPoints)
                       if (p.marked)
                         Marker(
-                          point: LatLng(p.lat, p.lng),
+                          point: markedDisplay[p] ?? LatLng(p.lat, p.lng),
                           width: 30,
                           height: 30,
-                          child: Container(
-                            decoration: BoxDecoration(
-                              shape: BoxShape.circle,
-                              color: const Color(0xFF6A1B9A),
-                              border: Border.all(color: Colors.white, width: 2),
-                              boxShadow: const [
-                                BoxShadow(
-                                    blurRadius: 4, color: Color(0x66000000)),
-                              ],
-                            ),
-                            child: const Center(
-                              child: CheckMark(size: 20, strokeWidth: 3.0),
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => _showTrackTime(p),
+                            onLongPress: () => _confirmDeleteTrackPoint(p),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: const Color(0xFF6A1B9A),
+                                border:
+                                    Border.all(color: Colors.white, width: 2),
+                                boxShadow: const [
+                                  BoxShadow(
+                                      blurRadius: 4, color: Color(0x66000000)),
+                                ],
+                              ),
+                              child: const Center(
+                                child: CheckMark(size: 20, strokeWidth: 3.0),
+                              ),
                             ),
                           ),
                         ),
@@ -1014,6 +1118,15 @@ class _PlacedPoint {
   final double lat;
   final double lng;
   const _PlacedPoint(this.point, this.lat, this.lng);
+}
+
+// 분산 배치 대상(메모 또는 찍은 좌표) 통합 표현. 둘 중 하나만 non-null.
+class _SpreadItem {
+  final double lat;
+  final double lng;
+  final _GpsPoint? memo;
+  final TrackPoint? marked;
+  const _SpreadItem({required this.lat, required this.lng, this.memo, this.marked});
 }
 
 // ── GPS 포인트 모델 ─────────────────────────────────────────

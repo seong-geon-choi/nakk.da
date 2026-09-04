@@ -130,6 +130,21 @@ class MemoRepositoryImpl implements MemoRepository {
   }
 
   @override
+  Future<void> replaceTrackPoints(DateTime date, List<TrackPoint> points, String savePath) =>
+      _withLock(_lockKey(date, savePath), () async {
+        final filename = _filenameFor(date);
+        final dayFile = await loadDayFile(date, savePath);
+        if (dayFile == null) return;
+        final content = MdSerializer.buildFullContent(
+            date, dayFile.blocks, points, dayFile.outing);
+        if (SafService.isSafUri(savePath)) {
+          await _saf.writeFile(savePath, filename, content);
+        } else {
+          await File('$savePath/$filename').writeAsString(content);
+        }
+      });
+
+  @override
   Future<void> appendLocationBlock(DateTime date, LocationStatus loc, String savePath) =>
       _withLock(_lockKey(date, savePath), () async {
         final filename = _filenameFor(date);

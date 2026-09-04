@@ -210,16 +210,8 @@ class MemoInputSheet extends ConsumerStatefulWidget {
         // 카메라 동영상: _saveVideo()가 이미 앱 스토리지에 저장했으므로 경로 그대로 사용
         isVideo = true;
         path = camResult.path;
-        // GPS는 현재 위치로 폴백
-        final loc = ref.read(locationProvider).valueOrNull;
-        if (loc?.latitude != null) {
-          gps = (lat: loc!.latitude!, lng: loc.longitude!);
-        } else {
-          final cached = ref.read(locationProvider.notifier).cached;
-          if (cached?.latitude != null) {
-            gps = (lat: cached!.latitude!, lng: cached.longitude!);
-          }
-        }
+        // GPS는 촬영 시점의 '현재' 위치를 새로 측정.
+        gps = await _freshGps(ref);
       } else {
         // 카메라 사진: 기존 플로우
         exifSourcePath = camResult.path;
@@ -259,22 +251,40 @@ class MemoInputSheet extends ConsumerStatefulWidget {
       timestamp = await readExifTimestamp(exifSourcePath);
     }
 
-    // 카메라/AR 소스 GPS 폴백
+    // 카메라/AR 소스 GPS 폴백 — 촬영 시점의 '현재' 위치를 새로 측정한다.
+    // (locationProvider의 값은 앱 실행/마지막 갱신 시점 값이라, 이동 후 촬영하면
+    //  이전 장소 좌표가 저장될 수 있어 여기서 새 fix를 받는다.)
     if (!isVideo && gps == null &&
         (source == PhotoSource.camera || source == PhotoSource.arCamera)) {
-      final loc = ref.read(locationProvider).valueOrNull;
-      if (loc?.latitude != null) {
-        gps = (lat: loc!.latitude!, lng: loc.longitude!);
-      } else {
-        final cached = ref.read(locationProvider.notifier).cached;
-        if (cached?.latitude != null) {
-          gps = (lat: cached!.latitude!, lng: cached.longitude!);
-        }
-      }
+      gps = await _freshGps(ref);
     }
 
     if (path == null) return null;
     return (path: path, isVideo: isVideo, length: length, gps: gps, timestamp: timestamp, multi: null);
+  }
+
+  /// 촬영 시점의 '현재' 위치를 새로 측정한다. GPS fix(5초) → 마지막 known 위치 →
+  /// 캐시된 위치 순으로 폴백. locationProvider의 값은 앱 실행/마지막 갱신 시점 값이라
+  /// 이동 후 촬영 시 이전 장소가 저장되는 문제를 피하려고 새 측정을 우선한다.
+  static Future<({double lat, double lng})?> _freshGps(WidgetRef ref) async {
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 5),
+        ),
+      );
+      return (lat: pos.latitude, lng: pos.longitude);
+    } catch (_) {}
+    try {
+      final pos = await Geolocator.getLastKnownPosition();
+      if (pos != null) return (lat: pos.latitude, lng: pos.longitude);
+    } catch (_) {}
+    final cached = ref.read(locationProvider.notifier).cached;
+    if (cached?.latitude != null) {
+      return (lat: cached!.latitude!, lng: cached.longitude!);
+    }
+    return null;
   }
 
   /// 갤러리 사진을 savePath의 photos/ 서브폴더에 복사, 상대 경로 반환
