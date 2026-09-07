@@ -30,9 +30,11 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   double _maxZoom = 1.0;
   double _currentZoom = 1.0;
   double _baseZoom = 1.0;
+  bool _useFrontCamera = false; // 셀카(전면 카메라) 사용 여부
   // 한 손가락 가로 스와이프로 사진/동영상 모드 전환을 판정하기 위한 누적값.
   // 핀치 줌과의 제스처 충돌을 없애려고 가로 드래그 대신 scale 콜백에서 처리한다.
   double _scaleSwipeDx = 0;
+  double _scaleSwipeDy = 0; // 세로 스와이프 누적(전면/후면 전환 판정용)
   int _scaleMaxPointers = 0;
   String? _toastMsg;
   bool _toastVisible = false;
@@ -191,12 +193,21 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
             if (mounted) setState(() => _error = '카메라를 찾을 수 없습니다');
             return;
           }
-          final back = cameras.firstWhere(
-            (c) => c.lensDirection == CameraLensDirection.back,
-            orElse: () => cameras.first,
+          final wantDir = _useFrontCamera
+              ? CameraLensDirection.front
+              : CameraLensDirection.back;
+          final selected = cameras.firstWhere(
+            (c) => c.lensDirection == wantDir,
+            orElse: () => cameras.firstWhere(
+              (c) => c.lensDirection == CameraLensDirection.back,
+              orElse: () => cameras.first,
+            ),
           );
+          // 요청한 방향이 없으면 실제 선택에 맞춰 토글 상태를 되돌린다.
+          _useFrontCamera =
+              selected.lensDirection == CameraLensDirection.front;
           final ctrl = CameraController(
-            back,
+            selected,
             _isVideoMode ? _videoResolution : ResolutionPreset.high,
             enableAudio: _isVideoMode,
             imageFormatGroup: ImageFormatGroup.jpeg,
@@ -248,6 +259,19 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     _showToast(toVideo ? '동영상 모드' : '사진 모드');
   }
 
+  /// 전면/후면 카메라 전환(세로 스와이프). 녹화 중에는 무시.
+  Future<void> _flipCamera() async {
+    if (_isRecording) return;
+    final oldCtrl = _ctrl;
+    setState(() {
+      _useFrontCamera = !_useFrontCamera;
+      _ctrl = null;
+    });
+    await oldCtrl?.dispose();
+    await _initCamera(); // 전면 미지원이면 내부에서 후면으로 폴백하며 상태 복구
+    if (mounted) _showToast(_useFrontCamera ? '전면 카메라' : '후면 카메라');
+  }
+
   Future<void> _toggleResolution() async {
     if (_isRecording) return;
     final next = _videoResolution == ResolutionPreset.high
@@ -295,11 +319,13 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       }
       // 세로로 저장된 캡처를 실제 기기 방향으로 회전. 워터마크 경로는
       // applyWatermark 내부 재인코딩 단계에서 함께 회전해 추가 비용이 없다.
+      // 전면(셀카) 촬영은 프리뷰와 좌우가 맞도록 미러(좌우 반전) 저장.
+      final mirror = _useFrontCamera;
       final photoPath = (bakeWm != null && bakeWm.enabled)
           ? await applyWatermark(file.path, bakeWm,
-              address: wmAddress, rotateDegrees: rotateDeg)
-          : (rotateDeg != 0
-              ? await rotateImageFile(file.path, rotateDeg)
+              address: wmAddress, rotateDegrees: rotateDeg, flipHorizontal: mirror)
+          : ((rotateDeg != 0 || mirror)
+              ? await rotateImageFile(file.path, rotateDeg, flipHorizontal: mirror)
               : file.path);
 
       if (!mounted) return;
@@ -430,6 +456,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
             onScaleStart: (d) {
               _baseZoom = _currentZoom;
               _scaleSwipeDx = 0;
+              _scaleSwipeDy = 0;
               _scaleMaxPointers = d.pointerCount;
             },
             onScaleUpdate: (d) {
@@ -443,14 +470,24 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                   _ctrl?.setZoomLevel(newZoom);
                 }
               } else {
-                // 한 손가락: 가로 이동 누적(모드 전환 판정용)
+                // 한 손가락: 가로/세로 이동 누적(가로=모드 전환, 세로=카메라 전환)
                 _scaleSwipeDx += d.focalPointDelta.dx;
+                _scaleSwipeDy += d.focalPointDelta.dy;
               }
             },
             onScaleEnd: (d) {
               if (_isRecording) return;
-              // 핀치(2손가락)였으면 모드 전환 안 함
-              if (_scaleMaxPointers >= 2 || _scaleSwipeDx.abs() < 80) return;
+              // 핀치(2손가락)였으면 스와이프 처리 안 함
+              if (_scaleMaxPointers >= 2) return;
+              final adx = _scaleSwipeDx.abs();
+              final ady = _scaleSwipeDy.abs();
+              if (adx < 80 && ady < 80) return;
+              if (ady > adx) {
+                // 세로 스와이프: 전면/후면 카메라 전환(일반 카메라와 동일)
+                _flipCamera();
+                return;
+              }
+              // 가로 스와이프: 사진/동영상 모드 전환
               if (_scaleSwipeDx < 0 && !_isVideoMode) {
                 _switchMode(true);
               } else if (_scaleSwipeDx > 0 && _isVideoMode) {

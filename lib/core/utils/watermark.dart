@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:image/image.dart' as img;
 import 'package:path_provider/path_provider.dart';
 import '../../features/settings/domain/models/app_settings.dart';
 
@@ -23,21 +24,45 @@ int rotateDegreesForTurns(int turns) => switch (turns) {
     };
 
 /// JPEG 파일을 시계방향 [degrees](0/90/180/270)만큼 회전해 새 경로를 반환.
-/// degrees가 0이거나 실패하면 원본 경로 그대로 반환.
-Future<String> rotateImageFile(String imagePath, int degrees) async {
-  if (degrees % 360 == 0) return imagePath;
+/// [flipHorizontal]이 true면 회전(및 EXIF 보정) 후 좌우 반전(셀카 미러)도 적용.
+/// 변경이 없거나 실패하면 원본 경로 그대로 반환.
+Future<String> rotateImageFile(String imagePath, int degrees,
+    {bool flipHorizontal = false}) async {
+  if (degrees % 360 == 0 && !flipHorizontal) return imagePath;
   try {
     final tempDir = await getTemporaryDirectory();
     final outPath = '${tempDir.path}/rot_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    // rotate:0이라도 flip이 필요하면 compress를 거쳐 EXIF 방향을 픽셀에 반영(정규화)한 뒤
+    // 반전한다(정규화 없이 반전하면 EXIF 방향이 남아 결과가 어긋날 수 있음).
     final out = await FlutterImageCompress.compressAndGetFile(
       imagePath,
       outPath,
       quality: 95,
       rotate: degrees,
     );
-    return out?.path ?? imagePath;
+    var path = out?.path ?? imagePath;
+    if (flipHorizontal) path = await _flipHorizontalFile(path);
+    return path;
   } catch (_) {
     return imagePath;
+  }
+}
+
+/// EXIF 방향이 이미 픽셀에 반영된 JPEG를 좌우 반전해 새 경로를 반환.
+/// 실패하면 원본 경로 그대로 반환.
+Future<String> _flipHorizontalFile(String path) async {
+  try {
+    final bytes = await File(path).readAsBytes();
+    final decoded = img.decodeImage(bytes);
+    if (decoded == null) return path;
+    final flipped = img.flipHorizontal(decoded);
+    final tempDir = await getTemporaryDirectory();
+    final outPath =
+        '${tempDir.path}/flip_${DateTime.now().millisecondsSinceEpoch}.jpg';
+    await File(outPath).writeAsBytes(img.encodeJpg(flipped, quality: 95));
+    return outPath;
+  } catch (_) {
+    return path;
   }
 }
 
@@ -46,7 +71,7 @@ Future<String> rotateImageFile(String imagePath, int degrees) async {
 /// [rotateDegrees]: 워터마크를 굽기 전에 이미지를 시계방향으로 회전(0/90/180/270).
 Future<String> applyWatermark(
     String imagePath, WatermarkSettings settings,
-    {String? address, int rotateDegrees = 0}) async {
+    {String? address, int rotateDegrees = 0, bool flipHorizontal = false}) async {
   if (!settings.enabled) return imagePath;
 
   try {
@@ -56,10 +81,11 @@ Future<String> applyWatermark(
         .where((b) => b.visible && _boxText(b, now, address).isNotEmpty)
         .toList();
     if (boxes.isEmpty) {
-      // 워터마크가 없어도 방향 보정은 필요.
-      return rotateDegrees % 360 == 0
+      // 워터마크가 없어도 방향 보정/좌우 반전은 필요.
+      return (rotateDegrees % 360 == 0 && !flipHorizontal)
           ? imagePath
-          : await rotateImageFile(imagePath, rotateDegrees);
+          : await rotateImageFile(imagePath, rotateDegrees,
+              flipHorizontal: flipHorizontal);
     }
 
     final tempDir = await getTemporaryDirectory();
@@ -75,7 +101,11 @@ Future<String> applyWatermark(
       quality: 95,
       rotate: rotateDegrees,
     );
-    final srcPath = rotated?.path ?? imagePath;
+    // 셀카 미러: 워터마크를 굽기 전 원본(방향 정규화된) 이미지에만 좌우 반전 적용.
+    // (워터마크를 반전 후 굽으므로 워터마크 글자는 뒤집히지 않는다.)
+    final srcPath = flipHorizontal
+        ? await _flipHorizontalFile(rotated?.path ?? imagePath)
+        : (rotated?.path ?? imagePath);
 
     // 이미지 로드
     final imageBytes = await File(srcPath).readAsBytes();

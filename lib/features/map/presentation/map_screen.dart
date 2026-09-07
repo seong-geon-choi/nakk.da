@@ -51,6 +51,10 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   final GlobalKey _mapStackKey = GlobalKey();
   int? _draggingPin;
   LatLng? _dragLatLng;
+  // 시간대 필터: 하루 중 [시작, 종료] 분(0~1440)에 해당하는 지점만 표시.
+  // null이면 필터 없음(전체 표시). _showTimeFilter로 상단 바를 접고 편다.
+  RangeValues? _timeFilter;
+  bool _showTimeFilter = false;
 
   @override
   void dispose() {
@@ -97,6 +101,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       _points = pts;
       _trackPoints = [];
       _selected = null;
+      _timeFilter = null; // 날짜 변경/새로고침 시 시간 필터 초기화
       if (resetToggles) {
         _showLines = false;
         _showTimes = false;
@@ -329,11 +334,12 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   // 메모와 찍은 좌표를 한 그룹으로 함께 분산해 서로 겹치지 않게 한다. 연결선은
   // 항상 실제 GPS 좌표로 그리므로(표시 위치와 무관), 궤적 왜곡 없이 마커만 벌린다.
   // 반환: (메모 배치 목록, 찍은 좌표 → 표시 위치 맵)
-  (List<_PlacedPoint>, Map<TrackPoint, LatLng>) _layoutMarkers() {
+  (List<_PlacedPoint>, Map<TrackPoint, LatLng>) _layoutMarkers(
+      List<_GpsPoint> points, List<TrackPoint> track) {
     final threshold = _thresholdDeg();
     final remaining = <_SpreadItem>[
-      for (final p in _points) _SpreadItem(lat: p.lat, lng: p.lng, memo: p),
-      for (final p in _trackPoints)
+      for (final p in points) _SpreadItem(lat: p.lat, lng: p.lng, memo: p),
+      for (final p in track)
         if (p.marked) _SpreadItem(lat: p.lat, lng: p.lng, marked: p),
     ];
     final memoOut = <_PlacedPoint>[];
@@ -379,14 +385,15 @@ class _MapScreenState extends ConsumerState<MapScreen> {
 
   // 자동 경로 점이 메모/찍은 좌표와 사실상 같은 지점이면 표시를 생략한다(메모 밑에
   // 숨김). 연결선은 실제 좌표로 그대로 통과하므로 궤적에는 영향 없다.
-  bool _routePointHidden(TrackPoint p, double threshold) {
-    for (final m in _points) {
+  bool _routePointHidden(TrackPoint p, double threshold,
+      List<_GpsPoint> points, List<TrackPoint> track) {
+    for (final m in points) {
       if ((m.lat - p.lat).abs() < threshold &&
           (m.lng - p.lng).abs() < threshold) {
         return true;
       }
     }
-    for (final m in _trackPoints) {
+    for (final m in track) {
       if (m.marked &&
           (m.lat - p.lat).abs() < threshold &&
           (m.lng - p.lng).abs() < threshold) {
@@ -394,6 +401,34 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       }
     }
     return false;
+  }
+
+  // 시간대 필터: ts의 시:분이 [start, end] 범위에 드는지. 필터 없으면 항상 true.
+  bool _passMinute(DateTime ts) {
+    final f = _timeFilter;
+    if (f == null) return true;
+    final m = ts.hour * 60 + ts.minute;
+    return m >= f.start && m <= f.end;
+  }
+
+  // 현재 날짜 데이터(메모+트랙)의 시:분 최소·최대(분 단위). 데이터가 없거나
+  // 한 시각뿐이면 null(필터 바를 띄우지 않음).
+  (double, double)? _dataMinuteRange() {
+    final mins = <int>[
+      for (final p in _points) p.timestamp.hour * 60 + p.timestamp.minute,
+      for (final p in _trackPoints) p.timestamp.hour * 60 + p.timestamp.minute,
+    ];
+    if (mins.isEmpty) return null;
+    final lo = mins.reduce(math.min).toDouble();
+    final hi = mins.reduce(math.max).toDouble();
+    if (hi <= lo) return null;
+    return (lo, hi);
+  }
+
+  static String _minToHm(double m) {
+    final t = m.round();
+    return '${(t ~/ 60).toString().padLeft(2, '0')}:'
+        '${(t % 60).toString().padLeft(2, '0')}';
   }
 
   // 지도 길게 누르기 → 출퇴근 알림 지점 추가(최대 3개)
@@ -570,23 +605,31 @@ class _MapScreenState extends ConsumerState<MapScreen> {
         .select((s) => s.valueOrNull?.commuteRadius ?? 200));
     final commuteActive = ref.watch(settingsProvider
         .select((s) => s.valueOrNull?.commuteAlarmActive ?? true));
-    final (placed, markedDisplay) = _layoutMarkers();
+    // 시간대 필터 적용된 지점 목록(렌더링 전반에서 이 목록을 사용).
+    final dataRange = _dataMinuteRange();
+    final fPoints = _timeFilter == null
+        ? _points
+        : _points.where((p) => _passMinute(p.timestamp)).toList();
+    final fTrack = _timeFilter == null
+        ? _trackPoints
+        : _trackPoints.where((p) => _passMinute(p.timestamp)).toList();
+    final (placed, markedDisplay) = _layoutMarkers(fPoints, fTrack);
     final markerThreshold = _thresholdDeg();
     final placedSorted = List<_PlacedPoint>.from(placed)
       ..sort((a, b) => a.point.timestamp.compareTo(b.point.timestamp));
     // 좌표 보기 연결 노드 수 = 메모 지점 + 사용자가 찍은 좌표
-    final markedCount = _trackPoints.where((p) => p.marked).length;
+    final markedCount = fTrack.where((p) => p.marked).length;
     final lineNodeCount = placed.length + markedCount;
     // 메모 타임스탬프를 파일명 날짜 + HH:mm 으로 재구성해 트래킹과 동일한 기준으로 비교
     DateTime memoFullTs(_PlacedPoint p) => DateTime(
           _loadedDate.year, _loadedDate.month, _loadedDate.day,
           p.point.timestamp.hour, p.point.timestamp.minute);
     final linePoints = () {
-      if (_showTrack && _trackPoints.isNotEmpty) {
+      if (_showTrack && fTrack.isNotEmpty) {
         final combined = <MapEntry<DateTime, LatLng>>[
           for (final p in placedSorted)
             MapEntry(memoFullTs(p), LatLng(p.point.lat, p.point.lng)),
-          for (final p in _trackPoints)
+          for (final p in fTrack)
             MapEntry(p.timestamp, LatLng(p.lat, p.lng)),
         ]..sort((a, b) => a.key.compareTo(b.key));
         return combined.map((e) => e.value).toList();
@@ -595,7 +638,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       final memoAndMarked = [
         for (final p in placedSorted)
           MapEntry(memoFullTs(p), LatLng(p.point.lat, p.point.lng)),
-        for (final p in _trackPoints)
+        for (final p in fTrack)
           if (p.marked) MapEntry(p.timestamp, LatLng(p.lat, p.lng)),
       ]..sort((a, b) => a.key.compareTo(b.key));
       return memoAndMarked.map((e) => e.value).toList();
@@ -693,11 +736,11 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               ],
               // 메모지점 연결(_showLines)이 켜지면 linePoints가 메모+트랙을
               // 시간순 단일 선으로 그리므로, 트랙 전용 선은 중복이라 생략한다.
-              if (_showTrack && !_showLines && _trackPoints.length >= 2)
+              if (_showTrack && !_showLines && fTrack.length >= 2)
                 PolylineLayer(
                   polylines: [
                     Polyline(
-                      points: _trackPoints
+                      points: fTrack
                           .map((p) => LatLng(p.lat, p.lng))
                           .toList(),
                       color: const Color(0xCCFF6D00),
@@ -707,11 +750,12 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 ),
               // 이동경로 좌표: 길게 누르면 삭제할 수 있게 마커로 렌더(투명한 큰
               // 히트 영역 안에 작은 점). 찍은 좌표는 아래에서 체크 표시로 렌더.
-              if ((_showTrack || _showTimes) && _trackPoints.isNotEmpty)
+              if ((_showTrack || _showTimes) && fTrack.isNotEmpty)
                 MarkerLayer(
                   markers: [
-                    for (final p in _trackPoints)
-                      if (!p.marked && !_routePointHidden(p, markerThreshold))
+                    for (final p in fTrack)
+                      if (!p.marked &&
+                          !_routePointHidden(p, markerThreshold, fPoints, fTrack))
                         Marker(
                           point: LatLng(p.lat, p.lng),
                           width: 24,
@@ -751,7 +795,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               if (markedCount > 0)
                 MarkerLayer(
                   markers: [
-                    for (final p in _trackPoints)
+                    for (final p in fTrack)
                       if (p.marked)
                         Marker(
                           point: markedDisplay[p] ?? LatLng(p.lat, p.lng),
@@ -886,9 +930,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     ),
                   )).toList(),
                 ),
-              if (_showTimes && _trackPoints.isNotEmpty)
+              if (_showTimes && fTrack.isNotEmpty)
                 MarkerLayer(
-                  markers: _trackPoints.map((tp) {
+                  markers: fTrack.map((tp) {
                     final h = tp.timestamp.hour.toString().padLeft(2, '0');
                     final m = tp.timestamp.minute.toString().padLeft(2, '0');
                     return Marker(
@@ -977,6 +1021,82 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                 ],
               ),
             ),
+          // 시간대 필터 바(상단): 하나의 RangeSlider로 시작·종료 시간 동시 설정.
+          if (_showTimeFilter && dataRange != null)
+            Positioned(
+              top: 8,
+              left: 8,
+              right: 56,
+              child: Material(
+                elevation: 3,
+                borderRadius: BorderRadius.circular(10),
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withValues(alpha: 0.95),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 6, 4),
+                  child: () {
+                    final lo = dataRange.$1;
+                    final hi = dataRange.$2;
+                    final cur = _timeFilter ?? RangeValues(lo, hi);
+                    final start = cur.start.clamp(lo, hi);
+                    final end = cur.end.clamp(lo, hi);
+                    final divisions = (hi - lo).round().clamp(1, 1440);
+                    return Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Row(
+                          children: [
+                            Text(
+                              '${_minToHm(start)} ~ ${_minToHm(end)}',
+                              style: const TextStyle(
+                                  fontSize: 13, fontWeight: FontWeight.w600),
+                            ),
+                            const Spacer(),
+                            if (_timeFilter != null)
+                              TextButton(
+                                onPressed: () =>
+                                    setState(() => _timeFilter = null),
+                                style: TextButton.styleFrom(
+                                  padding:
+                                      const EdgeInsets.symmetric(horizontal: 8),
+                                  minimumSize: const Size(0, 28),
+                                  tapTargetSize:
+                                      MaterialTapTargetSize.shrinkWrap,
+                                ),
+                                child: const Text('전체',
+                                    style: TextStyle(fontSize: 12)),
+                              ),
+                            GestureDetector(
+                              onTap: () =>
+                                  setState(() => _showTimeFilter = false),
+                              child: const Padding(
+                                padding: EdgeInsets.all(4),
+                                child: Icon(Icons.close, size: 16),
+                              ),
+                            ),
+                          ],
+                        ),
+                        SizedBox(
+                          height: 28,
+                          child: RangeSlider(
+                            min: lo,
+                            max: hi,
+                            divisions: divisions,
+                            values: RangeValues(start, end),
+                            labels: RangeLabels(
+                                _minToHm(start), _minToHm(end)),
+                            onChanged: (v) =>
+                                setState(() => _timeFilter = v),
+                          ),
+                        ),
+                      ],
+                    );
+                  }(),
+                ),
+              ),
+            ),
           // 우측 세로 툴바
           Positioned(
             top: 8,
@@ -1013,6 +1133,18 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                       _divider(),
                     ],
                     _toolBtn(Icons.my_location, null, _moveToCurrentLocation),
+                    _divider(),
+                    _toolBtn(
+                      Icons.filter_alt,
+                      dataRange != null
+                          ? (_showTimeFilter || _timeFilter != null
+                              ? Theme.of(context).colorScheme.primary
+                              : null)
+                          : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+                      dataRange != null
+                          ? () => setState(() => _showTimeFilter = !_showTimeFilter)
+                          : () => _showToastMessage('필터할 시간 정보가 없습니다'),
+                    ),
                     _divider(),
                     _toolBtn(
                       Icons.schedule,

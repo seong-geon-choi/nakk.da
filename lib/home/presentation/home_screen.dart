@@ -37,7 +37,7 @@ import '../../core/services/saf_service.dart';
 import '../../core/services/memo_share_service.dart';
 import '../../core/services/app_update_service.dart';
 import '../../core/widgets/app_toast.dart';
-import '../../core/widgets/check_mark.dart';
+// import '../../core/widgets/check_mark.dart'; // '좌표 찍기' 비활성화로 미사용
 import 'dart:io';
 import 'package:geolocator/geolocator.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -766,7 +766,7 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     with WidgetsBindingObserver {
   bool _isActive = false;
   int _trackCount = 0;
-  int _markCount = 0; // 오늘 사용자가 '좌표 찍기'로 남긴 지점 수
+  // int _markCount = 0; // '좌표 찍기' 지점 수 — 기능 비활성화로 주석 처리
   Timer? _flushTimer;
   double _right = 16;
   double _bottom = 172;
@@ -865,8 +865,8 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     if (mounted) {
       setState(() {
         _trackCount = dayFile?.trackPoints.length ?? 0;
-        _markCount =
-            dayFile?.trackPoints.where((p) => p.marked).length ?? 0;
+        // _markCount =
+        //     dayFile?.trackPoints.where((p) => p.marked).length ?? 0;
       });
     }
   }
@@ -936,64 +936,66 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     await _recordCurrentPointNow();
   }
 
+  /// 트랙 포인트 기록용 최신 GPS. 촬영/찍기 시점의 '현재' 위치를 새로 측정한다.
+  /// 새 fix(5초, high) → 마지막 known 위치 → 캐시된 위치 순으로 폴백.
+  /// locationProvider의 값은 앱 실행/마지막 갱신 시점 값이라, 이동 후 기록하면
+  /// 이전 장소가 저장되는 문제를 피하려고 새 측정을 우선한다.
+  Future<({double lat, double lng})?> _freshTrackGps() async {
+    try {
+      final pos = await Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          timeLimit: Duration(seconds: 5),
+        ),
+      );
+      return (lat: pos.latitude, lng: pos.longitude);
+    } catch (_) {}
+    try {
+      final pos = await Geolocator.getLastKnownPosition();
+      if (pos != null) return (lat: pos.latitude, lng: pos.longitude);
+    } catch (_) {}
+    final cached = ref.read(locationProvider.notifier).cached;
+    if (cached?.latitude != null) {
+      return (lat: cached!.latitude!, lng: cached.longitude!);
+    }
+    return null;
+  }
+
   Future<void> _recordCurrentPointNow() async {
     final settings = ref.read(settingsProvider).valueOrNull;
     if (settings == null || settings.savePath.isEmpty) return;
-    double? lat = ref.read(locationProvider).valueOrNull?.latitude;
-    double? lng = ref.read(locationProvider).valueOrNull?.longitude;
-    if (lat == null) {
-      final cached = ref.read(locationProvider.notifier).cached;
-      lat = cached?.latitude;
-      lng = cached?.longitude;
-    }
-    if (lat == null) {
-      try {
-        final pos = await Geolocator.getLastKnownPosition();
-        if (pos != null) { lat = pos.latitude; lng = pos.longitude; }
-      } catch (_) {}
-    }
-    if (lat == null || lng == null) return;
+    final gps = await _freshTrackGps();
+    if (gps == null) return;
     final now = DateTime.now();
     await ref.read(memoRepositoryProvider).appendTrackPoints(
       DateTime(now.year, now.month, now.day),
-      [TrackPoint(lat: lat, lng: lng, timestamp: now)],
+      [TrackPoint(lat: gps.lat, lng: gps.lng, timestamp: now)],
       settings.savePath,
     );
     await _refreshCount();
   }
 
-  /// '좌표 찍기': 현재 위치를 사용자가 찍은 지점(marked)으로 기록한다.
-  /// 이동 경로 점과 같은 트랙 주석으로 저장되어 경로/좌표 연결선에 함께 포함되고,
-  /// 지도에서는 체크 표시로 구별해 렌더된다.
-  Future<void> _onMarkTap() async {
-    final settings = ref.read(settingsProvider).valueOrNull;
-    if (settings == null || settings.savePath.isEmpty) return;
-    double? lat = ref.read(locationProvider).valueOrNull?.latitude;
-    double? lng = ref.read(locationProvider).valueOrNull?.longitude;
-    if (lat == null) {
-      final cached = ref.read(locationProvider.notifier).cached;
-      lat = cached?.latitude;
-      lng = cached?.longitude;
-    }
-    if (lat == null) {
-      try {
-        final pos = await Geolocator.getLastKnownPosition();
-        if (pos != null) { lat = pos.latitude; lng = pos.longitude; }
-      } catch (_) {}
-    }
-    if (lat == null || lng == null) {
-      if (mounted) showAppToast(context, '현재 위치를 확인할 수 없습니다');
-      return;
-    }
-    final now = DateTime.now();
-    await ref.read(memoRepositoryProvider).appendTrackPoints(
-      DateTime(now.year, now.month, now.day),
-      [TrackPoint(lat: lat, lng: lng, timestamp: now, marked: true)],
-      settings.savePath,
-    );
-    await _refreshCount();
-    if (mounted) showAppToast(context, '좌표를 찍었습니다');
-  }
+  // '좌표 찍기' 기능 비활성화(추후 '메모 추가'로 대체 예정) — 주석 처리.
+  // /// '좌표 찍기': 현재 위치를 사용자가 찍은 지점(marked)으로 기록한다.
+  // /// 이동 경로 점과 같은 트랙 주석으로 저장되어 경로/좌표 연결선에 함께 포함되고,
+  // /// 지도에서는 체크 표시로 구별해 렌더된다.
+  // Future<void> _onMarkTap() async {
+  //   final settings = ref.read(settingsProvider).valueOrNull;
+  //   if (settings == null || settings.savePath.isEmpty) return;
+  //   final gps = await _freshTrackGps();
+  //   if (gps == null) {
+  //     if (mounted) showAppToast(context, '현재 위치를 확인할 수 없습니다');
+  //     return;
+  //   }
+  //   final now = DateTime.now();
+  //   await ref.read(memoRepositoryProvider).appendTrackPoints(
+  //     DateTime(now.year, now.month, now.day),
+  //     [TrackPoint(lat: gps.lat, lng: gps.lng, timestamp: now, marked: true)],
+  //     settings.savePath,
+  //   );
+  //   await _refreshCount();
+  //   if (mounted) showAppToast(context, '좌표를 찍었습니다');
+  // }
 
   @override
   Widget build(BuildContext context) {
@@ -1005,11 +1007,13 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          // 경로 기록 활성 시에만 그 위쪽에 '좌표 찍기' 버튼 노출
-          if (_isActive) ...[
-            _buildMarkButton(context),
-            const SizedBox(height: 10),
-          ],
+          // '좌표 찍기' 버튼: 별도 메모 없이는 용도를 알기 어려워 비활성화(주석).
+          // 추후 '메모 추가'로 대체 예정. 관련 구현(_buildMarkButton/_onMarkTap/
+          // _markCount)도 아래에서 함께 주석 처리해 사용되는 곳이 없도록 한다.
+          // if (_isActive) ...[
+          //   _buildMarkButton(context),
+          //   const SizedBox(height: 10),
+          // ],
           GestureDetector(
             onTap: _onTap,
             onPanUpdate: (details) {
@@ -1083,50 +1087,51 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     );
   }
 
-  /// 경로 기록 중 현재 위치를 좌표로 찍는 버튼(경로 기록 버튼 위에 배치).
-  Widget _buildMarkButton(BuildContext context) {
-    return GestureDetector(
-      onTap: _onMarkTap,
-      child: Container(
-        width: 60,
-        height: 60,
-        decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          gradient: LinearGradient(
-            begin: Alignment.topCenter,
-            end: Alignment.bottomCenter,
-            colors: [
-              Color.alphaBlend(const Color(0x70FFFFFF), Colors.deepPurple.shade400),
-              Color.alphaBlend(const Color(0x55000000), Colors.deepPurple.shade400),
-            ],
-          ),
-          boxShadow: const [
-            BoxShadow(blurRadius: 2, offset: Offset(0, 4), color: Color(0x99000000)),
-            BoxShadow(blurRadius: 12, offset: Offset(0, 8), color: Color(0x44000000)),
-          ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const CheckMark(size: 22, strokeWidth: 3.2),
-            const Text(
-              '좌표 찍기',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 9,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            if (_markCount > 0)
-              Text(
-                '$_markCount',
-                style: const TextStyle(color: Colors.white70, fontSize: 8),
-              ),
-          ],
-        ),
-      ),
-    );
-  }
+  // '좌표 찍기' 버튼 위젯 — 기능 비활성화로 주석 처리(추후 '메모 추가'로 대체 예정).
+  // /// 경로 기록 중 현재 위치를 좌표로 찍는 버튼(경로 기록 버튼 위에 배치).
+  // Widget _buildMarkButton(BuildContext context) {
+  //   return GestureDetector(
+  //     onTap: _onMarkTap,
+  //     child: Container(
+  //       width: 60,
+  //       height: 60,
+  //       decoration: BoxDecoration(
+  //         shape: BoxShape.circle,
+  //         gradient: LinearGradient(
+  //           begin: Alignment.topCenter,
+  //           end: Alignment.bottomCenter,
+  //           colors: [
+  //             Color.alphaBlend(const Color(0x70FFFFFF), Colors.deepPurple.shade400),
+  //             Color.alphaBlend(const Color(0x55000000), Colors.deepPurple.shade400),
+  //           ],
+  //         ),
+  //         boxShadow: const [
+  //           BoxShadow(blurRadius: 2, offset: Offset(0, 4), color: Color(0x99000000)),
+  //           BoxShadow(blurRadius: 12, offset: Offset(0, 8), color: Color(0x44000000)),
+  //         ],
+  //       ),
+  //       child: Column(
+  //         mainAxisAlignment: MainAxisAlignment.center,
+  //         children: [
+  //           const CheckMark(size: 22, strokeWidth: 3.2),
+  //           const Text(
+  //             '좌표 찍기',
+  //             style: TextStyle(
+  //               color: Colors.white,
+  //               fontSize: 9,
+  //               fontWeight: FontWeight.w600,
+  //             ),
+  //           ),
+  //           if (_markCount > 0)
+  //             Text(
+  //               '$_markCount',
+  //               style: const TextStyle(color: Colors.white70, fontSize: 8),
+  //             ),
+  //         ],
+  //       ),
+  //     ),
+  //   );
+  // }
 }
 
 // ── 파일 목록에서 특정 날짜 파일을 홈 화면처럼 편집하는 화면 ─────
