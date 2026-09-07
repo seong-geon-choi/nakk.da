@@ -201,17 +201,17 @@ class MemoInputSheet extends ConsumerStatefulWidget {
       length = arResult.distanceCm;
     } else if (source == PhotoSource.camera) {
       final camResult = await Navigator.of(context)
-          .push<({String path, bool isVideo})>(
+          .push<({String path, bool isVideo, ({double lat, double lng})? gps})>(
         MaterialPageRoute(builder: (_) => const CameraRulerScreen()),
       );
       if (camResult == null || !context.mounted) return null;
 
+      // GPS는 카메라가 프리뷰 동안 미리 받아둔 값 사용(촬영 시 대기 없음).
+      gps = camResult.gps;
       if (camResult.isVideo) {
         // 카메라 동영상: _saveVideo()가 이미 앱 스토리지에 저장했으므로 경로 그대로 사용
         isVideo = true;
         path = camResult.path;
-        // GPS는 촬영 시점의 '현재' 위치를 새로 측정.
-        gps = await _freshGps(ref);
       } else {
         // 카메라 사진: 기존 플로우
         exifSourcePath = camResult.path;

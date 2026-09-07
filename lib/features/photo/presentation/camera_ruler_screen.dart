@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -31,6 +32,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   double _currentZoom = 1.0;
   double _baseZoom = 1.0;
   bool _useFrontCamera = false; // 셀카(전면 카메라) 사용 여부
+  bool _mirrorSelfie = true; // 전면 촬영 시 좌우 반전(미러) 저장 여부(사용자 토글)
   // 한 손가락 가로 스와이프로 사진/동영상 모드 전환을 판정하기 위한 누적값.
   // 핀치 줌과의 제스처 충돌을 없애려고 가로 드래그 대신 scale 콜백에서 처리한다.
   double _scaleSwipeDx = 0;
@@ -56,6 +58,10 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   Future<String?>? _wmAddressFuture;
   String? _wmAddress; // 조회 완료된 주소(미리보기에 실시간 반영)
 
+  // 촬영 위치 GPS를 프리뷰 동안 미리 받아둔다(촬영 시 getCurrentPosition 5초 대기 제거).
+  Future<({double lat, double lng})?>? _gpsFuture;
+  ({double lat, double lng})? _prefetchedGps;
+
   @override
   void initState() {
     super.initState();
@@ -66,7 +72,40 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       samplingPeriod: const Duration(milliseconds: 200),
     ).listen(_onAccel);
     _prefetchWmAddress();
+    _prefetchGps();
     _loadPrefsAndInit();
+  }
+
+  /// 프리뷰 동안 GPS를 미리 확보. 마지막 known 위치를 즉시 임시값으로 두고,
+  /// 동시에 새 fix를 받아 더 정확한 값으로 교체한다. 촬영 시엔 이 값을 바로 사용한다.
+  void _prefetchGps() {
+    Geolocator.getLastKnownPosition().then((p) {
+      if (p != null && _prefetchedGps == null) {
+        _prefetchedGps = (lat: p.latitude, lng: p.longitude);
+      }
+    }).catchError((_) {});
+    _gpsFuture = Geolocator.getCurrentPosition(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        timeLimit: Duration(seconds: 8),
+      ),
+    ).then<({double lat, double lng})?>((pos) {
+      final g = (lat: pos.latitude, lng: pos.longitude);
+      _prefetchedGps = g;
+      return g;
+    }).catchError((_) => _prefetchedGps);
+  }
+
+  /// 촬영 시점 GPS: 미리 받아둔 값 우선, 없으면 진행 중 fix를 짧게(≤1.5초)만 기다린다.
+  Future<({double lat, double lng})?> _captureGps() async {
+    if (_prefetchedGps != null) return _prefetchedGps;
+    final f = _gpsFuture;
+    if (f == null) return null;
+    try {
+      return await f.timeout(const Duration(milliseconds: 1500));
+    } catch (_) {
+      return _prefetchedGps;
+    }
   }
 
   /// 워터마크에 주소 박스가 켜져 있으면 화면 진입 시 미리 주소를 조회해둔다.
@@ -111,6 +150,30 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
         turns: _uiQuarterTurns / 4,
         duration: const Duration(milliseconds: 250),
         child: child,
+      );
+
+  /// 우측 메뉴용 원형 아이콘 토글 버튼(워터마크·좌우 반전 공용)
+  Widget _circleIconBtn({
+    required IconData icon,
+    required bool active,
+    required VoidCallback onTap,
+  }) =>
+      GestureDetector(
+        onTap: onTap,
+        child: Container(
+          width: 48,
+          height: 48,
+          padding: const EdgeInsets.all(10),
+          decoration: const BoxDecoration(
+            color: Color(0x99000000),
+            shape: BoxShape.circle,
+          ),
+          child: _rot(Icon(
+            icon,
+            color:
+                active ? const Color(0xFF40C4FF) : const Color(0x80FFFFFF),
+          )),
+        ),
       );
 
   Future<void> _loadPrefsAndInit() async {
@@ -215,13 +278,18 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
           await ctrl.initialize();
           _minZoom = await ctrl.getMinZoomLevel();
           _maxZoom = await ctrl.getMaxZoomLevel();
+          // 기본 배율은 1.0x(울트라와이드 0.6x가 아닌 표준 화각). 지원 범위로 제한.
+          final initialZoom = 1.0.clamp(_minZoom, _maxZoom).toDouble();
+          try {
+            await ctrl.setZoomLevel(initialZoom);
+          } catch (_) {}
           if (!mounted) {
             ctrl.dispose();
             return;
           }
           setState(() {
             _ctrl = ctrl;
-            _currentZoom = _minZoom;
+            _currentZoom = initialZoom;
             _error = null;
             _permissionDenied = false;
           });
@@ -319,8 +387,8 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       }
       // 세로로 저장된 캡처를 실제 기기 방향으로 회전. 워터마크 경로는
       // applyWatermark 내부 재인코딩 단계에서 함께 회전해 추가 비용이 없다.
-      // 전면(셀카) 촬영은 프리뷰와 좌우가 맞도록 미러(좌우 반전) 저장.
-      final mirror = _useFrontCamera;
+      // 전면(셀카) 촬영 시 사용자가 켠 경우에만 좌우 반전(미러) 저장.
+      final mirror = _useFrontCamera && _mirrorSelfie;
       final photoPath = (bakeWm != null && bakeWm.enabled)
           ? await applyWatermark(file.path, bakeWm,
               address: wmAddress, rotateDegrees: rotateDeg, flipHorizontal: mirror)
@@ -328,9 +396,11 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               ? await rotateImageFile(file.path, rotateDeg, flipHorizontal: mirror)
               : file.path);
 
+      final gps = await _captureGps();
       if (!mounted) return;
-      Navigator.of(context).pop<({String path, bool isVideo})>(
-        (path: photoPath, isVideo: false),
+      Navigator.of(context)
+          .pop<({String path, bool isVideo, ({double lat, double lng})? gps})>(
+        (path: photoPath, isVideo: false, gps: gps),
       );
     } finally {
       if (mounted) setState(() => _capturing = false);
@@ -373,9 +443,11 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       if (mounted) setState(() => _isRecording = false);
       if (!mounted) return;
       final savedPath = await _saveVideo(file.path);
+      final gps = await _captureGps();
       if (!mounted) return;
-      Navigator.of(context).pop<({String path, bool isVideo})>(
-        (path: savedPath ?? file.path, isVideo: true),
+      Navigator.of(context)
+          .pop<({String path, bool isVideo, ({double lat, double lng})? gps})>(
+        (path: savedPath ?? file.path, isVideo: true, gps: gps),
       );
     } catch (e) {
       if (mounted) {
@@ -437,6 +509,10 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     final wm = ref.watch(settingsProvider).valueOrNull?.watermark;
     final wmEnabled = wm?.enabled ?? false;
 
+    // 전면 프리뷰는 플러그인이 기본 미러로 표시한다. 반전 OFF면 프리뷰를 역으로
+    // 뒤집어 미러를 해제해, 저장 이미지(반전 OFF=미러 안 함)와 화면을 일치시킨다.
+    final previewFlipX = _useFrontCamera && !_mirrorSelfie;
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -446,8 +522,10 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
             onTapDown: (d) async {
               final size = context.size;
               if (size == null) return;
-              final x = (d.localPosition.dx / size.width).clamp(0.0, 1.0);
+              var x = (d.localPosition.dx / size.width).clamp(0.0, 1.0);
               final y = (d.localPosition.dy / size.height).clamp(0.0, 1.0);
+              // 프리뷰를 뒤집어 보여줄 땐 포커스 x도 뒤집어 실제 지점에 맞춘다.
+              if (previewFlipX) x = 1.0 - x;
               try {
                 await _ctrl?.setFocusPoint(Offset(x, y));
                 await _ctrl?.setExposurePoint(Offset(x, y));
@@ -494,7 +572,9 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                 _switchMode(false);
               }
             },
-            child: CameraPreview(ctrl),
+            child: previewFlipX
+                ? Transform.flip(flipX: true, child: CameraPreview(ctrl))
+                : CameraPreview(ctrl),
           ),
           // 워터마크 프리뷰 (사진 모드에서만) — 드래그로 위치 이동 가능
           if (!_isVideoMode && wmEnabled && wm != null)
@@ -576,8 +656,8 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               ),
             ),
           ),
-          // 우측 중앙: 워터마크 토글 (AR 카메라와 동일한 아이콘/위치)
-          if (!_isVideoMode && wm != null)
+          // 우측 중앙 메뉴: (셀카일 때) 좌우 반전 토글 + 워터마크 토글
+          if (!_isVideoMode && (_useFrontCamera || wm != null))
             Positioned(
               top: 0,
               bottom: 0,
@@ -585,29 +665,35 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               child: SafeArea(
                 child: Align(
                   alignment: Alignment.centerRight,
-                  child: GestureDetector(
-                    onTap: () {
-                      final next = !wmEnabled;
-                      ref
-                          .read(settingsProvider.notifier)
-                          .updateWatermark(wm.copyWith(enabled: next));
-                      _showToast(next ? '워터마크 ON' : '워터마크 OFF');
-                    },
-                    child: Container(
-                      width: 48,
-                      height: 48,
-                      padding: const EdgeInsets.all(10),
-                      decoration: const BoxDecoration(
-                        color: Color(0x99000000),
-                        shape: BoxShape.circle,
-                      ),
-                      child: _rot(Icon(
-                        Icons.water_drop,
-                        color: wmEnabled
-                            ? const Color(0xFF40C4FF)
-                            : const Color(0x80FFFFFF),
-                      )),
-                    ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      // 전면(셀카)일 때만: 좌우 반전(미러) 저장 토글
+                      if (_useFrontCamera)
+                        _circleIconBtn(
+                          icon: Icons.flip,
+                          active: _mirrorSelfie,
+                          onTap: () {
+                            setState(() => _mirrorSelfie = !_mirrorSelfie);
+                            _showToast(
+                                _mirrorSelfie ? '좌우 반전 ON' : '좌우 반전 OFF');
+                          },
+                        ),
+                      if (_useFrontCamera && wm != null)
+                        const SizedBox(height: 12),
+                      if (wm != null)
+                        _circleIconBtn(
+                          icon: Icons.water_drop,
+                          active: wmEnabled,
+                          onTap: () {
+                            final next = !wmEnabled;
+                            ref
+                                .read(settingsProvider.notifier)
+                                .updateWatermark(wm.copyWith(enabled: next));
+                            _showToast(next ? '워터마크 ON' : '워터마크 OFF');
+                          },
+                        ),
+                    ],
                   ),
                 ),
               ),

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -326,61 +327,39 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
   }
 
-  // 화면 픽셀 → 위경도 변환
-  double _pixelsToDeg(double pixels) =>
-      pixels * 360.0 / (256.0 * math.pow(2.0, _zoom));
-
-  // 겹치는 마커(메모 지점 + 사용자가 찍은 좌표)를 중심점 주변에 원형으로 분산 배치.
-  // 메모와 찍은 좌표를 한 그룹으로 함께 분산해 서로 겹치지 않게 한다. 연결선은
-  // 항상 실제 GPS 좌표로 그리므로(표시 위치와 무관), 궤적 왜곡 없이 마커만 벌린다.
-  // 반환: (메모 배치 목록, 찍은 좌표 → 표시 위치 맵)
-  (List<_PlacedPoint>, Map<TrackPoint, LatLng>) _layoutMarkers(
-      List<_GpsPoint> points, List<TrackPoint> track) {
-    final threshold = _thresholdDeg();
-    final remaining = <_SpreadItem>[
-      for (final p in points) _SpreadItem(lat: p.lat, lng: p.lng, memo: p),
-      for (final p in track)
-        if (p.marked) _SpreadItem(lat: p.lat, lng: p.lng, marked: p),
+  // 메모 지점을 '화면 픽셀' 기준으로 클러스터링. 가까운(≈34px 이내) 지점들을 한
+  // 묶음으로 통합해, 축소 시 겹쳐 뭉치며 흰 테두리만 남는 문제를 막는다. 각 묶음은
+  // 원본 _GpsPoint 목록(단독이면 1개). 연결선·이동경로는 실제 좌표로 그리므로 이
+  // 통합과 무관하게 그대로 유지된다. 줌이 바뀌면(기존 리빌드) 다시 계산된다.
+  List<List<_GpsPoint>> _clusterMemoPoints(List<_GpsPoint> pts) {
+    if (pts.isEmpty) return const [];
+    final MapCamera cam;
+    try {
+      cam = _mapController.camera;
+    } catch (_) {
+      return [for (final p in pts) [p]]; // 카메라 미준비: 개별 표시
+    }
+    const clusterPx = 34.0;
+    final sp = [
+      for (final p in pts) cam.latLngToScreenPoint(LatLng(p.lat, p.lng))
     ];
-    final memoOut = <_PlacedPoint>[];
-    final markedOut = <TrackPoint, LatLng>{};
-
-    void emit(_SpreadItem it, double lat, double lng) {
-      if (it.memo != null) {
-        memoOut.add(_PlacedPoint(it.memo!, lat, lng));
-      } else if (it.marked != null) {
-        markedOut[it.marked!] = LatLng(lat, lng);
-      }
-    }
-
-    while (remaining.isNotEmpty) {
-      final pivot = remaining.removeAt(0);
-      final group = <_SpreadItem>[pivot];
-      remaining.removeWhere((p) {
-        if ((p.lat - pivot.lat).abs() < threshold &&
-            (p.lng - pivot.lng).abs() < threshold) {
-          group.add(p);
-          return true;
-        }
-        return false;
-      });
-
-      if (group.length == 1) {
-        emit(group.first, group.first.lat, group.first.lng);
-      } else {
-        final centerLat =
-            group.map((p) => p.lat).reduce((a, b) => a + b) / group.length;
-        final centerLng =
-            group.map((p) => p.lng).reduce((a, b) => a + b) / group.length;
-        final radius = _pixelsToDeg(9.8 / math.sin(math.pi / group.length));
-        for (int i = 0; i < group.length; i++) {
-          final angle = (2 * math.pi * i) / group.length - math.pi / 2;
-          emit(group[i], centerLat + radius * math.sin(angle),
-              centerLng + radius * math.cos(angle));
+    final used = List<bool>.filled(pts.length, false);
+    final clusters = <List<_GpsPoint>>[];
+    for (var i = 0; i < pts.length; i++) {
+      if (used[i]) continue;
+      used[i] = true;
+      final group = <_GpsPoint>[pts[i]];
+      for (var j = i + 1; j < pts.length; j++) {
+        if (used[j]) continue;
+        final dx = sp[j].x - sp[i].x, dy = sp[j].y - sp[i].y;
+        if (dx * dx + dy * dy <= clusterPx * clusterPx) {
+          used[j] = true;
+          group.add(pts[j]);
         }
       }
+      clusters.add(group);
     }
-    return (memoOut, markedOut);
+    return clusters;
   }
 
   // 자동 경로 점이 메모/찍은 좌표와 사실상 같은 지점이면 표시를 생략한다(메모 밑에
@@ -401,6 +380,186 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       }
     }
     return false;
+  }
+
+  // 연결선 진행 방향 화살표: 선을 '화면 픽셀' 기준 균일 간격(≈64px)으로 걸으며
+  // 다음 지점 방향으로 회전한 화살촉을 놓는다. 픽셀 기준이라 확대/축소해도 화면상
+  // 밀도가 일정해 지저분해지지 않는다. 너무 축소돼 경로가 짧게 뭉치면 생략.
+  List<Marker> _directionArrows(List<LatLng> pts) {
+    if (pts.length < 2) return const [];
+    // 첫 프레임 등 카메라 미준비 시 예외가 날 수 있어 방어(다음 리빌드에 표시됨).
+    final MapCamera cam;
+    try {
+      cam = _mapController.camera;
+    } catch (_) {
+      return const [];
+    }
+    final sp = [for (final p in pts) cam.latLngToScreenPoint(p)];
+    const spacing = 64.0;
+    double total = 0;
+    for (var i = 0; i < sp.length - 1; i++) {
+      final dx = sp[i + 1].x - sp[i].x, dy = sp[i + 1].y - sp[i].y;
+      total += math.sqrt(dx * dx + dy * dy);
+    }
+    if (total < 90) return const []; // 과도한 축소: 화살표 숨김
+    final markers = <Marker>[];
+    double acc = spacing * 0.5;
+    for (var i = 0; i < sp.length - 1; i++) {
+      final ax = sp[i].x, ay = sp[i].y;
+      final dx = sp[i + 1].x - ax, dy = sp[i + 1].y - ay;
+      final len = math.sqrt(dx * dx + dy * dy);
+      if (len < 0.5) continue;
+      final ang = math.atan2(dy, dx);
+      var d = acc;
+      while (d <= len) {
+        final t = d / len;
+        final ll = cam.pointToLatLng(math.Point(ax + dx * t, ay + dy * t));
+        markers.add(Marker(
+          point: ll,
+          width: 16,
+          height: 16,
+          child: Center(
+            child: Transform.rotate(
+              angle: ang,
+              child: const CustomPaint(
+                size: Size(9, 9),
+                painter: _DirectionArrowPainter(),
+              ),
+            ),
+          ),
+        ));
+        d += spacing;
+      }
+      acc = d - len;
+    }
+    return markers;
+  }
+
+  // 단독 메모 지점 마커(번호). 탭하면 팝업 선택.
+  Marker _memoMarker(_GpsPoint pt) {
+    final idx = _points.indexOf(pt);
+    final isSelected = _selected == pt;
+    return Marker(
+      point: LatLng(pt.lat, pt.lng),
+      width: isSelected ? 34 : 24,
+      height: isSelected ? 34 : 24,
+      child: GestureDetector(
+        onTap: () => setState(() => _selected = pt),
+        child: Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: pt.isMemo ? Colors.blue.shade700 : Colors.teal.shade600,
+            border: Border.all(
+              color: isSelected ? Colors.orange : Colors.white,
+              width: isSelected ? 3 : 2,
+            ),
+            boxShadow: const [
+              BoxShadow(blurRadius: 4, color: Color(0x55000000)),
+            ],
+          ),
+          child: Center(
+            child: Text('${idx + 1}',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: isSelected ? 11 : 9,
+                    fontWeight: FontWeight.bold)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // 통합 묶음(클러스터) 마커: 개수 표시. 탭하면 목록 시트.
+  Marker _clusterMarker(List<_GpsPoint> group) {
+    final lat = group.map((p) => p.lat).reduce((a, b) => a + b) / group.length;
+    final lng = group.map((p) => p.lng).reduce((a, b) => a + b) / group.length;
+    return Marker(
+      point: LatLng(lat, lng),
+      width: 36,
+      height: 36,
+      child: GestureDetector(
+        onTap: () => _showClusterSheet(group),
+        child: Container(
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            color: Colors.blue.shade800,
+            border: Border.all(color: Colors.white, width: 2.5),
+            boxShadow: const [
+              BoxShadow(blurRadius: 5, color: Color(0x66000000)),
+            ],
+          ),
+          child: Center(
+            child: Text('${group.length}',
+                style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold)),
+          ),
+        ),
+      ),
+    );
+  }
+
+  // 클러스터에 묶인 지점들의 목록 시트. 항목을 누르면 그 지점으로 이동·확대하고 선택.
+  void _showClusterSheet(List<_GpsPoint> group) {
+    final sorted = List<_GpsPoint>.from(group)
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+              child: Text('이 위치의 지점 ${sorted.length}개',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 15)),
+            ),
+            Flexible(
+              child: ListView.builder(
+                shrinkWrap: true,
+                itemCount: sorted.length,
+                itemBuilder: (_, i) {
+                  final p = sorted[i];
+                  final n = _points.indexOf(p) + 1;
+                  final sub = (p.text != null && p.text!.trim().isNotEmpty)
+                      ? p.text!.trim()
+                      : (p.address ??
+                          (p.photoPath != null
+                              ? '사진'
+                              : (p.videoPath != null ? '동영상' : '위치')));
+                  return ListTile(
+                    dense: true,
+                    leading: CircleAvatar(
+                      radius: 13,
+                      backgroundColor: p.isMemo
+                          ? Colors.blue.shade700
+                          : Colors.teal.shade600,
+                      child: Text('$n',
+                          style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 11,
+                              fontWeight: FontWeight.bold)),
+                    ),
+                    title: Text('${p.timeLabel}  $sub',
+                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      setState(() => _selected = p);
+                      _mapController.move(
+                          LatLng(p.lat, p.lng), math.max(_zoom, 16.0));
+                    },
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
   }
 
   // 시간대 필터: ts의 시:분이 [start, end] 범위에 드는지. 필터 없으면 항상 true.
@@ -429,6 +588,34 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final t = m.round();
     return '${(t ~/ 60).toString().padLeft(2, '0')}:'
         '${(t % 60).toString().padLeft(2, '0')}';
+  }
+
+  // 시간대 필터의 시작/종료 시각을 수동 입력(시간 선택기)으로 지정. 선택값은 데이터
+  // 구간[lo,hi]으로 제한하고 시작<=종료를 유지한다. 슬라이더는 _timeFilter를 그대로
+  // 반영하므로 위치도 자동으로 맞춰진다.
+  Future<void> _pickFilterTime(bool isStart, double lo, double hi) async {
+    final cur = _timeFilter ?? RangeValues(lo, hi);
+    final base = (isStart ? cur.start : cur.end).round();
+    final picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay(hour: base ~/ 60, minute: base % 60),
+      initialEntryMode: TimePickerEntryMode.input, // 키보드 수동 입력 우선
+      builder: (ctx, child) => MediaQuery(
+        data: MediaQuery.of(ctx).copyWith(alwaysUse24HourFormat: true),
+        child: child!,
+      ),
+    );
+    if (picked == null || !mounted) return;
+    final m = (picked.hour * 60 + picked.minute).toDouble().clamp(lo, hi);
+    var start = cur.start, end = cur.end;
+    if (isStart) {
+      start = m;
+      if (start > end) end = start;
+    } else {
+      end = m;
+      if (end < start) start = end;
+    }
+    setState(() => _timeFilter = RangeValues(start, end));
   }
 
   // 지도 길게 누르기 → 출퇴근 알림 지점 추가(최대 3개)
@@ -555,6 +742,36 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     _showToastMessage('$label 저장 시각 $hh:$mm:$ss');
   }
 
+  /// 경로 표시 중, 탭 위치에서 화면상 가장 가까운 이동지점의 시각을 토스트로 표시.
+  /// 확대하지 않아 점이 안 보이는 상태에서도 경로 선을 눌러 시간을 확인할 수 있다.
+  /// 가까운 지점이 있어 표시했으면 true.
+  bool _showNearestTrackTime(LatLng tapped, List<TrackPoint> track) {
+    if (track.isEmpty || !_showTrack) return false;
+    final MapCamera cam;
+    try {
+      cam = _mapController.camera;
+    } catch (_) {
+      return false;
+    }
+    final tapSp = cam.latLngToScreenPoint(tapped);
+    double best = double.infinity;
+    TrackPoint? nearest;
+    for (final p in track) {
+      final sp = cam.latLngToScreenPoint(LatLng(p.lat, p.lng));
+      final dx = sp.x - tapSp.x, dy = sp.y - tapSp.y;
+      final d2 = dx * dx + dy * dy;
+      if (d2 < best) {
+        best = d2;
+        nearest = p;
+      }
+    }
+    if (nearest != null && best <= 44 * 44) {
+      _showTrackTime(nearest);
+      return true;
+    }
+    return false;
+  }
+
   /// 이동경로/찍은 좌표를 길게 누르면 삭제 여부를 확인하고 MD 파일에서 제거한다.
   Future<void> _confirmDeleteTrackPoint(TrackPoint p) async {
     final label = p.marked ? '찍은 좌표' : '이동경로 좌표';
@@ -613,7 +830,9 @@ class _MapScreenState extends ConsumerState<MapScreen> {
     final fTrack = _timeFilter == null
         ? _trackPoints
         : _trackPoints.where((p) => _passMinute(p.timestamp)).toList();
-    final (placed, markedDisplay) = _layoutMarkers(fPoints, fTrack);
+    // 라인·거리용 메모 배치는 실제 좌표 그대로(분산 없음). 마커 표시는 클러스터로.
+    final placed = [for (final p in fPoints) _PlacedPoint(p, p.lat, p.lng)];
+    final memoClusters = _clusterMemoPoints(fPoints);
     final markerThreshold = _thresholdDeg();
     final placedSorted = List<_PlacedPoint>.from(placed)
       ..sort((a, b) => a.point.timestamp.compareTo(b.point.timestamp));
@@ -680,7 +899,12 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                       LatLng(widget.targetLat!, widget.targetLng!), 16);
                 }
               },
-              onTap: (_, _) => setState(() => _selected = null),
+              onTap: (_, latlng) {
+                // 경로 표시 중이면 탭 위치에서 가장 가까운 이동지점의 시각을 토스트로.
+                if (!_showNearestTrackTime(latlng, fTrack)) {
+                  setState(() => _selected = null);
+                }
+              },
               onLongPress: (_, latlng) => _onMapLongPress(latlng),
               onPositionChanged: (camera, hasGesture) {
                 if ((camera.zoom - _zoom).abs() >= 0.5) {
@@ -736,21 +960,41 @@ class _MapScreenState extends ConsumerState<MapScreen> {
               ],
               // 메모지점 연결(_showLines)이 켜지면 linePoints가 메모+트랙을
               // 시간순 단일 선으로 그리므로, 트랙 전용 선은 중복이라 생략한다.
-              if (_showTrack && !_showLines && fTrack.length >= 2)
+              if (_showTrack && !_showLines && fTrack.length >= 2) ...[
                 PolylineLayer(
                   polylines: [
                     Polyline(
                       points: fTrack
                           .map((p) => LatLng(p.lat, p.lng))
                           .toList(),
-                      color: const Color(0xCCFF6D00),
-                      strokeWidth: 2.0,
+                      color: const Color(0xFFFF6D00),
+                      strokeWidth: 6.0,
                     ),
                   ],
                 ),
+                // 진행 방향 화살표(선 안, 화면 픽셀 균일 간격)
+                MarkerLayer(
+                  markers: _directionArrows(
+                      fTrack.map((p) => LatLng(p.lat, p.lng)).toList()),
+                ),
+              ],
+              if (_showLines && linePoints.length >= 2) ...[
+                PolylineLayer(
+                  polylines: [
+                    Polyline(
+                      points: linePoints,
+                      color: const Color(0xFFFF6D00),
+                      strokeWidth: 6.0,
+                    ),
+                  ],
+                ),
+                // 진행 방향 화살표(선 안, 화면 픽셀 균일 간격)
+                MarkerLayer(markers: _directionArrows(linePoints)),
+              ],
               // 이동경로 좌표: 길게 누르면 삭제할 수 있게 마커로 렌더(투명한 큰
-              // 히트 영역 안에 작은 점). 찍은 좌표는 아래에서 체크 표시로 렌더.
-              if ((_showTrack || _showTimes) && fTrack.isNotEmpty)
+              // 히트 영역 안에 작은 점). 겹칠 때 선 모양이 흐트러지지 않도록 충분히
+              // 확대(줌 ≥ 15)했을 때만 표시하고, 축소 상태에선 선만 깔끔히 보인다.
+              if ((_showTrack || _showTimes) && fTrack.isNotEmpty && _zoom >= 15.0)
                 MarkerLayer(
                   markers: [
                     for (final p in fTrack)
@@ -780,16 +1024,6 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                         ),
                   ],
                 ),
-              if (_showLines && linePoints.length >= 2)
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: linePoints,
-                      color: const Color(0xCCFF6D00),
-                      strokeWidth: 2.5,
-                    ),
-                  ],
-                ),
               // 사용자가 '좌표 찍기'로 남긴 지점: 항상 눈에 띄는 체크 표시로 렌더.
               // 연결선(폴리라인)보다 뒤에 두어 선이 체크 표시를 덮지 않게 한다.
               if (markedCount > 0)
@@ -798,7 +1032,7 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     for (final p in fTrack)
                       if (p.marked)
                         Marker(
-                          point: markedDisplay[p] ?? LatLng(p.lat, p.lng),
+                          point: LatLng(p.lat, p.lng),
                           width: 30,
                           height: 30,
                           child: GestureDetector(
@@ -865,70 +1099,46 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     return markers;
                   }(),
                 ),
+              // 메모 지점: 겹치면 하나의 묶음(개수) 마커로 통합. 단독이면 번호 마커.
               MarkerLayer(
-                markers: placed.map((placed) {
-                  final pt = placed.point;
-                  final idx = _points.indexOf(pt);
-                  final isSelected = _selected == pt;
-                  return Marker(
-                    point: LatLng(placed.lat, placed.lng),
-                    width: isSelected ? 34 : 24,
-                    height: isSelected ? 34 : 24,
-                    child: GestureDetector(
-                      onTap: () => setState(() => _selected = pt),
-                      child: Container(
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: pt.isMemo
-                              ? Colors.blue.shade700
-                              : Colors.teal.shade600,
-                          border: Border.all(
-                            color: isSelected ? Colors.orange : Colors.white,
-                            width: isSelected ? 3 : 2,
-                          ),
-                          boxShadow: const [
-                            BoxShadow(blurRadius: 4, color: Color(0x55000000)),
-                          ],
-                        ),
-                        child: Center(
-                          child: Text(
-                            '${idx + 1}',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: isSelected ? 11 : 9,
-                              fontWeight: FontWeight.bold,
+                markers: [
+                  for (final group in memoClusters)
+                    if (group.length == 1)
+                      _memoMarker(group.first)
+                    else
+                      _clusterMarker(group),
+                ],
+              ),
+              // 시간 표시: 단독 지점에만(묶음은 시트에서 확인)
+              if (_showTimes)
+                MarkerLayer(
+                  markers: [
+                    for (final group in memoClusters)
+                      if (group.length == 1)
+                        Marker(
+                          point:
+                              LatLng(group.first.lat, group.first.lng),
+                          width: 56,
+                          height: 36,
+                          alignment: Alignment.bottomCenter,
+                          child: Align(
+                            alignment: Alignment.topCenter,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 3, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: const Color(0xCC000000),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                              child: Text(
+                                group.first.timeLabel,
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 10),
+                              ),
                             ),
                           ),
                         ),
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
-              if (_showTimes)
-                MarkerLayer(
-                  markers: placed.map((p) => Marker(
-                    point: LatLng(p.lat, p.lng),
-                    width: 56,
-                    height: 36,
-                    alignment: Alignment.bottomCenter,
-                    child: Align(
-                      alignment: Alignment.topCenter,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 3, vertical: 1),
-                        decoration: BoxDecoration(
-                          color: const Color(0xCC000000),
-                          borderRadius: BorderRadius.circular(3),
-                        ),
-                        child: Text(
-                          p.point.timeLabel,
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 10),
-                        ),
-                      ),
-                    ),
-                  )).toList(),
+                  ],
                 ),
               if (_showTimes && fTrack.isNotEmpty)
                 MarkerLayer(
@@ -1043,16 +1253,50 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     final start = cur.start.clamp(lo, hi);
                     final end = cur.end.clamp(lo, hi);
                     final divisions = (hi - lo).round().clamp(1, 1440);
+                    final cs = Theme.of(context).colorScheme;
+
+                    // 탭하면 시간 선택기(수동 입력)로 시각 지정하는 필드
+                    Widget field(String label, double val, bool isStart) =>
+                        InkWell(
+                          onTap: () => _pickFilterTime(isStart, lo, hi),
+                          borderRadius: BorderRadius.circular(8),
+                          child: Container(
+                            padding: const EdgeInsets.fromLTRB(9, 5, 7, 5),
+                            decoration: BoxDecoration(
+                              color: cs.surface.withValues(alpha: 0.55),
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(color: cs.outlineVariant),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text('$label ',
+                                    style: TextStyle(
+                                        fontSize: 11,
+                                        color: cs.onSurfaceVariant)),
+                                Text(_minToHm(val),
+                                    style: const TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w700)),
+                                const SizedBox(width: 3),
+                                Icon(Icons.edit,
+                                    size: 12, color: cs.onSurfaceVariant),
+                              ],
+                            ),
+                          ),
+                        );
+
                     return Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
                         Row(
                           children: [
-                            Text(
-                              '${_minToHm(start)} ~ ${_minToHm(end)}',
-                              style: const TextStyle(
-                                  fontSize: 13, fontWeight: FontWeight.w600),
+                            field('시작', start, true),
+                            const Padding(
+                              padding: EdgeInsets.symmetric(horizontal: 5),
+                              child: Text('~'),
                             ),
+                            field('종료', end, false),
                             const Spacer(),
                             if (_timeFilter != null)
                               TextButton(
@@ -1060,8 +1304,8 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                                     setState(() => _timeFilter = null),
                                 style: TextButton.styleFrom(
                                   padding:
-                                      const EdgeInsets.symmetric(horizontal: 8),
-                                  minimumSize: const Size(0, 28),
+                                      const EdgeInsets.symmetric(horizontal: 6),
+                                  minimumSize: const Size(0, 30),
                                   tapTargetSize:
                                       MaterialTapTargetSize.shrinkWrap,
                                 ),
@@ -1073,13 +1317,14 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                                   setState(() => _showTimeFilter = false),
                               child: const Padding(
                                 padding: EdgeInsets.all(4),
-                                child: Icon(Icons.close, size: 16),
+                                child: Icon(Icons.close, size: 18),
                               ),
                             ),
                           ],
                         ),
+                        // 아래 슬라이더(양쪽 핸들)로 드래그 조정 — 입력값과 동기화됨
                         SizedBox(
-                          height: 28,
+                          height: 30,
                           child: RangeSlider(
                             min: lo,
                             max: hi,
@@ -1252,13 +1497,31 @@ class _PlacedPoint {
   const _PlacedPoint(this.point, this.lat, this.lng);
 }
 
-// 분산 배치 대상(메모 또는 찍은 좌표) 통합 표현. 둘 중 하나만 non-null.
-class _SpreadItem {
-  final double lat;
-  final double lng;
-  final _GpsPoint? memo;
-  final TrackPoint? marked;
-  const _SpreadItem({required this.lat, required this.lng, this.memo, this.marked});
+// 연결선 진행 방향 화살촉(오목 밑변, 흰색). 기본은 오른쪽(+x)을 향하고,
+// 배치 시 Transform.rotate로 진행 방향에 맞춘다.
+class _DirectionArrowPainter extends CustomPainter {
+  const _DirectionArrowPainter();
+  @override
+  void paint(Canvas canvas, Size s) {
+    final w = s.width, h = s.height;
+    final path = ui.Path()
+      ..moveTo(w * 0.94, h * 0.5) // 끝(tip)
+      ..lineTo(w * 0.10, h * 0.10) // 뒤 위
+      ..lineTo(w * 0.36, h * 0.5) // 밑변 오목(진행 방향으로 파임)
+      ..lineTo(w * 0.10, h * 0.90) // 뒤 아래
+      ..close();
+    canvas.drawPath(path, Paint()..color = Colors.white);
+    canvas.drawPath(
+        path,
+        Paint()
+          ..color = const Color(0x66000000)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = 0.6
+          ..strokeJoin = StrokeJoin.round);
+  }
+
+  @override
+  bool shouldRepaint(covariant _DirectionArrowPainter oldDelegate) => false;
 }
 
 // ── GPS 포인트 모델 ─────────────────────────────────────────

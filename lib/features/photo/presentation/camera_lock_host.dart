@@ -52,7 +52,8 @@ class _CameraLockHostState extends ConsumerState<_CameraLockHost> {
     if (_started) return;
     _started = true;
     try {
-      final result = await Navigator.of(context).push<({String path, bool isVideo})>(
+      final result = await Navigator.of(context)
+          .push<({String path, bool isVideo, ({double lat, double lng})? gps})>(
         MaterialPageRoute(builder: (_) => const CameraRulerScreen()),
       );
       if (result != null) {
@@ -66,7 +67,9 @@ class _CameraLockHostState extends ConsumerState<_CameraLockHost> {
   }
 
   /// 촬영 결과를 영구 위치로 옮기고 대기열(prefs)에 추가한다.
-  Future<void> _queuePhoto(({String path, bool isVideo}) result) async {
+  Future<void> _queuePhoto(
+      ({String path, bool isVideo, ({double lat, double lng})? gps})
+          result) async {
     // 캡처 파일은 캐시에 있어 지워질 수 있으므로 앱 문서 폴더로 복사해 보존한다.
     final docs = await getApplicationDocumentsDirectory();
     final pendingDir = Directory('${docs.path}/pending_shake');
@@ -82,11 +85,11 @@ class _CameraLockHostState extends ConsumerState<_CameraLockHost> {
       return;
     }
 
-    // GPS는 현재 위치(있으면)로 기록. 없으면 null.
+    // GPS는 카메라가 프리뷰 동안 미리 받아둔 값 우선, 없으면 provider 값으로 폴백.
     final loc = ref.read(locationProvider).valueOrNull;
     final cached = ref.read(locationProvider.notifier).cached;
-    final lat = loc?.latitude ?? cached?.latitude;
-    final lng = loc?.longitude ?? cached?.longitude;
+    final lat = result.gps?.lat ?? loc?.latitude ?? cached?.latitude;
+    final lng = result.gps?.lng ?? loc?.longitude ?? cached?.longitude;
 
     final prefs = await SharedPreferences.getInstance();
     // 메인 앱이 처리하며 큐를 비웠을 수 있으니 디스크 최신 상태를 읽고 append한다.
