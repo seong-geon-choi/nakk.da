@@ -16,6 +16,7 @@ import '../../../core/constants/api_keys.dart';
 import '../../../core/utils/media_scanner.dart';
 import '../../../core/services/tracking_service.dart';
 import '../../permission/presentation/permission_center.dart';
+import '../../permission/presentation/permission_items.dart';
 
 class SettingsScreen extends ConsumerStatefulWidget {
   const SettingsScreen({super.key});
@@ -222,9 +223,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                 title: Text('권한 설정'),
               ),
               data: (statuses) {
-                final granted =
-                    statuses.values.where((s) => s.isGranted).length;
-                final total = statuses.length;
+                // 표시 항목 기준(사진/동영상 묶음, 위치는 사용 중 기준)으로 집계 →
+                // 권한 점검 화면의 필수 목록과 개수가 일치한다.
+                final total = kRequiredPermissionItems.length;
+                final granted = kRequiredPermissionItems
+                    .where((it) => it.permissions
+                        .every((p) => statuses[p]?.isGranted ?? false))
+                    .length;
                 final allGranted = granted == total;
                 return ListTile(
                   leading: Icon(

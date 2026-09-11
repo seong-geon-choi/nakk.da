@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../../core/router/app_router.dart';
 import 'location_disclosure.dart';
+import 'permission_items.dart';
 import 'permission_provider.dart';
 
 class PermissionScreen extends ConsumerStatefulWidget {
@@ -85,22 +86,21 @@ class _PermissionScreenState extends ConsumerState<PermissionScreen> {
 
   List<Widget> _permissionItems(
       BuildContext context, AsyncValue<Map<Permission, PermissionStatus>> statusAsync) {
-    final items = [
-      (Permission.microphone, Icons.mic, '마이크', '음성 메모 녹음에 필요합니다'),
-      (Permission.locationWhenInUse, Icons.location_on, '위치', 'GPS 좌표 기록·날씨/물때 조회에 사용(외부 전송 포함)'),
-      (Permission.camera, Icons.camera_alt, '카메라', '사진 촬영 및 첨부에 필요합니다'),
-      (Permission.photos, Icons.photo_library_outlined, '사진/동영상', '갤러리에서 사진과 동영상을 선택합니다'),
-      (Permission.notification, Icons.notifications_outlined, '알림', '음성 메모 상태를 알림으로 표시합니다'),
-    ];
-    return items.map((item) => _buildPermItem(context, statusAsync, item)).toList();
+    return kRequiredPermissionItems
+        .map((item) => _buildPermItem(context, statusAsync, item))
+        .toList();
   }
 
   Widget _buildPermItem(
       BuildContext context,
       AsyncValue<Map<Permission, PermissionStatus>> statusAsync,
-      (Permission, IconData, String, String) item) {
-    final (perm, icon, label, desc) = item;
-    final isGranted = statusAsync.valueOrNull?[perm]?.isGranted ?? false;
+      PermissionItem item) {
+    final icon = item.icon;
+    final label = item.title;
+    final desc = item.desc;
+    // 묶인 권한(사진/동영상)은 모두 허용돼야 ✓.
+    final isGranted = item.permissions
+        .every((p) => statusAsync.valueOrNull?[p]?.isGranted ?? false);
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
       child: Row(
