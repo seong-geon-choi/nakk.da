@@ -31,7 +31,7 @@ class LocationTrackingService : Service() {
         const val PREFS_SHAKE_ACTION_KEY = "shake_action"
         @JvmField val pendingLock = Any()
         private const val EXTRA_INTERVAL = "intervalMeters"
-        private const val UPDATE_INTERVAL_MS = 5000L   // 위치 갱신 주기
+        private const val UPDATE_INTERVAL_MS = 10000L  // 위치 갱신 주기(배터리 절감: GPS 웨이크업 완화)
         private const val FASTEST_INTERVAL_MS = 2000L  // 최소 갱신 간격
         private const val MAX_ACCURACY_METERS = 1000f  // 이보다 부정확한 픽스는 제외
 
