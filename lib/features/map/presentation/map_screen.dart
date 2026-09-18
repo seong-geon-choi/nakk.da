@@ -32,7 +32,8 @@ class MapScreen extends ConsumerStatefulWidget {
   ConsumerState<MapScreen> createState() => _MapScreenState();
 }
 
-class _MapScreenState extends ConsumerState<MapScreen> {
+class _MapScreenState extends ConsumerState<MapScreen>
+    with TickerProviderStateMixin {
   List<_GpsPoint> _points = [];
   List<TrackPoint> _trackPoints = [];
   _GpsPoint? _selected;
@@ -56,16 +57,24 @@ class _MapScreenState extends ConsumerState<MapScreen> {
   // null이면 필터 없음(전체 표시). _showTimeFilter로 상단 바를 접고 편다.
   RangeValues? _timeFilter;
   bool _showTimeFilter = false;
+  // 현재위치 버튼: 내 위치에 역펄스(바깥 원이 중심으로 붕괴)를 3초간 표시.
+  LatLng? _currentLocMarker;
+  Timer? _currentLocTimer;
+  late final AnimationController _pulseCtrl;
 
   @override
   void dispose() {
     _noGpsTimer?.cancel();
+    _currentLocTimer?.cancel();
+    _pulseCtrl.dispose();
     super.dispose();
   }
 
   @override
   void initState() {
     super.initState();
+    _pulseCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1400));
     _loadFromToday();
     _loadTrackPoints();
     ref.read(settingsProvider.future).then((s) {
@@ -299,10 +308,28 @@ class _MapScreenState extends ConsumerState<MapScreen> {
       pos ??= await Geolocator.getCurrentPosition(
           locationSettings:
               const LocationSettings(accuracy: LocationAccuracy.low));
-      if (mounted) _mapController.move(LatLng(pos.latitude, pos.longitude), 15);
+      if (!mounted) return;
+      final here = LatLng(pos.latitude, pos.longitude);
+      _mapController.move(here, 15);
+      _showToastMessage('현재 위치로 이동했습니다');
+      _showCurrentLocPulse(here);
     } catch (_) {
       if (mounted) _showToastMessage('현재 위치를 가져올 수 없습니다');
     }
+  }
+
+  /// 현재위치에 역펄스 애니메이션을 3초간 띄우고 자동으로 사라지게 한다.
+  void _showCurrentLocPulse(LatLng at) {
+    _currentLocTimer?.cancel();
+    setState(() => _currentLocMarker = at);
+    _pulseCtrl
+      ..reset()
+      ..repeat();
+    _currentLocTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      _pulseCtrl.stop();
+      setState(() => _currentLocMarker = null);
+    });
   }
 
   void _showToastMessage(String msg) => showAppToast(context, msg);
@@ -1169,6 +1196,26 @@ class _MapScreenState extends ConsumerState<MapScreen> {
                     );
                   }).toList(),
                 ),
+              // 현재위치 역펄스: 바깥 원이 중심으로 붕괴 후 점이 번쩍(3초).
+              if (_currentLocMarker != null)
+                MarkerLayer(
+                  markers: [
+                    Marker(
+                      point: _currentLocMarker!,
+                      width: 96,
+                      height: 96,
+                      child: IgnorePointer(
+                        child: AnimatedBuilder(
+                          animation: _pulseCtrl,
+                          builder: (_, _) => CustomPaint(
+                            painter: _PulsePainter(
+                                _pulseCtrl.value, const Color(0xFFFF6D00)),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
             ],
           ),
           // 선택된 마커 팝업
@@ -1522,6 +1569,69 @@ class _DirectionArrowPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _DirectionArrowPainter oldDelegate) => false;
+}
+
+/// 현재위치 역펄스: 바깥 원 하나가 중심으로 붕괴하다 마지막에 중심 점이 번쩍.
+/// [t]는 0~1(AnimationController.value). 웹 시안(implode)과 동일한 키프레임.
+class _PulsePainter extends CustomPainter {
+  final double t;
+  final Color color;
+  const _PulsePainter(this.t, this.color);
+
+  double _lerp(double a, double b, double x) => a + (b - a) * x.clamp(0.0, 1.0);
+
+  @override
+  void paint(Canvas canvas, Size s) {
+    final c = Offset(s.width / 2, s.height / 2);
+    const baseR = 23.0; // 스케일 1일 때 반지름(지름 46px)
+
+    // 붕괴하는 링: 스케일 2.0→0.3, 불투명도는 나타났다 마지막에 사라짐.
+    final ringScale = t <= 0.78 ? _lerp(2.0, 0.3, t / 0.78) : 0.3;
+    double ringOpacity;
+    if (t <= 0.2) {
+      ringOpacity = _lerp(0.0, 0.9, t / 0.2);
+    } else if (t <= 0.78) {
+      ringOpacity = _lerp(0.9, 1.0, (t - 0.2) / 0.58);
+    } else if (t <= 0.82) {
+      ringOpacity = _lerp(1.0, 0.0, (t - 0.78) / 0.04);
+    } else {
+      ringOpacity = 0.0;
+    }
+    if (ringOpacity > 0.01) {
+      canvas.drawCircle(
+          c,
+          baseR * ringScale,
+          Paint()
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 3
+            ..color = color.withValues(alpha: ringOpacity));
+    }
+
+    // 중심 점: 붕괴 직후(74~82%) 번쩍 커졌다 원래대로.
+    double dotScale = 1.0;
+    double glow = 0.0;
+    if (t >= 0.74 && t < 0.82) {
+      final x = (t - 0.74) / 0.08;
+      dotScale = _lerp(1.0, 1.7, x);
+      glow = _lerp(0.0, 0.5, x);
+    } else if (t >= 0.82) {
+      dotScale = _lerp(1.7, 1.0, (t - 0.82) / 0.18);
+    }
+    final dotR = 6.5 * dotScale;
+    if (glow > 0.01) {
+      canvas.drawCircle(
+          c,
+          dotR + 5,
+          Paint()
+            ..color = color.withValues(alpha: glow)
+            ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 4));
+    }
+    canvas.drawCircle(c, dotR + 2, Paint()..color = Colors.white);
+    canvas.drawCircle(c, dotR, Paint()..color = color);
+  }
+
+  @override
+  bool shouldRepaint(covariant _PulsePainter old) => old.t != t;
 }
 
 // ── GPS 포인트 모델 ─────────────────────────────────────────
