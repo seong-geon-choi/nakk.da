@@ -363,7 +363,11 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     setState(() => _capturing = true);
     try {
       // 촬영 방향은 셔터 누른 시점 값으로 고정(캡처 중 방향이 바뀌어도 일관되게).
-      final rotateDeg = rotateDegreesForTurns(_uiQuarterTurns);
+      // 전면(셀카)은 센서가 거울상이라 같은 물리 회전에도 장면이 반대로 담긴다.
+      // 후면 기준 회전 규약(rotateDegreesForTurns)을 그대로 쓰면 가로에서 180°
+      // 어긋나 상하 반전되므로, 전면은 회전 부호를 반전(90↔270, 0은 유지)한다.
+      var rotateDeg = rotateDegreesForTurns(_uiQuarterTurns);
+      if (_useFrontCamera) rotateDeg = (360 - rotateDeg) % 360;
       final file = await ctrl.takePicture();
       if (!mounted) return;
 
