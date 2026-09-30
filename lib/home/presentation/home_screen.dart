@@ -9,6 +9,7 @@ import '../../core/services/accessibility_service.dart';
 import '../../core/services/tracking_service.dart';
 import '../../core/widgets/confirm_dialog.dart';
 import '../../core/widgets/empty_state_view.dart';
+import '../../core/widgets/media_gallery_screen.dart';
 import '../../core/widgets/memo_entry_card.dart';
 import '../../core/widgets/location_status_card.dart';
 import '../../core/widgets/location_share_card.dart';
@@ -345,6 +346,14 @@ class _BodyState extends ConsumerState<_Body> {
   }
 
   Widget _buildList(DayFile dayFile) {
+    // 하루치 사진·동영상을 순서대로 모아 전체화면 갤러리(좌우 스와이프)에 넘긴다.
+    final galleryItems = <MediaGalleryItem>[
+      for (final b in dayFile.blocks)
+        if (b is MemoEntry && b.photoPath != null)
+          MediaGalleryItem(path: b.photoPath!, isVideo: false)
+        else if (b is MemoEntry && b.videoPath != null)
+          MediaGalleryItem(path: b.videoPath!, isVideo: true),
+    ];
     return ListView.separated(
       controller: _scroll,
       physics: const AlwaysScrollableScrollPhysics(),
@@ -395,7 +404,10 @@ class _BodyState extends ConsumerState<_Body> {
             }
           },
           child: block is MemoEntry
-              ? MemoEntryCard(entry: block, savePath: ref.read(settingsProvider).valueOrNull?.savePath ?? '')
+              ? MemoEntryCard(
+                  entry: block,
+                  savePath: ref.read(settingsProvider).valueOrNull?.savePath ?? '',
+                  galleryItems: galleryItems)
               : block is LocationStatus
                   ? LocationStatusCard(status: block)
                   : const SizedBox.shrink(),

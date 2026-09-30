@@ -11,11 +11,14 @@ import '../../features/settings/presentation/settings_provider.dart';
 class VideoPlayerWidget extends ConsumerStatefulWidget {
   final String videoPath;
   final double? height;
+  // 지정 시 썸네일 탭 동작을 대체(예: 갤러리 열기). null이면 기본 전체화면 재생.
+  final VoidCallback? onTap;
 
   const VideoPlayerWidget({
     super.key,
     required this.videoPath,
     this.height,
+    this.onTap,
   });
 
   @override
@@ -28,7 +31,7 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
   @override
   void initState() {
     super.initState();
-    final absPath = _resolve(widget.videoPath,
+    final absPath = resolveVideoPath(widget.videoPath,
         ref.read(settingsProvider).valueOrNull?.savePath ?? '');
     _thumbnailFuture = _getThumbnail(absPath);
   }
@@ -36,14 +39,15 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
   @override
   Widget build(BuildContext context) {
     final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
-    final absPath = _resolve(widget.videoPath, savePath);
+    final absPath = resolveVideoPath(widget.videoPath, savePath);
     final h = widget.height ?? 120.0;
     return GestureDetector(
-      onTap: () => Navigator.of(context).push(
-        MaterialPageRoute(
-          builder: (_) => _VideoFullScreenPage(videoPath: absPath),
-        ),
-      ),
+      onTap: widget.onTap ??
+          () => Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (_) => _VideoFullScreenPage(videoPath: absPath),
+                ),
+              ),
       child: Stack(
         alignment: Alignment.center,
         children: [
@@ -93,7 +97,7 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
 
 /// videoPath가 상대경로(videos/...)면 savePath와 합쳐 절대경로로 반환.
 /// content:// URI는 그대로 반환.
-String _resolve(String videoPath, String savePath) {
+String resolveVideoPath(String videoPath, String savePath) {
   if (videoPath.startsWith('/') || videoPath.startsWith('content://')) return videoPath;
   if (savePath.isNotEmpty && !savePath.startsWith('content://')) {
     return '$savePath/$videoPath';

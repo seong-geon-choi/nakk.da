@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../features/memo/domain/models/memo_entry.dart';
+import 'media_gallery_screen.dart';
 import 'saf_image.dart';
 import 'video_player_widget.dart';
 
@@ -7,13 +8,21 @@ class MemoEntryCard extends StatelessWidget {
   final MemoEntry entry;
   final String savePath;
   final int? maxLines;
+  // 지정 시 미디어 탭 → 이 목록으로 전체화면 갤러리(좌우 스와이프)를 연다.
+  // null이면 사진/동영상 각각의 기본 단일 전체화면 동작.
+  final List<MediaGalleryItem>? galleryItems;
 
-  const MemoEntryCard({super.key, required this.entry, required this.savePath, this.maxLines});
+  const MemoEntryCard(
+      {super.key,
+      required this.entry,
+      required this.savePath,
+      this.maxLines,
+      this.galleryItems});
 
   @override
   Widget build(BuildContext context) {
     final catchLabel = _catchLabel(entry);
-    final media = _buildMedia(catchLabel);
+    final media = _buildMedia(context, catchLabel);
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
       child: Column(
@@ -42,12 +51,33 @@ class MemoEntryCard extends StatelessWidget {
   }
 
   /// 사진/동영상 위에 조과(어종·길이) 배지를 겹쳐 표시.
-  Widget? _buildMedia(String? catchLabel) {
+  Widget? _buildMedia(BuildContext context, String? catchLabel) {
+    // 갤러리 목록이 있으면 이 항목의 미디어를 목록에서 찾아 그 인덱스로 갤러리를 연다.
+    VoidCallback? onTap;
+    final items = galleryItems;
+    if (items != null) {
+      final path = entry.photoPath ?? entry.videoPath;
+      final idx = items.indexWhere((m) => m.path == path);
+      if (idx >= 0) {
+        onTap = () => Navigator.of(context).push(MaterialPageRoute(
+              builder: (_) => MediaGalleryScreen(
+                items: items,
+                initialIndex: idx,
+                savePath: savePath,
+              ),
+            ));
+      }
+    }
     Widget? child;
     if (entry.photoPath != null) {
-      child = SafImage(photoPath: entry.photoPath!, savePath: savePath, height: 120);
+      child = SafImage(
+          photoPath: entry.photoPath!,
+          savePath: savePath,
+          height: 120,
+          onTap: onTap);
     } else if (entry.videoPath != null) {
-      child = VideoPlayerWidget(videoPath: entry.videoPath!, height: 120);
+      child = VideoPlayerWidget(
+          videoPath: entry.videoPath!, height: 120, onTap: onTap);
     }
     if (child == null) return null;
     if (catchLabel == null) return child;

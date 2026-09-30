@@ -15,6 +15,8 @@ class SafImage extends StatefulWidget {
   final double? height;
   final BoxFit fit;
   final bool fullScreen;
+  // 지정 시 사진 탭 동작을 대체(예: 갤러리 열기). null이면 기본 단일 전체화면.
+  final VoidCallback? onTap;
 
   const SafImage({
     super.key,
@@ -23,6 +25,7 @@ class SafImage extends StatefulWidget {
     this.height,
     this.fit = BoxFit.cover,
     this.fullScreen = false,
+    this.onTap,
   });
 
   static bool isAbsolute(String path) =>
@@ -116,7 +119,7 @@ class _SafImageState extends State<SafImage> {
     if (widget.fullScreen) return img;
 
     return GestureDetector(
-      onTap: () => _openFullScreen(context),
+      onTap: widget.onTap ?? () => _openFullScreen(context),
       child: ClipRRect(borderRadius: BorderRadius.circular(8), child: img),
     );
   }
