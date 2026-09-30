@@ -16,7 +16,7 @@ publish_to: 'none' # Remove this line if you wish to publish to pub.dev
 # https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
 # In Windows, build-name is used as the major, minor, and patch parts
 # of the product and file versions while build-number is used as the build suffix.
-version: 3.9.1+2054
+version: 3.10.0+2055
 
 environment:
   sdk: ^3.11.4
@@ -77,12 +77,21 @@ dev_dependencies:
   flutter_lints: ^6.0.0
   riverpod_annotation: ^2.6.1
   flutter_launcher_icons: ^0.14.3
+  flutter_native_splash: ^2.4.4
 
 flutter_launcher_icons:
   android: true
   ios: false
   image_path: "assets/icon/app_icon.png"
   min_sdk_android: 26
+
+# 앱 첫 실행 시 전체 화면 스플래시(안드로이드 12+ 시스템 스플래시 포함).
+# 배경색은 아이콘 배경과 맞춘 짙은 남색. 안드로이드 12+는 중앙 원형 아이콘으로 표시.
+flutter_native_splash:
+  color: "#192531"
+  image: assets/icon/splash.png
+  android_12:
+    image: assets/icon/splash.png
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
