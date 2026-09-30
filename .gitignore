@@ -62,6 +62,11 @@ next.txt
 .fish_backup_handmade/
 tools/*
 
+# ── 아이콘/스플래시 작업 백업·원본 (로컬 전용, 커밋본은 app_icon.png/splash.png) ──
+assets/icon/*.jpg
+assets/icon/app_icon_bak.png
+assets/icon/app_icon_pre13x.png
+
 # ── 빌드 결과물 ────────────────────────────────────────────
 /android/app/debug
 /android/app/profile
