@@ -13,7 +13,10 @@
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>
-    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION"/>
+    <!-- 백그라운드 위치는 쓰지 않는다: 이동경로·출퇴근 감시 모두 위치 포그라운드
+         서비스(foregroundServiceType=location, 상단 알림)로 동작하므로 "사용 중"
+         권한만으로 충분하다. ACCESS_BACKGROUND_LOCATION을 선언하면 구글플레이
+         위치 권한 선언 심사가 걸려 검토가 크게 지연된다. -->
     <uses-permission android:name="android.permission.CAMERA"/>
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32"/>
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>

@@ -900,41 +900,13 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
       return;
     }
 
+    // 이동경로 기록은 위치 포그라운드 서비스(상단 알림)로 동작하므로, 앱을 내려도
+    // "사용 중(while-in-use)" 권한만으로 계속 기록된다. 백그라운드 위치(항상 허용)는
+    // 불필요하며, 요청 시 구글플레이 위치 선언 심사로 검토가 크게 늘어나 제거했다.
     if (!await Permission.locationWhenInUse.isGranted) {
       if (!mounted || !await ensureLocationDisclosure(context)) return;
       final status = await Permission.locationWhenInUse.request();
       if (!status.isGranted) return;
-    }
-
-    var bgStatus = await Permission.locationAlways.status;
-    if (!bgStatus.isGranted) {
-      bgStatus = await Permission.locationAlways.request();
-    }
-    if (!bgStatus.isGranted) {
-      if (!mounted) return;
-      final shouldOpen = await showDialog<bool>(
-        context: context,
-        builder: (_) => AlertDialog(
-          title: const Text('백그라운드 위치 권한 필요'),
-          content: const Text(
-            '백그라운드에서 이동 경로를 기록하려면\n'
-            '위치 권한을 "항상 허용"으로 설정해야 합니다.\n\n'
-            '설정 → 권한 → 위치 → 항상 허용',
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('취소'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: const Text('설정 열기'),
-            ),
-          ],
-        ),
-      );
-      if (shouldOpen == true) openAppSettings();
-      return;
     }
 
     final settings = ref.read(settingsProvider).valueOrNull;
