@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:http/http.dart' as http;
 import 'package:lunar/lunar.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../domain/models/tide_station.dart';
 import 'tide_station_data.dart';
 
@@ -30,8 +31,12 @@ class TideService {
       'https://apis.data.go.kr/1192136/tideFcstHghLw/GetTideFcstHghLwApiService';
   static const _marineApiBase = 'https://marine-api.open-meteo.com/v1/marine';
 
-  // 조석 예보 캐시: 키 = "stationCode-yyyyMMdd"
-  static final Map<String, List<Map<String, dynamic>>?> _tideCache = {};
+  // 조석 캐시 서버(GitHub Actions가 매일 KHOA에서 갱신, jsDelivr CDN 서빙).
+  static const _cdnBase =
+      'https://cdn.jsdelivr.net/gh/seong-geon-choi/nakkda-tide-data@main/data';
+
+  // 세션 메모리 캐시: 관측소코드 → 디코드된 관측소 파일 JSON
+  static final Map<String, Map<String, dynamic>> _stationCache = {};
 
   Future<TideResult?> getTideResult(
     double lat,
@@ -43,26 +48,16 @@ class TideService {
     final mulTaeLabel = _calcMulTaeLabel(DateTime.now());
 
     final dateStr = _dateStr(DateTime.now());
-    final tideData = await _fetchTidePrediction(station.code, dateStr, apiKey);
+    final tides = await _fetchTideEvents(station.code, dateStr, apiKey);
     // 사용자 위치가 내륙일 수 있으므로 해안 관측소 좌표로 수온 조회
     final waterTemp = await _fetchWaterTemp(station.latitude, station.longitude);
 
     String? nextType;
     String? nextTime;
-    final tides = <TideEvent>[];
-    if (tideData != null) {
-      final next = _nextTide(tideData);
-      nextType = next?.$1;
-      nextTime = next?.$2;
-      for (final e in tideData) {
-        final t = _extractTime(e);
-        if (t.isEmpty) continue;
-        tides.add(TideEvent(
-          type: _extractTideType(e),
-          time: t,
-          level: _extractLevel(e),
-        ));
-      }
+    if (tides.isNotEmpty) {
+      final next = _nextTideEvent(tides);
+      nextType = next?.type;
+      nextTime = next?.time;
     }
 
     return TideResult(
@@ -116,14 +111,109 @@ class TideService {
   String _dateStr(DateTime d) =>
       '${d.year}${d.month.toString().padLeft(2, '0')}${d.day.toString().padLeft(2, '0')}';
 
-  Future<List<Map<String, dynamic>>?> _fetchTidePrediction(
+  // 당일 만조/간조 이벤트 확보: ① 세션/기기 캐시 → ② CDN → ③ KHOA 직접 호출(폴백).
+  Future<List<TideEvent>> _fetchTideEvents(
     String stationCode,
     String dateStr,
     String apiKey,
   ) async {
-    final cacheKey = '$stationCode-$dateStr';
-    if (_tideCache.containsKey(cacheKey)) return _tideCache[cacheKey];
+    final cdn = await _loadCdnDay(stationCode, dateStr);
+    if (cdn != null && cdn.isNotEmpty) return cdn;
 
+    // 폴백: KHOA 직접 호출(기존 방식). CDN·캐시 모두 실패할 때만.
+    final items = await _fetchTidePredictionKhoa(stationCode, dateStr, apiKey);
+    if (items == null) return const [];
+    final out = <TideEvent>[];
+    for (final e in items) {
+      final t = _extractTime(e);
+      if (t.isEmpty) continue;
+      out.add(TideEvent(
+        type: _extractTideType(e),
+        time: t,
+        level: _extractLevel(e),
+      ));
+    }
+    return out;
+  }
+
+  // 관측소 파일을 세션/기기 캐시 또는 CDN에서 확보해 해당 날짜 이벤트 반환.
+  // 한 번 받으면 오늘 전후 수일치가 한 파일에 들어와 추가 호출이 없다.
+  Future<List<TideEvent>?> _loadCdnDay(
+      String stationCode, String dateStr) async {
+    final mem = _stationCache[stationCode];
+    if (mem != null) {
+      final ev = _eventsFromStation(mem, dateStr);
+      if (ev != null) return ev;
+    }
+
+    SharedPreferences? prefs;
+    Map<String, dynamic>? cached;
+    final key = 'tide_cdn_$stationCode';
+    try {
+      prefs = await SharedPreferences.getInstance();
+      final cachedStr = prefs.getString(key);
+      if (cachedStr != null) {
+        cached = jsonDecode(cachedStr) as Map<String, dynamic>;
+        // 해당 날짜가 있고 24h 이내면 재다운로드 생략
+        if (_isFresh(cached) && _eventsFromStation(cached, dateStr) != null) {
+          _stationCache[stationCode] = cached;
+          return _eventsFromStation(cached, dateStr);
+        }
+      }
+    } catch (_) {}
+
+    try {
+      final uri = Uri.parse('$_cdnBase/$stationCode.json');
+      final resp = await http.get(uri).timeout(const Duration(seconds: 10));
+      if (resp.statusCode == 200) {
+        final text = utf8.decode(resp.bodyBytes);
+        final j = jsonDecode(text) as Map<String, dynamic>;
+        _stationCache[stationCode] = j;
+        await prefs?.setString(key, text);
+        final ev = _eventsFromStation(j, dateStr);
+        if (ev != null) return ev;
+      }
+    } catch (_) {}
+
+    // CDN 실패 시 신선도 무시하고 기기 캐시라도 사용
+    if (cached != null) return _eventsFromStation(cached, dateStr);
+    return null;
+  }
+
+  bool _isFresh(Map<String, dynamic> station) {
+    final g = DateTime.tryParse(station['generated']?.toString() ?? '');
+    if (g == null) return false;
+    return DateTime.now().toUtc().difference(g.toUtc()) <
+        const Duration(hours: 24);
+  }
+
+  // 관측소 파일 JSON에서 해당 날짜 이벤트 추출. 날짜 키가 없으면 null.
+  List<TideEvent>? _eventsFromStation(
+      Map<String, dynamic> station, String dateStr) {
+    final days = station['days'];
+    if (days is! Map) return null;
+    final list = days[dateStr];
+    if (list is! List) return null;
+    final out = <TideEvent>[];
+    for (final e in list) {
+      if (e is! Map) continue;
+      final time = e['time']?.toString() ?? '';
+      if (time.isEmpty) continue;
+      final lvl = e['level'];
+      out.add(TideEvent(
+        type: e['t'] == 'H' ? '만조' : '간조',
+        time: time,
+        level: lvl is num ? lvl.round() : null,
+      ));
+    }
+    return out;
+  }
+
+  Future<List<Map<String, dynamic>>?> _fetchTidePredictionKhoa(
+    String stationCode,
+    String dateStr,
+    String apiKey,
+  ) async {
     try {
       final uri = Uri.parse(_tideApiBase).replace(queryParameters: {
         'serviceKey': apiKey,
@@ -134,15 +224,9 @@ class TideService {
         'type': 'json',
       });
       final resp = await http.get(uri).timeout(const Duration(seconds: 10));
-      if (resp.statusCode != 200) {
-        _tideCache[cacheKey] = null;
-        return null;
-      }
-      final result = _parseItems(resp.body);
-      _tideCache[cacheKey] = result;
-      return result;
+      if (resp.statusCode != 200) return null;
+      return _parseItems(resp.body);
     } catch (_) {
-      _tideCache[cacheKey] = null;
       return null;
     }
   }
@@ -233,21 +317,13 @@ class TideService {
     return (code == 'H' || code == '고조') ? '만조' : '간조';
   }
 
-  (String, String)? _nextTide(List<Map<String, dynamic>> data) {
+  TideEvent? _nextTideEvent(List<TideEvent> tides) {
     final now = DateTime.now();
     final nowStr =
         '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}';
-
-    for (final entry in data) {
-      final time = _extractTime(entry);
-      if (time.compareTo(nowStr) > 0) {
-        return (_extractTideType(entry), time);
-      }
+    for (final e in tides) {
+      if (e.time.compareTo(nowStr) > 0) return e;
     }
-    if (data.isNotEmpty) {
-      final entry = data.first;
-      return (_extractTideType(entry), _extractTime(entry));
-    }
-    return null;
+    return tides.isNotEmpty ? tides.first : null;
   }
 }
