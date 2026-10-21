@@ -608,6 +608,34 @@ class MainActivity : FlutterActivity() {
                         VoiceRecordForegroundService.start(this, mode, threshold, action)
                         result.success(null)
                     }
+                    "startCatchSession" -> {
+                        val species = call.argument<List<String>>("species") ?: emptyList()
+                        val arr = JSONArray()
+                        for (s in species) arr.put(s)
+                        CatchLogService.start(this, arr.toString())
+                        result.success(null)
+                    }
+                    "stopCatchSession" -> {
+                        CatchLogService.prefsOf(this)
+                            .edit().putBoolean(CatchLogService.PREFS_ACTIVE_KEY, false).apply()
+                        CatchLogService.stop(this)
+                        result.success(null)
+                    }
+                    "catchSyncConfig" -> {
+                        // 카운터/알림이 쓸 어종 목록 + 저장 경로(네이티브가 MD 직접 수정)
+                        val species = call.argument<List<String>>("species") ?: emptyList()
+                        val savePath = call.argument<String>("savePath") ?: ""
+                        val spArr = JSONArray(); for (s in species) spArr.put(s)
+                        CatchLogService.prefsOf(this).edit()
+                            .putString(CatchLogService.PREFS_SPECIES_KEY, spArr.toString())
+                            .putString(CatchLogService.PREFS_SAVEPATH_KEY, savePath)
+                            .apply()
+                        result.success(null)
+                    }
+                    "isCatchSession" -> {
+                        result.success(CatchLogService.prefsOf(this)
+                            .getBoolean(CatchLogService.PREFS_ACTIVE_KEY, false))
+                    }
                     "canDrawOverlays" -> {
                         result.success(Settings.canDrawOverlays(this))
                     }

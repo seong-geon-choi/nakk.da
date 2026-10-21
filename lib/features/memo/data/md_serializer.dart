@@ -18,7 +18,10 @@ class MdSerializer {
     if (entry.videoPath != null) parts.add('[video](${entry.videoPath})');
     if (entry.fishLength != null) parts.add('- 📏 ${entry.fishLength!.toStringAsFixed(1)}cm');
     final species = entry.fishSpecies?.trim();
-    if (species != null && species.isNotEmpty) parts.add('- 🐟 $species');
+    if (species != null && species.isNotEmpty) {
+      // 알림 조과 기록은 🎣로 구분(메모 목록에서 숨김), 일반 어종은 🐟
+      parts.add('- ${entry.quickCatch ? '🎣' : '🐟'} $species');
+    }
     if (entry.text != null && entry.text!.isNotEmpty) parts.add(entry.text!);
     final body = parts.join('\n');
     return '\n---\n\n$header\n$body\n';
@@ -333,6 +336,7 @@ class MdSerializer {
         final bodyLines = <String>[];
         double? fishLength;
         String? fishSpecies;
+        bool quickCatch = false;
         i++;
         while (i < lines.length &&
             !lines[i].trim().startsWith('---') &&
@@ -342,11 +346,12 @@ class MdSerializer {
           final l = lines[i].trim();
           if (l.isNotEmpty) {
             final lm = RegExp(r'^- 📏 (\d+\.?\d*)cm$').firstMatch(l);
-            final sm = RegExp(r'^- 🐟 (.+)$').firstMatch(l);
+            final sm = RegExp(r'^- (🐟|🎣) (.+)$').firstMatch(l);
             if (lm != null) {
               fishLength = double.tryParse(lm.group(1)!);
             } else if (sm != null) {
-              var rest = sm.group(1)!.trim();
+              if (sm.group(1) == '🎣') quickCatch = true; // 알림 조과 기록
+              var rest = sm.group(2)!.trim();
               // 구 포맷의 "N마리" 접미사 제거 (마릿수는 더 이상 저장하지 않음)
               final cm = RegExp(r'\s*\d+\s*마리$').firstMatch(rest);
               if (cm != null) rest = rest.substring(0, cm.start).trim();
@@ -377,6 +382,7 @@ class MdSerializer {
           videoPath: videoPath,
           fishLength: fishLength,
           fishSpecies: fishSpecies,
+          quickCatch: quickCatch,
         ));
         continue;
       }

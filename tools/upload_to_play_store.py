@@ -80,6 +80,17 @@ def main() -> int:
         help="이전 릴리스의 출시노트를 새 릴리스에 복사",
     )
     ap.add_argument(
+        "--notes-file",
+        default=None,
+        help="이 UTF-8 텍스트 파일 내용을 출시노트로 사용(--notes-lang 언어, 기본 ko-KR). "
+             "--copy-notes보다 우선",
+    )
+    ap.add_argument(
+        "--notes-lang",
+        default="ko-KR",
+        help="--notes-file 출시노트의 언어 코드 (기본: ko-KR)",
+    )
+    ap.add_argument(
         "--notes-track",
         default=None,
         choices=["internal", "alpha", "beta", "production"],
@@ -127,7 +138,14 @@ def main() -> int:
             print(f"[2/4] 번들 업로드 완료: versionCode={version_code}")
 
         release = {"status": args.status, "versionCodes": [str(version_code)]}
-        if args.copy_notes:
+        if args.notes_file:
+            with open(args.notes_file, encoding="utf-8") as f:
+                text = f.read().strip()
+            release["releaseNotes"] = [
+                {"language": args.notes_lang, "text": text}
+            ]
+            print(f"      출시노트 작성({args.notes_lang}): {args.notes_file}")
+        elif args.copy_notes:
             src = args.notes_track or args.track
             notes = latest_release_notes(edits, args.package, edit_id, src)
             if notes:

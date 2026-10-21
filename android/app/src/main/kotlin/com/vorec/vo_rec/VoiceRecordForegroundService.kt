@@ -176,8 +176,44 @@ class VoiceRecordForegroundService : Service() {
 
     // ── 흔들기 트리거 분기 ─────────────────────────────────────
     private fun onShakeTriggered() {
-        if (currentAction == "camera") launchCameraOverLock()
-        else startVoiceRecording()
+        when (currentAction) {
+            "camera" -> launchCameraOverLock()
+            "counter" -> launchCounterOverLock()
+            else -> startVoiceRecording()
+        }
+    }
+
+    /** 흔들기 → 조과 카운터 화면을 잠금화면 위로 실행(카메라와 동일 메커니즘). */
+    private fun launchCounterOverLock() {
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastCameraLaunchTime < CAMERA_COOLDOWN_MS) return
+        lastCameraLaunchTime = now
+        vibrate(longArrayOf(0, 80))
+
+        val fullScreen = Intent(this, CatchCounterActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        if (Settings.canDrawOverlays(this)) {
+            try {
+                startActivity(fullScreen)
+                return
+            } catch (_: Exception) { /* 폴백 */ }
+        }
+        val fullScreenPi = PendingIntent.getActivity(
+            this, 0, fullScreen,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notif = NotificationCompat.Builder(this, CAMERA_CHANNEL_ID)
+            .setContentTitle("조과 카운터")
+            .setContentText("흔들기로 카운터를 엽니다")
+            .setSmallIcon(android.R.drawable.ic_menu_edit)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
+            .setAutoCancel(true)
+            .setFullScreenIntent(fullScreenPi, true)
+            .setContentIntent(fullScreenPi)
+            .build()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(CAMERA_NOTIFICATION_ID, notif)
     }
 
     /**
@@ -281,16 +317,27 @@ class VoiceRecordForegroundService : Service() {
         val (title, body) = when {
             currentMode == "none" -> "빠른 실행 서비스" to "빠른 실행이 비활성화되어 있습니다"
             currentAction == "camera" -> "카메라 대기 중" to "흔들기 3회로 카메라를 엽니다"
+            currentAction == "counter" -> "조과 카운터 대기 중" to "탭 또는 흔들기로 카운터를 엽니다"
             else -> "음성 메모 대기 중" to "흔들기 3회로 음성 메모를 시작합니다"
         }
-        return NotificationCompat.Builder(this, CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(body)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true).setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .addAction(android.R.drawable.ic_delete, "중지", stopPi)
-            .build()
+        // 카운터 대기 알림을 탭하면 바로 카운터 화면을 연다(즉시 활성화·이동).
+        if (currentAction == "counter") {
+            val openPi = PendingIntent.getActivity(
+                this, 7,
+                Intent(this, CatchCounterActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+            builder.setContentIntent(openPi)
+        }
+        return builder.build()
     }
 
     private fun showRecordingNotification() {

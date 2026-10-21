@@ -7,6 +7,7 @@ import '../../core/router/app_router.dart';
 import '../../core/widgets/action_button.dart';
 import '../../core/services/accessibility_service.dart';
 import '../../core/services/tracking_service.dart';
+import '../../core/services/catch_log_service.dart';
 import '../../core/widgets/confirm_dialog.dart';
 import '../../core/widgets/empty_state_view.dart';
 import '../../core/widgets/media_gallery_screen.dart';
@@ -354,13 +355,22 @@ class _BodyState extends ConsumerState<_Body> {
         else if (b is MemoEntry && b.videoPath != null)
           MediaGalleryItem(path: b.videoPath!, isVideo: true),
     ];
+    // 알림 조과 기록(quickCatch)은 목록에서 숨긴다. 편집/삭제는 원본 blocks 인덱스를
+    // 쓰므로, 숨긴 뒤에도 보이는 항목의 원본 인덱스를 보존한다.
+    final visibleIndices = [
+      for (var i = 0; i < dayFile.blocks.length; i++)
+        if (!(dayFile.blocks[i] is MemoEntry &&
+            (dayFile.blocks[i] as MemoEntry).quickCatch))
+          i,
+    ];
     return ListView.separated(
       controller: _scroll,
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.all(16),
-      itemCount: dayFile.blocks.length,
+      itemCount: visibleIndices.length,
       separatorBuilder: (context, index) => const Divider(height: 24),
-      itemBuilder: (context, index) {
+      itemBuilder: (context, position) {
+        final index = visibleIndices[position];
         final block = dayFile.blocks[index];
         final blockKey = block is MemoEntry
             ? 'memo_${block.timestamp.millisecondsSinceEpoch}'
@@ -998,6 +1008,9 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
           //   _buildMarkButton(context),
           //   const SizedBox(height: 10),
           // ],
+          // 조과 기록 세션 토글(경로 기록 버튼 바로 위, 동일 형태). 로직은 별도 위젯.
+          const _CatchLogButton(),
+          const SizedBox(height: 10),
           GestureDetector(
             onTap: _onTap,
             onPanUpdate: (details) {
@@ -1116,6 +1129,151 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
   //     ),
   //   );
   // }
+}
+
+// ── 조과 기록 세션 토글 버튼 (경로 기록 버튼과 동일 형태, 바로 위 배치) ──
+
+class _CatchLogButton extends ConsumerStatefulWidget {
+  const _CatchLogButton();
+
+  @override
+  ConsumerState<_CatchLogButton> createState() => _CatchLogButtonState();
+}
+
+class _CatchLogButtonState extends ConsumerState<_CatchLogButton>
+    with WidgetsBindingObserver {
+  bool _active = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _refreshStatus();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _refreshStatus();
+      // 네이티브가 MD를 직접 수정했으므로 오늘 메모/지도 갱신
+      final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+      if (savePath.isNotEmpty) {
+        ref.invalidate(dayFileProvider(todayMemoFilePath(savePath)));
+      }
+    }
+  }
+
+  /// 네이티브 세션 활성 상태를 버튼에 반영.
+  Future<void> _refreshStatus() async {
+    final active = await CatchLogService().isCatchSession();
+    if (mounted) setState(() => _active = active);
+  }
+
+  Future<void> _onTap() async {
+    if (_active) {
+      await CatchLogService().stopCatchSession();
+      if (mounted) {
+        setState(() => _active = false);
+        showAppToast(context, '조과 기록을 종료했습니다');
+      }
+      return;
+    }
+    final settings = ref.read(settingsProvider).valueOrNull;
+    final species = (settings?.catchQuickSpecies ?? const [])
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (species.isEmpty) {
+      if (mounted) showAppToast(context, '설정에서 기록할 어종을 먼저 지정하세요');
+      return;
+    }
+    // 기록마다 현재 위치가 필요하므로 '사용 중' 위치 권한을 확보한다(경로 기록과 동일).
+    if (!await Permission.locationWhenInUse.isGranted) {
+      if (!mounted || !await ensureLocationDisclosure(context)) return;
+      final status = await Permission.locationWhenInUse.request();
+      if (!status.isGranted) return;
+    }
+    await CatchLogService().startCatchSession(species);
+    await _maybeAutoAddLocation(); // 첫 기록 시 현장 정보 자동 추가(옵션)
+    if (mounted) {
+      setState(() => _active = true);
+      showAppToast(context, '알림에서 어종 버튼으로 기록하세요');
+    }
+  }
+
+  /// 옵션이 켜져 있고 오늘 파일에 현장 정보가 없으면, 카운터 시작 시 1회 자동 수집.
+  /// (메모 첫 기록 자동추가와 동일 동작을 카운터 시작에도 적용 — next.txt 4)
+  Future<void> _maybeAutoAddLocation() async {
+    final settings = ref.read(settingsProvider).valueOrNull;
+    if (settings == null ||
+        !settings.autoLocationOnFirstEntry ||
+        settings.savePath.isEmpty) {
+      return;
+    }
+    final path = todayMemoFilePath(settings.savePath);
+    try {
+      final dayFile = await ref.read(dayFileProvider(path).future);
+      if ((dayFile?.blocks ?? const []).any((b) => b is LocationStatus)) return;
+      if (!await Permission.locationWhenInUse.status.isGranted) return;
+      final loc = await ref
+          .read(locationProvider.notifier)
+          .buildEnrichedLocation(isMove: false);
+      await ref.read(dayFileProvider(path).notifier).addLocationBlock(loc);
+    } catch (_) {/* 실패는 조용히 무시(카운터 시작은 계속 진행) */}
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final idle = Colors.orange.shade700;
+    final rec = Colors.red.shade600;
+    final base = _active ? rec : idle;
+    return GestureDetector(
+      onTap: _onTap,
+      child: Container(
+        width: 60,
+        height: 60,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Color.alphaBlend(const Color(0x70FFFFFF), base),
+              Color.alphaBlend(const Color(0x55000000), base),
+            ],
+          ),
+          boxShadow: const [
+            BoxShadow(blurRadius: 2, offset: Offset(0, 4), color: Color(0x99000000)),
+            BoxShadow(blurRadius: 12, offset: Offset(0, 8), color: Color(0x44000000)),
+          ],
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.phishing,
+              color: Colors.white,
+              size: 22,
+            ),
+            Text(
+              _active ? '기록 중' : '조과 기록',
+              style: const TextStyle(
+                color: Colors.white,
+                fontSize: 9,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
 
 // ── 파일 목록에서 특정 날짜 파일을 홈 화면처럼 편집하는 화면 ─────

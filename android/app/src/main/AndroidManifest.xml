@@ -109,6 +109,11 @@
             android:exported="false"
             android:foregroundServiceType="location"/>
 
+        <service
+            android:name=".CatchLogService"
+            android:exported="false"
+            android:foregroundServiceType="location"/>
+
         <activity
             android:name=".AlarmActivity"
             android:exported="false"
@@ -116,6 +121,16 @@
             android:launchMode="singleInstance"
             android:showOnLockScreen="true"
             android:turnScreenOn="true"
+            android:theme="@android:style/Theme.Material.NoActionBar"/>
+
+        <activity
+            android:name=".CatchCounterActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:showOnLockScreen="true"
+            android:turnScreenOn="true"
+            android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@android:style/Theme.Material.NoActionBar"/>
     </application>
     <!-- Required to query activities that can process text, see:

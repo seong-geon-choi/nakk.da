@@ -5,6 +5,7 @@ import '../domain/models/app_settings.dart';
 import '../domain/settings_repository.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/services/tracking_service.dart';
+import '../../../core/services/catch_log_service.dart';
 import '../../backup/presentation/backup_provider.dart';
 
 export '../domain/models/app_settings.dart'
@@ -44,6 +45,9 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
         settings.quickLaunchMode.name,
         settings.shakeThresholdG,
         settings.shakeAction.name);
+    // 카운터/알림이 네이티브에서 MD를 직접 수정하도록 어종·저장경로 동기화
+    await CatchLogService()
+        .syncConfig(settings.catchQuickSpecies, settings.savePath);
     // 출퇴근 알림 추적 중이면, 네이티브가 사용자 스와이프로 중단됐는지 확인 후 정합화.
     // 중단됐으면 지도 아이콘을 끄고(active=false), 아니면 네이티브 재동기화.
     if (settings.commuteTracking) {
@@ -531,6 +535,18 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
           current.hiddenFishSpecies.where((s) => s != species).toList(),
     );
     await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
+  /// 조과 기록 알림의 빠른 버튼 어종 2개를 설정.
+  /// 공백 어종은 그대로 저장(네이티브에서 빈칸 제외해 카운터 개수를 정함).
+  Future<void> setCatchQuickSpecies(List<String> species) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final cleaned = species.map((s) => s.trim()).toList();
+    final updated = current.copyWith(catchQuickSpecies: cleaned);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    await CatchLogService().syncConfig(cleaned, updated.savePath); // 어종·경로 동기화
     state = AsyncData(updated);
   }
 

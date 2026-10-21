@@ -181,8 +181,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               ),
             ),
 
-            // ── 빠른 메모 실행 섹션 ──────────────────────
-            const _SectionHeader(label: '빠른 메모 실행'),
+            // ── 빠른 실행 섹션 ──────────────────────
+            const _SectionHeader(label: '빠른 실행'),
             ListTile(
               leading: const Icon(Icons.flash_on_outlined),
               title: const Text('실행 방법'),
@@ -306,6 +306,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const _FishSpeciesSubScreen()),
               ),
+            ),
+            ListTile(
+              leading: const Icon(Icons.exposure_plus_1),
+              title: const Text('조과 카운터'),
+              subtitle: Text(settings.catchQuickSpecies
+                  .where((s) => s.trim().isNotEmpty)
+                  .join(' · ')),
+              trailing: const Icon(Icons.edit_outlined),
+              onTap: () => _editCatchQuickSpecies(context, ref),
             ),
             ListTile(
               leading: const Icon(Icons.edit_document),
@@ -750,7 +759,7 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final settingsAsync = ref.watch(settingsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('빠른 메모 실행')),
+      appBar: AppBar(title: const Text('빠른 실행')),
       body: settingsAsync.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (e, _) => Center(child: Text('오류: $e')),
@@ -790,7 +799,7 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
                 RadioListTile<QuickLaunchMode>(
                   secondary: const Icon(Icons.block),
                   title: const Text('사용 안 함'),
-                  subtitle: const Text('빠른 메모 실행을 끕니다'),
+                  subtitle: const Text('빠른 실행을 끕니다'),
                   value: QuickLaunchMode.none,
                 ),
               ],
@@ -816,11 +825,12 @@ class _ShakeActionSelector extends ConsumerWidget {
       onChanged: (v) async {
         if (v == null) return;
         await ref.read(settingsProvider.notifier).updateShakeAction(v);
-        if (v != ShakeAction.camera) return;
+        // 카메라·카운터는 잠금화면 위에 화면을 띄우므로 동일한 권한 흐름이 필요.
+        if (v != ShakeAction.camera && v != ShakeAction.counter) return;
         if (!await Permission.notification.isGranted) {
           await Permission.notification.request();
         }
-        // 잠금/해제 상태 모두에서 흔들면 카메라가 바로 뜨게 하려면 오버레이 권한 필요.
+        // 잠금/해제 상태 모두에서 흔들면 화면이 바로 뜨게 하려면 오버레이 권한 필요.
         // 없으면 알림으로만 표시되어 탭해야 열린다.
         final tracking = TrackingService();
         if (await tracking.canDrawOverlays() || !context.mounted) return;
@@ -860,6 +870,12 @@ class _ShakeActionSelector extends ConsumerWidget {
             title: Text('카메라'),
             subtitle: Text('잠금화면에서도 흔들면 카메라가 열립니다'),
             value: ShakeAction.camera,
+          ),
+          RadioListTile<ShakeAction>(
+            secondary: Icon(Icons.plus_one),
+            title: Text('조과 카운터'),
+            subtitle: Text('잠금화면에서도 흔들면 조과 카운터가 열립니다'),
+            value: ShakeAction.counter,
           ),
         ],
       ),
@@ -1000,6 +1016,61 @@ Future<void> _cleanUnusedPhotos(BuildContext context, WidgetRef ref) async {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('$count개 사진 삭제 완료')),
     );
+  }
+}
+
+/// 조과 기록 어종 2개를 편집하는 다이얼로그. (카운터 숫자판 스킨은 카운터 화면에서 스와이프로 변경)
+Future<void> _editCatchQuickSpecies(BuildContext context, WidgetRef ref) async {
+  final settings = ref.read(settingsProvider).valueOrNull;
+  if (settings == null) return;
+  final cur = settings.catchQuickSpecies;
+  final c1 = TextEditingController(text: cur.isNotEmpty ? cur[0] : '');
+  final c2 = TextEditingController(text: cur.length > 1 ? cur[1] : '');
+  final saved = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('조과 카운터 어종'),
+      // 가로모드 등 세로 공간이 좁을 때 넘치지 않도록 스크롤 가능하게 감싼다.
+      content: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Text('알림·카운터에 쓸 어종 2개를 지정합니다.\n'
+                '한 칸을 비우면 카운터가 1개만 표시됩니다.',
+                style: TextStyle(fontSize: 13)),
+            const SizedBox(height: 12),
+            TextField(
+              controller: c1,
+              decoration: const InputDecoration(
+                  labelText: '어종 1', border: OutlineInputBorder()),
+            ),
+            const SizedBox(height: 10),
+            TextField(
+              controller: c2,
+              decoration: const InputDecoration(
+                  labelText: '어종 2', border: OutlineInputBorder()),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('취소')),
+        FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('저장')),
+      ],
+    ),
+  );
+  WidgetsBinding.instance.addPostFrameCallback((_) {
+    c1.dispose();
+    c2.dispose();
+  });
+  if (saved == true) {
+    await ref
+        .read(settingsProvider.notifier)
+        .setCatchQuickSpecies([c1.text, c2.text]);
   }
 }
 

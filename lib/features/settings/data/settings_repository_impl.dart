@@ -34,6 +34,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _lastSyncSuccessKey = 'last_sync_success';
   static const _fishSpeciesKey = 'fish_species';
   static const _hiddenFishSpeciesKey = 'hidden_fish_species';
+  static const _catchQuickSpeciesKey = 'catch_quick_species';
   static const _tackleRodsKey = 'tackle_rods';
   static const _tackleReelsKey = 'tackle_reels';
   static const _tackleLinesKey = 'tackle_lines';
@@ -152,6 +153,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
             ...kCommonFishSpecies.where((s) => !savedFishSpecies.contains(s)),
           ];
     final hiddenFishSpecies = prefs.getStringList(_hiddenFishSpeciesKey) ?? const [];
+    // null이면 AppSettings 기본값(주꾸미/갑오징어) 사용
+    final catchQuickSpecies = prefs.getStringList(_catchQuickSpeciesKey);
     final tackleRods = prefs.getStringList(_tackleRodsKey) ?? const [];
     final tackleReels = prefs.getStringList(_tackleReelsKey) ?? const [];
     final tackleLines = prefs.getStringList(_tackleLinesKey) ?? const [];
@@ -216,6 +219,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       lastSyncSuccess: lastSyncSuccessRaw,
       fishSpecies: fishSpecies, // null이면 AppSettings 기본값(kCommonFishSpecies)
       hiddenFishSpecies: hiddenFishSpecies,
+      catchQuickSpecies: catchQuickSpecies,
       tackleRods: tackleRods,
       tackleReels: tackleReels,
       tackleLines: tackleLines,
@@ -290,6 +294,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     }
     await prefs.setStringList(_fishSpeciesKey, settings.fishSpecies);
     await prefs.setStringList(_hiddenFishSpeciesKey, settings.hiddenFishSpecies);
+    await prefs.setStringList(_catchQuickSpeciesKey, settings.catchQuickSpecies);
     await prefs.setStringList(_tackleRodsKey, settings.tackleRods);
     await prefs.setStringList(_tackleReelsKey, settings.tackleReels);
     await prefs.setStringList(_tackleLinesKey, settings.tackleLines);

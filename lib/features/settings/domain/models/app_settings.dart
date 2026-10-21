@@ -479,8 +479,8 @@ class WatermarkSettings {
 
 enum QuickLaunchMode { none, shake }
 
-/// 흔들기 실행 시 동작: 음성 메모(기본) / 카메라
-enum ShakeAction { voice, camera }
+/// 흔들기 실행 시 동작: 음성 메모(기본) / 카메라 / 조과 카운터
+enum ShakeAction { voice, camera, counter }
 
 // ── 앱 전체 설정 ───────────────────────────────────────────────
 
@@ -556,6 +556,7 @@ class AppSettings {
   final bool? lastSyncSuccess;
   final List<String> fishSpecies; // 어종 입력 목록 (사용자 편집 가능)
   final List<String> hiddenFishSpecies; // 메모 드롭다운에서 숨길(체크 해제) 어종
+  final List<String> catchQuickSpecies; // 조과 기록 알림의 빠른 버튼 어종 2개(편집 가능)
   // 태클 프리셋(입력 시 셀렉트박스로 재사용, 최신순)
   final List<String> tackleRods;
   final List<String> tackleReels;
@@ -651,6 +652,7 @@ class AppSettings {
     this.lastSyncSuccess,
     List<String>? fishSpecies,
     List<String>? hiddenFishSpecies,
+    List<String>? catchQuickSpecies,
     this.locationFabRight = 16,
     this.locationFabBottom = 100,
     this.trackingFabRight = 16,
@@ -681,7 +683,9 @@ class AppSettings {
   })  : watermarkTemplates =
             watermarkTemplates ?? WatermarkSettings.defaultTemplates(),
         fishSpecies = fishSpecies ?? kCommonFishSpecies,
-        hiddenFishSpecies = hiddenFishSpecies ?? const [];
+        hiddenFishSpecies = hiddenFishSpecies ?? const [],
+        catchQuickSpecies =
+            catchQuickSpecies ?? const ['주꾸미', '갑오징어'];
 
   String get effectiveKhoaApiKey {
     final key = khoaApiKey?.trim();
@@ -717,6 +721,7 @@ class AppSettings {
     bool clearLastSync = false,
     List<String>? fishSpecies,
     List<String>? hiddenFishSpecies,
+    List<String>? catchQuickSpecies,
     List<String>? tackleRods,
     List<String>? tackleReels,
     List<String>? tackleLines,
@@ -774,6 +779,7 @@ class AppSettings {
       lastSyncSuccess: clearLastSync ? null : (lastSyncSuccess ?? this.lastSyncSuccess),
       fishSpecies: fishSpecies ?? this.fishSpecies,
       hiddenFishSpecies: hiddenFishSpecies ?? this.hiddenFishSpecies,
+      catchQuickSpecies: catchQuickSpecies ?? this.catchQuickSpecies,
       tackleRods: tackleRods ?? this.tackleRods,
       tackleReels: tackleReels ?? this.tackleReels,
       tackleLines: tackleLines ?? this.tackleLines,

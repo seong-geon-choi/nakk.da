@@ -10,11 +10,14 @@ import 'package:latlong2/latlong.dart';
 import '../../memo/domain/models/memo_entry.dart';
 import '../../memo/presentation/memo_provider.dart';
 import '../../location/domain/models/location_status.dart';
+import '../../tide/domain/models/tide_station.dart';
+import '../../../core/widgets/catch_tide_chart.dart';
 import '../../settings/presentation/settings_provider.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/utils/file_name_parser.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/services/tracking_service.dart';
+import '../../../core/widgets/media_gallery_screen.dart';
 import '../../../core/widgets/memo_date_picker_dialog.dart';
 import '../../../core/widgets/saf_image.dart';
 import '../../../core/widgets/video_player_widget.dart';
@@ -41,6 +44,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _showTimes = false;
   bool _showDistances = false;
   bool _showTrack = false;
+  bool _showMemoPoints = true; // 메모 지점(파란 마커) 표시 여부. 끄면 숨김
+  bool _showCatchChart = false; // 조과 보기: 조위+시간당 조과 차트 패널
+  double? _chartLeft; // 조과 차트 패널 위치(드래그 이동). null이면 기본(하단)
+  double? _chartTop;
+  List<TideEvent> _dayTides = const []; // 그날 현황 블록의 만조/간조(조위 곡선용)
+  Map<String, List<DateTime>> _catchBySpecies = const {}; // 어종별 기록 시각(시간당 조과 막대)
   Timer? _noGpsTimer;
   bool _dismissedNoGpsCard = false;
   DateTime _loadedDate = DateTime.now();
@@ -99,16 +108,31 @@ class _MapScreenState extends ConsumerState<MapScreen>
   void _applyBlocks(List<dynamic> blocks, DateTime date,
       {bool resetToggles = true, bool keepCamera = false}) {
     final pts = <_GpsPoint>[];
+    final catchBySpecies = <String, List<DateTime>>{};
+    List<TideEvent> dayTides = const [];
     for (final b in blocks) {
-      if (b is MemoEntry && b.hasGps) pts.add(_GpsPoint.fromMemo(b));
-      if (b is LocationStatus && b.latitude != null && b.longitude != null) {
-        pts.add(_GpsPoint.fromLocation(b));
+      if (b is MemoEntry) {
+        if (b.hasGps) pts.add(_GpsPoint.fromMemo(b));
+        // 조과(어종 기록): 수동 입력·알림 기록 모두 어종별 시간당 집계 대상
+        final sp = b.fishSpecies?.trim();
+        if (sp != null && sp.isNotEmpty) {
+          catchBySpecies.putIfAbsent(sp, () => []).add(b.timestamp);
+        }
+      }
+      if (b is LocationStatus) {
+        if (b.latitude != null && b.longitude != null) {
+          pts.add(_GpsPoint.fromLocation(b));
+        }
+        // 조위 곡선용: tides가 있는 첫 현황 블록을 사용
+        if (dayTides.isEmpty && b.tides.isNotEmpty) dayTides = b.tides;
       }
     }
     pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     _noGpsTimer?.cancel();
     setState(() {
       _points = pts;
+      _catchBySpecies = catchBySpecies;
+      _dayTides = dayTides;
       _trackPoints = [];
       _selected = null;
       _timeFilter = null; // 날짜 변경/새로고침 시 시간 필터 초기화
@@ -117,6 +141,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _showTimes = false;
         _showDistances = false;
         _showTrack = false;
+        _showMemoPoints = true;
+        _showCatchChart = false;
       }
       _dismissedNoGpsCard = false;
       _loadedDate = date;
@@ -330,6 +356,20 @@ class _MapScreenState extends ConsumerState<MapScreen>
       _pulseCtrl.stop();
       setState(() => _currentLocMarker = null);
     });
+  }
+
+  /// 지도에 표시된 그날 지점들의 미디어(사진·동영상)를 시간순으로 모은다.
+  /// 좌표 팝업에서 사진을 탭하면 이 목록으로 전체화면 갤러리를 연다.
+  List<MediaGalleryItem> _dayMediaItems() {
+    final sorted = _points.toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    return [
+      for (final p in sorted)
+        if (p.photoPath != null)
+          MediaGalleryItem(path: p.photoPath!, isVideo: false)
+        else if (p.videoPath != null)
+          MediaGalleryItem(path: p.videoPath!, isVideo: true),
+    ];
   }
 
   void _showToastMessage(String msg) => showAppToast(context, msg);
@@ -851,9 +891,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
         .select((s) => s.valueOrNull?.commuteAlarmActive ?? true));
     // 시간대 필터 적용된 지점 목록(렌더링 전반에서 이 목록을 사용).
     final dataRange = _dataMinuteRange();
-    final fPoints = _timeFilter == null
-        ? _points
-        : _points.where((p) => _passMinute(p.timestamp)).toList();
+    // 메모 지점 숨김 시 isMemo 지점 제외(청록 위치상태 지점은 유지). 시간대 필터도 함께 적용.
+    // 조과(🎣) 지점은 기본 숨김 — '조과 보기'(차트) ON일 때만 마커로 표시.
+    final fPoints = _points.where((p) {
+      if (p.isCatch && !_showCatchChart) return false;
+      if (!_showMemoPoints && p.isMemo) return false;
+      return _passMinute(p.timestamp);
+    }).toList();
     final fTrack = _timeFilter == null
         ? _trackPoints
         : _trackPoints.where((p) => _passMinute(p.timestamp)).toList();
@@ -1218,6 +1262,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 ),
             ],
           ),
+          // 조과 보기 패널: 조위 사인곡선 + 시간당 조과 막대. 제목줄을 잡고 드래그 이동.
+          if (_showCatchChart) _buildChartPanel(context),
           // 선택된 마커 팝업
           if (_selected != null)
             Positioned(
@@ -1227,6 +1273,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
               child: _PointPopup(
                 point: _selected!,
                 savePath: _savePath,
+                galleryItems: _dayMediaItems(),
                 onClose: () => setState(() => _selected = null),
               ),
             ),
@@ -1389,10 +1436,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 ),
               ),
             ),
-          // 우측 세로 툴바
+          // 우측 세로 툴바 (가로모드에서 내비게이션 바에 가리지 않도록 세이프에어리어 반영)
           Positioned(
-            top: 8,
-            right: 8,
+            top: 8 + MediaQuery.of(context).padding.top,
+            right: 8 + MediaQuery.of(context).padding.right,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
               child: Material(
@@ -1425,6 +1472,34 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       _divider(),
                     ],
                     _toolBtn(Icons.my_location, null, _moveToCurrentLocation),
+                    _divider(),
+                    _toolBtn(
+                      _showMemoPoints ? Icons.location_on : Icons.location_off,
+                      _points.any((p) => p.isMemo)
+                          ? (_showMemoPoints
+                              ? Theme.of(context).colorScheme.primary
+                              : null)
+                          : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+                      _points.any((p) => p.isMemo)
+                          ? () {
+                              setState(() => _showMemoPoints = !_showMemoPoints);
+                              _showToastMessage(
+                                  _showMemoPoints ? '메모 지점 표시' : '메모 지점 숨김');
+                            }
+                          : () => _showToastMessage('메모 지점이 없습니다'),
+                    ),
+                    _divider(),
+                    _toolBtn(
+                      Icons.ssid_chart, // 사인형 곡선 아이콘
+                      (_catchBySpecies.isNotEmpty || _dayTides.isNotEmpty)
+                          ? (_showCatchChart
+                              ? Theme.of(context).colorScheme.primary
+                              : null)
+                          : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+                      (_catchBySpecies.isNotEmpty || _dayTides.isNotEmpty)
+                          ? () => setState(() => _showCatchChart = !_showCatchChart)
+                          : () => _showToastMessage('조과·물때 정보가 없습니다'),
+                    ),
                     _divider(),
                     _toolBtn(
                       Icons.filter_alt,
@@ -1533,6 +1608,68 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   Widget _divider() =>
       const Divider(height: 1, thickness: 1, indent: 6, endIndent: 6);
+
+  /// 조과 차트 패널. 제목줄을 드래그해 이동, ×로 닫기. 위치는 화면 안으로 클램프.
+  Widget _buildChartPanel(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    final cs = Theme.of(context).colorScheme;
+    final panelW = math.min(mq.size.width - 16, 520.0);
+    final defLeft = (mq.size.width - panelW) / 2;
+    final defTop =
+        (mq.size.height - 300 - mq.padding.bottom).clamp(mq.padding.top + 8, mq.size.height - 140);
+    final left = (_chartLeft ?? defLeft).clamp(0.0, mq.size.width - panelW);
+    final top = (_chartTop ?? defTop).clamp(mq.padding.top, mq.size.height - 120);
+    return Positioned(
+      left: left,
+      top: top,
+      width: panelW,
+      child: Material(
+        elevation: 4,
+        borderRadius: BorderRadius.circular(12),
+        color: cs.surfaceContainerHighest.withValues(alpha: 0.96),
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(10, 4, 10, 6),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // 드래그 핸들 겸 제목줄
+              GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onPanUpdate: (d) => setState(() {
+                  _chartLeft = (left + d.delta.dx)
+                      .clamp(0.0, mq.size.width - panelW);
+                  _chartTop =
+                      (top + d.delta.dy).clamp(mq.padding.top, mq.size.height - 120);
+                }),
+                child: Row(
+                  children: [
+                    Icon(Icons.drag_indicator,
+                        size: 16, color: cs.onSurfaceVariant.withValues(alpha: 0.7)),
+                    const SizedBox(width: 2),
+                    Text('조위 · 시간당 조과',
+                        style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: cs.onSurfaceVariant)),
+                    const Spacer(),
+                    GestureDetector(
+                      onTap: () => setState(() => _showCatchChart = false),
+                      child: const Padding(
+                        padding: EdgeInsets.all(4),
+                        child: Icon(Icons.close, size: 18),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              CatchTideChart(tides: _dayTides, catchesBySpecies: _catchBySpecies),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 // ── 분산 배치 포인트 모델 ──────────────────────────────────
@@ -1646,6 +1783,7 @@ class _GpsPoint {
   final String? videoPath;
   final double? fishLength;
   final String? address;
+  final bool isCatch; // 알림/카운터로 적재된 조과 기록(🎣) — 조과 보기 ON일 때만 마커 표시
 
   _GpsPoint.fromMemo(MemoEntry e)
       : timestamp = e.timestamp,
@@ -1656,7 +1794,8 @@ class _GpsPoint {
         photoPath = e.photoPath,
         videoPath = e.videoPath,
         fishLength = e.fishLength,
-        address = null;
+        address = null,
+        isCatch = e.quickCatch;
 
   _GpsPoint.fromLocation(LocationStatus l)
       : timestamp = l.timestamp,
@@ -1667,7 +1806,8 @@ class _GpsPoint {
         photoPath = null,
         videoPath = null,
         fishLength = null,
-        address = l.address;
+        address = l.address,
+        isCatch = false;
 
   String get timeLabel {
     final h = timestamp.hour.toString().padLeft(2, '0');
@@ -1682,15 +1822,33 @@ class _PointPopup extends StatelessWidget {
   final _GpsPoint point;
   final String savePath;
   final VoidCallback onClose;
+  // 그날 지점들의 미디어 목록. 사진/동영상 탭 시 이 목록으로 전체화면 갤러리를 연다.
+  final List<MediaGalleryItem> galleryItems;
 
   const _PointPopup({
     required this.point,
     required this.savePath,
     required this.onClose,
+    this.galleryItems = const [],
   });
+
+  /// 이 지점의 미디어를 갤러리 목록에서 찾아 그 인덱스로 전체화면을 연다.
+  VoidCallback? _openGallery(BuildContext context) {
+    final path = point.photoPath ?? point.videoPath;
+    final idx = galleryItems.indexWhere((m) => m.path == path);
+    if (idx < 0) return null;
+    return () => Navigator.of(context).push(MaterialPageRoute(
+          builder: (_) => MediaGalleryScreen(
+            items: galleryItems,
+            initialIndex: idx,
+            savePath: savePath,
+          ),
+        ));
+  }
 
   @override
   Widget build(BuildContext context) {
+    final mediaTap = _openGallery(context);
     return Card(
       elevation: 8,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -1739,6 +1897,7 @@ class _PointPopup extends StatelessWidget {
                   savePath: savePath,
                   height: 80,
                   fit: BoxFit.cover,
+                  onTap: mediaTap,
                 ),
               ),
             if (point.videoPath != null)
@@ -1747,6 +1906,7 @@ class _PointPopup extends StatelessWidget {
                 child: VideoPlayerWidget(
                   videoPath: point.videoPath!,
                   height: 80,
+                  onTap: mediaTap,
                 ),
               ),
             if (point.text != null && point.text!.isNotEmpty)

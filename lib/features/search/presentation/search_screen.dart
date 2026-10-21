@@ -6,6 +6,7 @@ import '../domain/models/search_hit.dart';
 import '../../settings/presentation/settings_provider.dart';
 import '../../../core/router/app_router.dart';
 import '../../../core/widgets/empty_state_view.dart';
+import '../../../core/widgets/media_gallery_screen.dart';
 import '../../../core/widgets/memo_entry_card.dart';
 import '../../../core/utils/date_formatter.dart';
 
@@ -211,6 +212,15 @@ class _ResultList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // 검색된 모든 미디어(사진·동영상)를 결과 순서대로 모아, 사진 탭 시 전체 결과를
+    // 순차 스와이프할 수 있게 한다(날짜 경계 없이 검색 결과 전체).
+    final galleryItems = <MediaGalleryItem>[
+      for (final h in results)
+        if (h.entry.photoPath != null)
+          MediaGalleryItem(path: h.entry.photoPath!, isVideo: false)
+        else if (h.entry.videoPath != null)
+          MediaGalleryItem(path: h.entry.videoPath!, isVideo: true),
+    ];
     // 날짜별 그룹 헤더 + 엔트리 평탄 리스트
     final items = <dynamic>[];
     DateTime? lastDate;
@@ -241,6 +251,7 @@ class _ResultList extends StatelessWidget {
               entry: hit.entry,
               savePath: savePath,
               maxLines: 3,
+              galleryItems: galleryItems,
             ),
           ),
         );
