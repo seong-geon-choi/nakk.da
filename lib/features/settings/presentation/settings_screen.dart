@@ -16,6 +16,7 @@ import '../../../core/constants/api_keys.dart';
 import '../../../core/utils/media_scanner.dart';
 import '../../../core/services/tracking_service.dart';
 import '../../../core/services/bt_remote_service.dart';
+import '../../../core/services/catch_log_service.dart';
 import '../../permission/presentation/permission_center.dart';
 import '../../permission/presentation/permission_items.dart';
 
@@ -309,28 +310,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               ),
             ),
             ListTile(
-              leading: const Icon(Icons.exposure_plus_1),
-              title: const Text('조과 카운터'),
-              subtitle: Text(settings.catchQuickSpecies
-                  .where((s) => s.trim().isNotEmpty)
-                  .join(' · ')),
-              trailing: const Icon(Icons.edit_outlined),
-              onTap: () => _editCatchQuickSpecies(context, ref),
-            ),
-            ListTile(
-              leading: const Icon(Icons.settings_remote_outlined),
-              title: const Text('블루투스 리모컨 카운트'),
-              subtitle: const Text('이어폰·리모컨 버튼으로 카운트 ±1'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => _RemoteKeyMappingScreen(
-                  species: settings.catchQuickSpecies
-                      .where((s) => s.trim().isNotEmpty)
-                      .toList(),
-                ),
-              )),
-            ),
-            ListTile(
               leading: const Icon(Icons.edit_document),
               title: const Text('메모 원본 수정하기'),
               subtitle: const Text('마크다운 파일을 직접 편집합니다'),
@@ -342,6 +321,46 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               subtitle: const Text('메모에 포함되지 않은 복사 사진을 삭제합니다'),
               onTap: () => _cleanUnusedPhotos(context, ref),
             ),
+
+            // ── 조과 카운터 섹션 ─────────────────────────
+            const SizedBox(height: 16),
+            const _SectionHeader(label: '조과 카운터'),
+            ListTile(
+              leading: const Icon(Icons.exposure_plus_1),
+              title: const Text('카운트할 어종'),
+              subtitle: Text(
+                settings.catchQuickSpecies
+                        .where((s) => s.trim().isNotEmpty)
+                        .isEmpty
+                    ? '카운터에 표시할 어종을 지정하세요'
+                    : settings.catchQuickSpecies
+                        .where((s) => s.trim().isNotEmpty)
+                        .join(' · '),
+              ),
+              trailing: const Icon(Icons.edit_outlined),
+              onTap: () => _editCatchQuickSpecies(context, ref),
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings_remote_outlined),
+              title: const Text('블루투스 버튼 연동'),
+              subtitle: const Text('이어폰·리모컨 버튼으로 카운트 올리기/내리기'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => _RemoteKeyMappingScreen(
+                  species: settings.catchQuickSpecies
+                      .where((s) => s.trim().isNotEmpty)
+                      .toList(),
+                ),
+              )),
+            ),
+            ListTile(
+              leading: const Icon(Icons.add_to_home_screen),
+              title: const Text('홈화면 바로가기'),
+              subtitle: const Text('홈 화면 아이콘으로 카운터를 바로 열기'),
+              trailing: const Icon(Icons.add),
+              onTap: () => _createCounterShortcut(context),
+            ),
+
             const SizedBox(height: 16),
             const _SectionHeader(label: 'About'),
             _AboutTile(),
@@ -1031,6 +1050,17 @@ Future<void> _cleanUnusedPhotos(BuildContext context, WidgetRef ref) async {
       SnackBar(content: Text('$count개 사진 삭제 완료')),
     );
   }
+}
+
+/// 홈화면에 '조과 카운터' 고정 바로가기 추가 요청(시스템 확인 대화상자가 뜸).
+Future<void> _createCounterShortcut(BuildContext context) async {
+  final ok = await CatchLogService().createCounterShortcut();
+  if (!context.mounted) return;
+  ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+    content: Text(ok
+        ? '홈화면 추가 요청을 보냈어요. 화면 안내에서 "추가"를 눌러주세요.'
+        : '이 기기(런처)에서는 홈화면 바로가기 추가를 지원하지 않아요.'),
+  ));
 }
 
 /// 조과 기록 어종 2개를 편집하는 다이얼로그. (카운터 숫자판 스킨은 카운터 화면에서 스와이프로 변경)

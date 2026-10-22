@@ -3,6 +3,9 @@ package com.sgchoisg.nakkda
 import android.app.Activity
 import android.content.*
 import android.content.pm.ServiceInfo
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.drawable.Icon
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -34,6 +37,7 @@ class MainActivity : FlutterActivity() {
 
     private var accessibilityChannel: MethodChannel? = null
     private var btRemoteChannel: MethodChannel? = null
+    private var catchEventsChannel: MethodChannel? = null
     // 설정 화면의 "키 등록" 중에만 켜지는 캡처 세션/플래그.
     private var captureSession: MediaButtonSession? = null
     @Volatile private var captureActive = false
@@ -55,6 +59,13 @@ class MainActivity : FlutterActivity() {
             runOnUiThread {
                 accessibilityChannel?.invokeMethod("onVoiceResult", text)
             }
+        }
+    }
+
+    // 조과 집계 변경(알림 +1·블루투스 리모컨 등) → Flutter 지도/차트 즉시 갱신용.
+    private val catchCountsReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            runOnUiThread { catchEventsChannel?.invokeMethod("countsChanged", null) }
         }
     }
 
@@ -652,6 +663,9 @@ class MainActivity : FlutterActivity() {
                         } catch (_: Exception) {}
                         result.success(null)
                     }
+                    "createCounterShortcut" -> {
+                        result.success(createCounterShortcut())
+                    }
                     "canDrawOverlays" -> {
                         result.success(Settings.canDrawOverlays(this))
                     }
@@ -700,6 +714,12 @@ class MainActivity : FlutterActivity() {
         }
 
         // ── 블루투스 리모컨 채널 (조과 카운트 키 매핑/캡처) ────────
+        // 조과 집계 변경 이벤트(네이티브→Flutter) 전달 채널.
+        catchEventsChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "com.sgchoisg.nakkda/catchevents"
+        )
+
         btRemoteChannel = MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger, btRemoteChannelName
         )
@@ -739,6 +759,26 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+    }
+
+    /**
+     * 홈화면에 '조과 카운터' 고정 바로가기를 요청한다(사용자가 시스템 대화상자에서 확인).
+     * @return 요청이 지원·수락되었는지(사용자 최종 확인 여부는 비동기라 알 수 없음).
+     */
+    private fun createCounterShortcut(): Boolean {
+        val sm = getSystemService(ShortcutManager::class.java) ?: return false
+        if (!sm.isRequestPinShortcutSupported) return false
+        val intent = Intent(this, CounterLauncherActivity::class.java).apply {
+            action = Intent.ACTION_VIEW
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        }
+        val info = ShortcutInfo.Builder(this, "catch_counter")
+            .setShortLabel("조과 카운터")
+            .setLongLabel("조과 카운터 열기")
+            .setIcon(Icon.createWithResource(this, R.drawable.ic_shortcut_counter))
+            .setIntent(intent)
+            .build()
+        return try { sm.requestPinShortcut(info, null) } catch (_: Exception) { false }
     }
 
     /** 매핑 JSON을 읽어 변형 후 저장. */
@@ -1104,16 +1144,21 @@ class MainActivity : FlutterActivity() {
                 this, mode, LocationTrackingService.getShakeThresholdG(this))
         }
         val filter = IntentFilter(VoiceRecordForegroundService.BROADCAST_ACTION)
+        val catchFilter = IntentFilter(CatchLogService.ACTION_COUNTS_CHANGED)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(voiceResultReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            registerReceiver(catchCountsReceiver, catchFilter, Context.RECEIVER_NOT_EXPORTED)
         } else {
             registerReceiver(voiceResultReceiver, filter)
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(catchCountsReceiver, catchFilter)
         }
     }
 
     override fun onPause() {
         super.onPause()
         try { unregisterReceiver(voiceResultReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(catchCountsReceiver) } catch (_: Exception) {}
         stopKeyCapture()
     }
 }

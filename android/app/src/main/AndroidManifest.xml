@@ -132,6 +132,14 @@
             android:turnScreenOn="true"
             android:configChanges="orientation|screenSize|keyboardHidden"
             android:theme="@android:style/Theme.Material.NoActionBar"/>
+
+        <!-- 홈화면 고정 바로가기 → 조과 카운터 바로 실행용 트램펄린(화면 없음). -->
+        <activity
+            android:name=".CounterLauncherActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"/>
     </application>
     <!-- Required to query activities that can process text, see:
          https://developer.android.com/training/package-visibility and

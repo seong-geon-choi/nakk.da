@@ -76,9 +76,25 @@ class CatchCounterActivity : Activity() {
         setContentView(buildRoot())
     }
 
-    // 리모컨으로 ± 되어 집계가 바뀌면(서비스가 브로드캐스트) 화면을 즉시 다시 그린다.
+    // 화면 버튼으로 마지막으로 ± 한 시각(ms). 자기 변경의 파일 기록이 연타를
+    // 못 따라잡아 과거값을 되읽는 깜빡임(2→1→2)을 막는 데 쓴다.
+    private var lastLocalChangeMs = 0L
+
+    // 리모컨/알림으로 집계가 바뀌면(서비스가 브로드캐스트) 화면을 즉시 다시 그린다.
+    // 단, 방금 화면 버튼으로 누른 직후(연타)엔 파일 기록이 아직 못 따라잡아
+    // 로컬값보다 작게 읽힐 수 있다 → 그때의 '하향'만 무시해 깜빡임(2→1→2)을 막고,
+    // 외부(리모컨)로 늘어난 '상향'은 그대로 반영한다.
     private val countsReceiver = object : BroadcastReceiver() {
-        override fun onReceive(context: Context, intent: Intent) = refreshCounts()
+        override fun onReceive(context: Context, intent: Intent) {
+            val fileCounts = CatchLogService.loadCountsFromFile(this@CatchCounterActivity)
+            val recentLocal = System.currentTimeMillis() - lastLocalChangeMs < 800
+            for (i in species.indices) {
+                val f = fileCounts[species[i]] ?: 0
+                if (recentLocal && f < counts[i]) continue // 기록 지연에 의한 일시적 하향 무시
+                counts[i] = f
+                updateDigits(i)
+            }
+        }
     }
 
     override fun onResume() {
@@ -405,6 +421,7 @@ class CatchCounterActivity : Activity() {
 
     private fun change(index: Int, delta: Int) {
         if (delta < 0 && counts[index] <= 0) return
+        lastLocalChangeMs = System.currentTimeMillis()
         counts[index] = (counts[index] + delta).coerceIn(0, 999)
         updateDigits(index)
         val action = if (delta > 0) CatchLogService.ACTION_ADD else CatchLogService.ACTION_REMOVE

@@ -377,6 +377,11 @@ class _GalleryPickerScreenState extends State<GalleryPickerScreen>
                                 ),
                               ),
                             ),
+                          // 마지막 줄이 하단 내비게이션 바에 가리지 않도록 시스템 인셋만큼 띄운다.
+                          SliverToBoxAdapter(
+                            child: SizedBox(
+                                height: MediaQuery.of(context).padding.bottom),
+                          ),
                         ],
                       ),
                     ),

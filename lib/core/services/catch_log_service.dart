@@ -41,4 +41,14 @@ class CatchLogService {
       await _channel.invokeMethod('openCatchCounter');
     } catch (_) {}
   }
+
+  /// 홈화면에 '조과 카운터' 고정 바로가기 추가를 요청한다(시스템 확인 대화상자).
+  /// 지원/수락되면 true. (사용자 최종 확인 여부는 비동기라 알 수 없음)
+  Future<bool> createCounterShortcut() async {
+    try {
+      return await _channel.invokeMethod<bool>('createCounterShortcut') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 }

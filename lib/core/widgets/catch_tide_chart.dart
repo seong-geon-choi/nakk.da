@@ -11,11 +11,26 @@ class CatchTideChart extends StatefulWidget {
   final Map<String, List<DateTime>> catchesBySpecies;
   final double height;
 
+  /// 범례에서 숨긴 어종 집합이 바뀔 때 호출(지도 마커 숨김 동기화용).
+  final ValueChanged<Set<String>>? onHiddenChanged;
+
+  /// 어종 막대·범례 색 팔레트. 지도 조과 마커도 같은 색을 쓰도록 공개한다.
+  /// 어종 색 = palette[보이는어종순서.indexOf(어종) % palette.length].
+  /// 지도의 고정 역할색(메모=파랑, 현장정보=청록, 이동경로·현재위치=주황,
+  /// 좌표찍기=보라, 조위선=테마 primary)과 겹치지 않도록 빨강·초록·핑크·앰버로 둔다.
+  static const List<Color> palette = [
+    Color(0xFFE53935), // 빨강
+    Color(0xFF2E7D32), // 진초록(청록과 구분)
+    Color(0xFFEC407A), // 핑크(보라와 구분)
+    Color(0xFFFFA000), // 앰버(주황과 구분)
+  ];
+
   const CatchTideChart({
     super.key,
     required this.tides,
     required this.catchesBySpecies,
     this.height = 160,
+    this.onHiddenChanged,
   });
 
   @override
@@ -25,9 +40,7 @@ class CatchTideChart extends StatefulWidget {
 class _CatchTideChartState extends State<CatchTideChart> {
   final Set<String> _hidden = {}; // 숨긴 어종
 
-  static const List<Color> _palette = [
-    Color(0xFFFF8A3D), Color(0xFF3DA5FF), Color(0xFF34C759), Color(0xFFD65DB1),
-  ];
+  static const List<Color> _palette = CatchTideChart.palette;
 
   static int? _parseMin(String hhmm) {
     final p = hhmm.split(':');
@@ -153,13 +166,16 @@ class _CatchTideChartState extends State<CatchTideChart> {
   Widget _speciesChip(String label, Color c, ColorScheme cs) {
     final on = !_hidden.contains(label);
     return GestureDetector(
-      onTap: () => setState(() {
-        if (on) {
-          _hidden.add(label);
-        } else {
-          _hidden.remove(label);
-        }
-      }),
+      onTap: () {
+        setState(() {
+          if (on) {
+            _hidden.add(label);
+          } else {
+            _hidden.remove(label);
+          }
+        });
+        widget.onHiddenChanged?.call(_hidden.toSet());
+      },
       child: Opacity(
         opacity: on ? 1 : 0.4,
         child: Row(

@@ -38,16 +38,20 @@ class TideService {
   // 세션 메모리 캐시: 관측소코드 → 디코드된 관측소 파일 JSON
   static final Map<String, Map<String, dynamic>> _stationCache = {};
 
+  /// [date]를 주면 그 날짜 기준(물때·만조/간조), 없으면 오늘 기준으로 조회한다.
+  /// 수온은 해양 API 특성상 항상 현재값이다(과거 날짜엔 근사).
   Future<TideResult?> getTideResult(
     double lat,
     double lng,
-    String apiKey,
-  ) async {
+    String apiKey, {
+    DateTime? date,
+  }) async {
+    final when = date ?? DateTime.now();
     final station = _nearestStation(lat, lng);
     final distKm = _haversine(lat, lng, station.latitude, station.longitude);
-    final mulTaeLabel = _calcMulTaeLabel(DateTime.now());
+    final mulTaeLabel = _calcMulTaeLabel(when);
 
-    final dateStr = _dateStr(DateTime.now());
+    final dateStr = _dateStr(when);
     final tides = await _fetchTideEvents(station.code, dateStr, apiKey);
     // 사용자 위치가 내륙일 수 있으므로 해안 관측소 좌표로 수온 조회
     final waterTemp = await _fetchWaterTemp(station.latitude, station.longitude);

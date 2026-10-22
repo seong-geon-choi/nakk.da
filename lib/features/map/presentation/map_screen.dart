@@ -11,6 +11,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../memo/domain/models/memo_entry.dart';
 import '../../memo/presentation/memo_provider.dart';
 import '../../location/domain/models/location_status.dart';
+import '../../location/presentation/location_provider.dart';
 import '../../tide/domain/models/tide_station.dart';
 import '../../../core/widgets/catch_tide_chart.dart';
 import '../../settings/presentation/settings_provider.dart';
@@ -18,6 +19,7 @@ import '../../../core/utils/date_formatter.dart';
 import '../../../core/utils/file_name_parser.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/services/tracking_service.dart';
+import '../../../core/services/catch_events_service.dart';
 import '../../../core/widgets/media_gallery_screen.dart';
 import '../../../core/widgets/memo_date_picker_dialog.dart';
 import '../../../core/widgets/saf_image.dart';
@@ -37,7 +39,8 @@ class MapScreen extends ConsumerStatefulWidget {
 }
 
 class _MapScreenState extends ConsumerState<MapScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
+  StreamSubscription<void>? _catchSub; // 조과 집계 변경 이벤트 구독
   List<_GpsPoint> _points = [];
   List<TrackPoint> _trackPoints = [];
   _GpsPoint? _selected;
@@ -47,15 +50,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _showTrack = false;
   bool _showMemoPoints = true; // 메모 지점(파란 마커) 표시 여부. 끄면 숨김
   bool _showCatchChart = false; // 조과 보기: 조위+시간당 조과 차트 패널
+  Set<String> _hiddenCatchSpecies = {}; // 차트 범례에서 숨긴 어종(지도 마커도 숨김)
   // 조과 차트 패널 위치(드래그 이동, prefs 저장). left=null이면 기본(하단 중앙),
   // bottom=0이면 광고 바로 위에 붙음. 위로 드래그하면 bottom 증가.
   double? _chartLeft;
   double? _chartBottom;
-  // 우측 세로 툴바 위치(드래그 이동, prefs 저장). null이면 기본(우상단).
-  double? _toolLeft;
+  // 우측 세로 툴바: 가로는 우측 가장자리 고정, 세로 위치만 드래그·저장. null이면 기본(상단).
   double? _toolTop;
   static const double _toolW = 40; // 툴바 폭(_toolBtn SizedBox 폭과 동일)
   List<TideEvent> _dayTides = const []; // 그날 현황 블록의 만조/간조(조위 곡선용)
+  bool _tideFetchTried = false; // 물때 자동 수집 1회 시도 플래그(날짜 바뀌면 리셋)
   Map<String, List<DateTime>> _catchBySpecies = const {}; // 어종별 기록 시각(시간당 조과 막대)
   Timer? _noGpsTimer;
   bool _dismissedNoGpsCard = false;
@@ -80,6 +84,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _catchSub?.cancel();
     _noGpsTimer?.cancel();
     _currentLocTimer?.cancel();
     _pulseCtrl.dispose();
@@ -89,14 +95,34 @@ class _MapScreenState extends ConsumerState<MapScreen>
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _pulseCtrl = AnimationController(
         vsync: this, duration: const Duration(milliseconds: 1400));
     _loadFromToday();
     _loadTrackPoints();
     _loadPanelPositions();
+    // 알림 +1·블루투스 리모컨으로 집계가 바뀌면(네이티브) 지도/차트 즉시 갱신.
+    _catchSub = CatchEventsService.instance.onCountsChanged
+        .listen((_) => _onCatchCountsChanged());
     ref.read(settingsProvider.future).then((s) {
       if (mounted) setState(() => _savePath = s.savePath);
     });
+  }
+
+  // 화면 꺼진 동안(백그라운드) 눌린 분은 복귀(resume) 시 반영.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _onCatchCountsChanged();
+  }
+
+  // 조과 집계 변경 반영: 오늘 날짜를 보고 있을 때만 조용히 다시 읽는다
+  // (블루투스/알림 기록은 항상 '오늘' 파일에 적재되므로).
+  void _onCatchCountsChanged() {
+    final n = DateTime.now();
+    final d = _loadedDate;
+    if (d.year == n.year && d.month == n.month && d.day == n.day) {
+      _reloadCurrentDate(silent: true);
+    }
   }
 
   // ── 패널/툴바 위치 저장·복원 ─────────────────────────────
@@ -107,9 +133,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   Future<void> _loadPanelPositions() async {
     final p = await SharedPreferences.getInstance();
+    await p.remove(_kToolLeft); // 가로 위치는 더 이상 쓰지 않음(우측 고정) — 옛 값 정리
     if (!mounted) return;
     setState(() {
-      _toolLeft = p.getDouble(_kToolLeft);
       _toolTop = p.getDouble(_kToolTop);
       _chartLeft = p.getDouble(_kChartLeft);
       _chartBottom = p.getDouble(_kChartBottom);
@@ -120,7 +146,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final p = await SharedPreferences.getInstance();
     Future<void> put(String k, double? v) async =>
         v == null ? p.remove(k) : p.setDouble(k, v);
-    await put(_kToolLeft, _toolLeft);
     await put(_kToolTop, _toolTop);
     await put(_kChartLeft, _chartLeft);
     await put(_kChartBottom, _chartBottom);
@@ -147,8 +172,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
   }
 
+  // 좌표·시각이 같은 지점을 찾아 되돌린다(재적용 후 선택 유지용).
+  _GpsPoint? _findPoint(List<_GpsPoint> pts, _GpsPoint t) {
+    for (final p in pts) {
+      if (p.timestamp == t.timestamp && p.lat == t.lat && p.lng == t.lng) {
+        return p;
+      }
+    }
+    return null;
+  }
+
   void _applyBlocks(List<dynamic> blocks, DateTime date,
-      {bool resetToggles = true, bool keepCamera = false}) {
+      {bool resetToggles = true,
+      bool keepCamera = false,
+      bool preserveSelection = false}) {
+    // 재적용 후에도 열린 팝업을 유지하려면 이전 선택을 좌표·시각으로 되찾는다.
+    final prevSel = preserveSelection ? _selected : null;
     final pts = <_GpsPoint>[];
     final catchBySpecies = <String, List<DateTime>>{};
     List<TideEvent> dayTides = const [];
@@ -174,9 +213,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
     setState(() {
       _points = pts;
       _catchBySpecies = catchBySpecies;
-      _dayTides = dayTides;
+      // 파일에 물때가 있으면 그걸 쓰고, 없으면 같은 날 재적용(리로드) 시엔 자동
+      // 수집해 둔 _dayTides를 보존한다. 날짜가 바뀌면(keepCamera=false) 비운다.
+      _dayTides = dayTides.isNotEmpty
+          ? dayTides
+          : (keepCamera ? _dayTides : const <TideEvent>[]);
       _trackPoints = [];
-      _selected = null;
+      _selected = prevSel == null ? null : _findPoint(pts, prevSel);
       _timeFilter = null; // 날짜 변경/새로고침 시 시간 필터 초기화
       if (resetToggles) {
         _showLines = false;
@@ -185,6 +228,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _showTrack = false;
         _showMemoPoints = true;
         _showCatchChart = false;
+        _tideFetchTried = false; // 새 날짜 → 물때 자동 수집 재시도 허용
       }
       _dismissedNoGpsCard = false;
       _loadedDate = date;
@@ -262,8 +306,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return dates;
   }
 
-  // 현재 표시 중인 날짜의 메모를 디스크에서 다시 읽어옴
-  Future<void> _reloadCurrentDate() async {
+  // 현재 표시 중인 날짜의 메모를 디스크에서 다시 읽어옴.
+  // silent=true면 토스트 없이(자동 갱신), 선택(팝업)은 유지한다.
+  Future<void> _reloadCurrentDate({bool silent = false}) async {
     final settings = await ref.read(settingsProvider.future);
     if (settings.savePath.isEmpty) return;
     final date = _loadedDate;
@@ -271,11 +316,85 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final dayFile = await repo.loadDayFile(date, settings.savePath);
     if (!mounted) return;
     _applyBlocks(dayFile?.blocks ?? [], date,
-        resetToggles: false, keepCamera: true);
+        resetToggles: false, keepCamera: true, preserveSelection: true);
     final pts = dayFile?.trackPoints ?? [];
     pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
     setState(() => _trackPoints = pts);
-    _showToastMessage('새로고침 완료');
+    if (!silent) _showToastMessage('새로고침 완료');
+  }
+
+  // 조위 그래프에 쓸 물때가 없으면(현장정보 미기록 등) 자동으로 수집한다.
+  // 기준 위치: 그날 지점(GPS) 우선, 없으면 현재 위치. 날짜당 1회만 시도.
+  Future<void> _ensureDayTides() async {
+    if (!mounted || _dayTides.isNotEmpty || _tideFetchTried) return;
+    _tideFetchTried = true;
+    double? lat;
+    double? lng;
+    if (_points.isNotEmpty) {
+      lat = _points.first.lat;
+      lng = _points.first.lng;
+    } else {
+      try {
+        final pos = await Geolocator.getLastKnownPosition() ??
+            await Geolocator.getCurrentPosition();
+        lat = pos.latitude;
+        lng = pos.longitude;
+      } catch (_) {}
+    }
+    if (lat == null || lng == null) return;
+    try {
+      // 메모 현장정보와 동일한 수집(역지오코딩·기온/바람·물때·수온·관측소).
+      final fresh = await ref
+          .read(locationProvider.notifier)
+          .buildEnrichedAt(lat: lat, lng: lng, date: _loadedDate);
+      if (!mounted || fresh.tides.isEmpty) return;
+      setState(() => _dayTides = fresh.tides);
+      await _persistDayTides(fresh);
+    } catch (_) {}
+  }
+
+  // 자동 수집한 현장정보를 그날 파일에 저장(다음에 열 때 재수집 불필요).
+  // 현장정보가 있으면 비어있는 항목만 채워 교체(기존값 보존), 없으면 새로 만든다.
+  Future<void> _persistDayTides(LocationStatus fresh) async {
+    try {
+      final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
+      if (savePath.isEmpty) return;
+      final repo = ref.read(memoRepositoryProvider);
+      final dayFile = await repo.loadDayFile(_loadedDate, savePath);
+      final blocks = dayFile?.blocks ?? const [];
+      var locIdx = -1;
+      for (var i = 0; i < blocks.length; i++) {
+        if (blocks[i] is LocationStatus) {
+          locIdx = i;
+          break;
+        }
+      }
+      if (locIdx >= 0) {
+        final e = blocks[locIdx] as LocationStatus;
+        if (e.tides.isNotEmpty) return; // 이미 물때가 있으면 건드리지 않음
+        // 기존 비어있는 항목만 수집값으로 채운다(기존 주소/시각 등 보존).
+        final merged = LocationStatus(
+          timestamp: e.timestamp,
+          latitude: e.latitude ?? fresh.latitude,
+          longitude: e.longitude ?? fresh.longitude,
+          address: e.address ?? fresh.address,
+          temperature: e.temperature ?? fresh.temperature,
+          tideName: e.tideName ?? fresh.tideName,
+          tideTime: e.tideTime ?? fresh.tideTime,
+          waterTemp: e.waterTemp ?? fresh.waterTemp,
+          stationName: e.stationName ?? fresh.stationName,
+          stationDistance: e.stationDistance ?? fresh.stationDistance,
+          isMove: e.isMove,
+          windSpeed: e.windSpeed ?? fresh.windSpeed,
+          windDeg: e.windDeg ?? fresh.windDeg,
+          weatherCode: e.weatherCode ?? fresh.weatherCode,
+          tides: fresh.tides,
+        );
+        await repo.replaceBlock(_loadedDate, locIdx, merged, savePath);
+      } else {
+        await repo.appendLocationBlock(_loadedDate, fresh, savePath);
+      }
+    } catch (_) {}
   }
 
   Future<void> _pickDate() async {
@@ -440,6 +559,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
   // 묶음으로 통합해, 축소 시 겹쳐 뭉치며 흰 테두리만 남는 문제를 막는다. 각 묶음은
   // 원본 _GpsPoint 목록(단독이면 1개). 연결선·이동경로는 실제 좌표로 그리므로 이
   // 통합과 무관하게 그대로 유지된다. 줌이 바뀌면(기존 리빌드) 다시 계산된다.
+  // 클러스터 병합 키: 같은 키끼리만 하나의 묶음으로 합친다.
+  // 조과는 어종별로(어종이 다르면 안 합쳐짐), 메모는 메모끼리, 현장정보는 그들끼리.
+  String _clusterKey(_GpsPoint p) {
+    if (p.isCatch) return 'c:${p.species ?? ''}';
+    return p.isMemo ? 'm' : 'l';
+  }
+
   List<List<_GpsPoint>> _clusterMemoPoints(List<_GpsPoint> pts) {
     if (pts.isEmpty) return const [];
     final MapCamera cam;
@@ -458,8 +584,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (used[i]) continue;
       used[i] = true;
       final group = <_GpsPoint>[pts[i]];
+      final key = _clusterKey(pts[i]);
       for (var j = i + 1; j < pts.length; j++) {
         if (used[j]) continue;
+        if (_clusterKey(pts[j]) != key) continue; // 같은 종류만 병합
         final dx = sp[j].x - sp[i].x, dy = sp[j].y - sp[i].y;
         if (dx * dx + dy * dy <= clusterPx * clusterPx) {
           used[j] = true;
@@ -469,6 +597,70 @@ class _MapScreenState extends ConsumerState<MapScreen>
       clusters.add(group);
     }
     return clusters;
+  }
+
+  // 묶음의 시간 라벨: 단독이면 그 시각, 여러 개면 "첫~막" 범위(같으면 단일).
+  // [off]는 펼친 마커의 부채꼴 이동량(라벨도 같이 이동).
+  _TimeLabel _groupLabel(List<_GpsPoint> g, [Offset off = Offset.zero]) {
+    final lat = g.map((p) => p.lat).reduce((a, b) => a + b) / g.length;
+    final lng = g.map((p) => p.lng).reduce((a, b) => a + b) / g.length;
+    if (g.length == 1) return _TimeLabel(lat, lng, g.first.timeLabel, off);
+    final sorted = g.toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    final first = sorted.first.timeLabel, last = sorted.last.timeLabel;
+    return _TimeLabel(lat, lng, first == last ? first : '$first~$last', off);
+  }
+
+  /// 같은 자리에 겹친 서로 다른 '묶음'들을 항상 부채꼴로 펼쳐 마커를 만든다.
+  /// (같은 어종은 이미 하나의 묶음이므로, 펼침 대상은 서로 다른 종류/어종뿐.)
+  /// [labelOut]에는 단독·묶음·펼친 지점 모두 시간 라벨을 담는다(펼친 건 오프셋 포함).
+  void _layoutClusters(
+      List<List<_GpsPoint>> clusters, List<Marker> out, List<_TimeLabel> labelOut) {
+    MapCamera? cam;
+    try {
+      cam = _mapController.camera;
+    } catch (_) {}
+    if (cam == null) {
+      for (final g in clusters) {
+        out.add(g.length == 1 ? _memoMarker(g.first) : _clusterMarker(g));
+        labelOut.add(_groupLabel(g));
+      }
+      return;
+    }
+    final centers = [
+      for (final g in clusters)
+        cam.latLngToScreenPoint(LatLng(g.first.lat, g.first.lng))
+    ];
+    const px = 34.0;
+    final used = List<bool>.filled(clusters.length, false);
+    for (var i = 0; i < clusters.length; i++) {
+      if (used[i]) continue;
+      used[i] = true;
+      final bundle = <int>[i];
+      for (var j = i + 1; j < clusters.length; j++) {
+        if (used[j]) continue;
+        final dx = centers[j].x - centers[i].x, dy = centers[j].y - centers[i].y;
+        if (dx * dx + dy * dy <= px * px) {
+          used[j] = true;
+          bundle.add(j);
+        }
+      }
+      if (bundle.length == 1) {
+        final g = clusters[i];
+        out.add(g.length == 1 ? _memoMarker(g.first) : _clusterMarker(g));
+        labelOut.add(_groupLabel(g));
+        continue;
+      }
+      // 겹친 서로 다른 종류: 항상 부채꼴로 분리해 각 색이 보이게 한다.
+      const r = 22.0;
+      for (var b = 0; b < bundle.length; b++) {
+        final ang = -math.pi / 2 + 2 * math.pi * b / bundle.length;
+        final off = Offset(r * math.cos(ang), r * math.sin(ang));
+        final g = clusters[bundle[b]];
+        out.add(g.length == 1 ? _memoMarker(g.first, off) : _clusterMarker(g, off));
+        labelOut.add(_groupLabel(g, off)); // 펼친 마커 위에 시각/범위 라벨
+      }
+    }
   }
 
   // 자동 경로 점이 메모/찍은 좌표와 사실상 같은 지점이면 표시를 생략한다(메모 밑에
@@ -544,34 +736,53 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return markers;
   }
 
-  // 단독 메모 지점 마커(번호). 탭하면 팝업 선택.
-  Marker _memoMarker(_GpsPoint pt) {
-    final idx = _points.indexOf(pt);
+  // 조과 어종 색: 조위·조과 차트 범례와 동일(같은 팔레트·같은 어종 순서).
+  // 어종 순서 = _catchBySpecies의 비어있지 않은 키 순서(차트의 allSpecies와 일치).
+  Color _catchColor(String? species) {
+    final ordered = _catchBySpecies.keys
+        .where((s) => (_catchBySpecies[s] ?? const []).isNotEmpty)
+        .toList();
+    final i = species == null ? -1 : ordered.indexOf(species);
+    if (i < 0) return Colors.red.shade600; // 매칭 안 되면 기본 조과색
+    return CatchTideChart.palette[i % CatchTideChart.palette.length];
+  }
+
+  // 지점 종류별 색: 조과(🎣)=어종별(차트 범례색), 메모=파랑, 현장정보(위치)=청록.
+  Color _pointColor(_GpsPoint pt) {
+    if (pt.isCatch) return _catchColor(pt.species);
+    return pt.isMemo ? Colors.blue.shade700 : Colors.teal.shade600;
+  }
+
+  // 단독 지점 마커(번호 없음, 색으로 종류 구분). 탭하면 팝업 선택.
+  // [off]가 주어지면 겹침 펼침용으로 화면 픽셀만큼 이동(줌/이동과 무관).
+  Marker _memoMarker(_GpsPoint pt, [Offset off = Offset.zero]) {
     final isSelected = _selected == pt;
+    final size = isSelected ? 26.0 : 18.0;
+    final box = off == Offset.zero ? size : 2 * (off.distance + size);
     return Marker(
       point: LatLng(pt.lat, pt.lng),
-      width: isSelected ? 34 : 24,
-      height: isSelected ? 34 : 24,
-      child: GestureDetector(
-        onTap: () => setState(() => _selected = pt),
-        child: Container(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: pt.isMemo ? Colors.blue.shade700 : Colors.teal.shade600,
-            border: Border.all(
-              color: isSelected ? Colors.orange : Colors.white,
-              width: isSelected ? 3 : 2,
+      width: box,
+      height: box,
+      child: Center(
+        child: Transform.translate(
+          offset: off,
+          child: GestureDetector(
+            onTap: () => setState(() => _selected = pt),
+            child: Container(
+              width: size,
+              height: size,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: _pointColor(pt),
+                border: Border.all(
+                  color: isSelected ? Colors.orange : Colors.white,
+                  width: isSelected ? 3 : 2,
+                ),
+                boxShadow: const [
+                  BoxShadow(blurRadius: 4, color: Color(0x55000000)),
+                ],
+              ),
             ),
-            boxShadow: const [
-              BoxShadow(blurRadius: 4, color: Color(0x55000000)),
-            ],
-          ),
-          child: Center(
-            child: Text('${idx + 1}',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: isSelected ? 11 : 9,
-                    fontWeight: FontWeight.bold)),
           ),
         ),
       ),
@@ -579,30 +790,44 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   // 통합 묶음(클러스터) 마커: 개수 표시. 탭하면 목록 시트.
-  Marker _clusterMarker(List<_GpsPoint> group) {
+  // 같은 종류만 묶이므로 색은 그 종류색(조과=어종색, 메모=파랑, 현장정보=청록).
+  Marker _clusterMarker(List<_GpsPoint> group, [Offset off = Offset.zero]) {
     final lat = group.map((p) => p.lat).reduce((a, b) => a + b) / group.length;
     final lng = group.map((p) => p.lng).reduce((a, b) => a + b) / group.length;
+    final first = group.first;
+    final clusterColor = first.isCatch
+        ? _catchColor(first.species)
+        : (first.isMemo ? Colors.blue.shade800 : Colors.teal.shade700);
+    const base = 36.0;
+    final box = off == Offset.zero ? base : 2 * (off.distance + base);
     return Marker(
       point: LatLng(lat, lng),
-      width: 36,
-      height: 36,
-      child: GestureDetector(
-        onTap: () => _showClusterSheet(group),
-        child: Container(
-          decoration: BoxDecoration(
-            shape: BoxShape.circle,
-            color: Colors.blue.shade800,
-            border: Border.all(color: Colors.white, width: 2.5),
-            boxShadow: const [
-              BoxShadow(blurRadius: 5, color: Color(0x66000000)),
-            ],
-          ),
-          child: Center(
-            child: Text('${group.length}',
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold)),
+      width: box,
+      height: box,
+      child: Center(
+        child: Transform.translate(
+          offset: off,
+          child: GestureDetector(
+            onTap: () => _showClusterSheet(group),
+            child: Container(
+              width: base,
+              height: base,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: clusterColor,
+                border: Border.all(color: Colors.white, width: 2.5),
+                boxShadow: const [
+                  BoxShadow(blurRadius: 5, color: Color(0x66000000)),
+                ],
+              ),
+              child: Center(
+                child: Text('${group.length}',
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold)),
+              ),
+            ),
           ),
         ),
       ),
@@ -632,7 +857,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 itemCount: sorted.length,
                 itemBuilder: (_, i) {
                   final p = sorted[i];
-                  final n = _points.indexOf(p) + 1;
                   final sub = (p.text != null && p.text!.trim().isNotEmpty)
                       ? p.text!.trim()
                       : (p.address ??
@@ -642,15 +866,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   return ListTile(
                     dense: true,
                     leading: CircleAvatar(
-                      radius: 13,
-                      backgroundColor: p.isMemo
-                          ? Colors.blue.shade700
-                          : Colors.teal.shade600,
-                      child: Text('$n',
-                          style: const TextStyle(
-                              color: Colors.white,
-                              fontSize: 11,
-                              fontWeight: FontWeight.bold)),
+                      radius: 8,
+                      backgroundColor: _pointColor(p),
                     ),
                     title: Text('${p.timeLabel}  $sub',
                         maxLines: 1, overflow: TextOverflow.ellipsis),
@@ -936,7 +1153,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // 메모 지점 숨김 시 isMemo 지점 제외(청록 위치상태 지점은 유지). 시간대 필터도 함께 적용.
     // 조과(🎣) 지점은 기본 숨김 — '조과 보기'(차트) ON일 때만 마커로 표시.
     final fPoints = _points.where((p) {
-      if (p.isCatch && !_showCatchChart) return false;
+      if (p.isCatch &&
+          (!_showCatchChart || _hiddenCatchSpecies.contains(p.species))) {
+        return false;
+      }
       if (!_showMemoPoints && p.isMemo) return false;
       return _passMinute(p.timestamp);
     }).toList();
@@ -946,6 +1166,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     // 라인·거리용 메모 배치는 실제 좌표 그대로(분산 없음). 마커 표시는 클러스터로.
     final placed = [for (final p in fPoints) _PlacedPoint(p, p.lat, p.lng)];
     final memoClusters = _clusterMemoPoints(fPoints);
+    // 같은 자리에 겹친 서로 다른 종류는 항상 부채꼴로 펼친다. labelPoints = 겹치지
+    // 않은 단독 지점(시간 라벨 대상).
+    final clusterMarkers = <Marker>[];
+    final labelPoints = <_TimeLabel>[];
+    _layoutClusters(memoClusters, clusterMarkers, labelPoints);
     final markerThreshold = _thresholdDeg();
     final placedSorted = List<_PlacedPoint>.from(placed)
       ..sort((a, b) => a.point.timestamp.compareTo(b.point.timestamp));
@@ -1212,30 +1437,25 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     return markers;
                   }(),
                 ),
-              // 메모 지점: 겹치면 하나의 묶음(개수) 마커로 통합. 단독이면 번호 마커.
-              MarkerLayer(
-                markers: [
-                  for (final group in memoClusters)
-                    if (group.length == 1)
-                      _memoMarker(group.first)
-                    else
-                      _clusterMarker(group),
-                ],
-              ),
-              // 시간 표시: 단독 지점에만(묶음은 시트에서 확인)
+              // 지점 마커: 같은 종류는 묶음(개수), 겹친 다른 종류는 부채꼴로 펼침.
+              MarkerLayer(markers: clusterMarkers),
+              // 시간 표시: 겹치지 않은 단독 지점에만(묶음·펼침 지점은 시트/선택으로 확인)
               if (_showTimes)
                 MarkerLayer(
                   markers: [
-                    for (final group in memoClusters)
-                      if (group.length == 1)
-                        Marker(
-                          point:
-                              LatLng(group.first.lat, group.first.lng),
-                          width: 56,
-                          height: 36,
-                          alignment: Alignment.bottomCenter,
-                          child: Align(
-                            alignment: Alignment.topCenter,
+                    for (final p in labelPoints)
+                      Marker(
+                        point: LatLng(p.lat, p.lng),
+                        width: 220,
+                        height: 160,
+                        alignment: Alignment.center,
+                        // 단독은 마커 위(−26px). 펼친 마커는 그 부채꼴 '방향 바깥쪽'으로
+                        // 더 밀어(×2.5) 라벨끼리 마커처럼 벌어지게 한다(겹침 방지).
+                        child: Center(
+                          child: Transform.translate(
+                            offset: p.offset == Offset.zero
+                                ? const Offset(0, -26)
+                                : p.offset * 2.5,
                             child: Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 3, vertical: 1),
@@ -1244,13 +1464,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                 borderRadius: BorderRadius.circular(3),
                               ),
                               child: Text(
-                                group.first.timeLabel,
+                                p.text,
                                 style: const TextStyle(
                                     color: Colors.white, fontSize: 10),
                               ),
                             ),
                           ),
                         ),
+                      ),
                   ],
                 ),
               if (_showTimes && fTrack.isNotEmpty)
@@ -1311,7 +1532,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
             Positioned(
               left: 12,
               right: 12,
-              bottom: 12 + MediaQuery.of(context).padding.bottom,
+              // 이 Stack은 광고배너(=내비바 inset 예약) 위에 있으므로 여기서 inset을
+              // 또 더하면 이중이 된다. 12만 띄운다.
+              bottom: 12,
               child: _PointPopup(
                 point: _selected!,
                 savePath: _savePath,
@@ -1478,15 +1701,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 ),
               ),
             ),
-          // 우측 세로 툴바. 기본은 우상단(세이프에어리어 반영), 핸들을 끌어 이동하면
-          // 위치를 저장했다가 재사용. 미측정 첫 프레임은 화면 크기로 근사.
+          // 우측 세로 툴바. 가로는 화면 우측 가장자리에 고정(세이프에어리어 반영).
+          // 핸들을 끌면 세로 위치만 이동하고 저장·재사용. 미측정 첫 프레임은 화면 크기로 근사.
           Positioned(
-            left: (_toolLeft ??
-                    (_stackSize(context).width -
-                        _toolW -
-                        8 -
-                        MediaQuery.of(context).padding.right))
-                .clamp(0.0, _stackSize(context).width - _toolW),
+            right: 4 + MediaQuery.of(context).padding.right,
             top: (_toolTop ?? (8 + MediaQuery.of(context).padding.top))
                 .clamp(0.0, _stackSize(context).height - 40),
             child: ClipRRect(
@@ -1498,21 +1716,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // 드래그 핸들: 끌어서 버튼바 이동(마지막 위치 저장·재사용)
+                    // 드래그 핸들: 끌어서 버튼바를 위/아래로 이동(마지막 위치 저장·재사용)
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
                       onPanUpdate: (d) {
                         final ts = _stackSize(context);
-                        final curLeft = _toolLeft ??
-                            (ts.width -
-                                _toolW -
-                                8 -
-                                MediaQuery.of(context).padding.right);
                         final curTop = _toolTop ??
                             (8 + MediaQuery.of(context).padding.top);
                         setState(() {
-                          _toolLeft = (curLeft + d.delta.dx)
-                              .clamp(0.0, ts.width - _toolW);
                           _toolTop = (curTop + d.delta.dy)
                               .clamp(0.0, ts.height - 40);
                         });
@@ -1579,7 +1790,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
                               : null)
                           : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
                       (_catchBySpecies.isNotEmpty || _dayTides.isNotEmpty)
-                          ? () => setState(() => _showCatchChart = !_showCatchChart)
+                          ? () {
+                              setState(() {
+                                _showCatchChart = !_showCatchChart;
+                                _hiddenCatchSpecies = {}; // 열고 닫을 때 숨김 초기화
+                              });
+                              // 열 때 물때가 없으면 자동 수집해 곡선을 채운다.
+                              if (_showCatchChart) _ensureDayTides();
+                            }
                           : () => _showToastMessage('조과·물때 정보가 없습니다'),
                     ),
                     _divider(),
@@ -1678,7 +1896,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   Widget _toolBtn(IconData icon, Color? color, VoidCallback? onPressed) {
     return SizedBox(
       width: 40,
-      height: 40,
+      height: 36, // 버튼 세로 간격 10% 축소(40→36)
       child: IconButton(
         iconSize: 20,
         padding: EdgeInsets.zero,
@@ -1745,7 +1963,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   ],
                 ),
               ),
-              CatchTideChart(tides: _dayTides, catchesBySpecies: _catchBySpecies),
+              CatchTideChart(
+                tides: _dayTides,
+                catchesBySpecies: _catchBySpecies,
+                onHiddenChanged: (h) =>
+                    setState(() => _hiddenCatchSpecies = h),
+              ),
             ],
           ),
         ),
@@ -1853,6 +2076,16 @@ class _PulsePainter extends CustomPainter {
   bool shouldRepaint(covariant _PulsePainter old) => old.t != t;
 }
 
+// 시간표시용 라벨(위치 + 문구 + 화면 오프셋). 단독은 "HH:mm", 묶음은 "첫~막" 범위.
+// offset: 겹쳐 펼친 마커의 부채꼴 이동량(라벨도 같이 이동해 해당 마커 위에 붙게 함).
+class _TimeLabel {
+  final double lat;
+  final double lng;
+  final String text;
+  final Offset offset;
+  const _TimeLabel(this.lat, this.lng, this.text, [this.offset = Offset.zero]);
+}
+
 // ── GPS 포인트 모델 ─────────────────────────────────────────
 
 class _GpsPoint {
@@ -1866,6 +2099,7 @@ class _GpsPoint {
   final double? fishLength;
   final String? address;
   final bool isCatch; // 알림/카운터로 적재된 조과 기록(🎣) — 조과 보기 ON일 때만 마커 표시
+  final String? species; // 조과 마커 색(어종별)용 어종명
 
   _GpsPoint.fromMemo(MemoEntry e)
       : timestamp = e.timestamp,
@@ -1877,7 +2111,8 @@ class _GpsPoint {
         videoPath = e.videoPath,
         fishLength = e.fishLength,
         address = null,
-        isCatch = e.quickCatch;
+        isCatch = e.quickCatch,
+        species = e.fishSpecies;
 
   _GpsPoint.fromLocation(LocationStatus l)
       : timestamp = l.timestamp,
@@ -1889,7 +2124,8 @@ class _GpsPoint {
         videoPath = null,
         fishLength = null,
         address = l.address,
-        isCatch = false;
+        isCatch = false,
+        species = null;
 
   String get timeLabel {
     final h = timestamp.hour.toString().padLeft(2, '0');
