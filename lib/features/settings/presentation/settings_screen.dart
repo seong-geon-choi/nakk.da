@@ -15,6 +15,7 @@ import '../../memo/presentation/memo_editor_screen.dart';
 import '../../../core/constants/api_keys.dart';
 import '../../../core/utils/media_scanner.dart';
 import '../../../core/services/tracking_service.dart';
+import '../../../core/services/bt_remote_service.dart';
 import '../../permission/presentation/permission_center.dart';
 import '../../permission/presentation/permission_items.dart';
 
@@ -315,6 +316,19 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   .join(' · ')),
               trailing: const Icon(Icons.edit_outlined),
               onTap: () => _editCatchQuickSpecies(context, ref),
+            ),
+            ListTile(
+              leading: const Icon(Icons.settings_remote_outlined),
+              title: const Text('블루투스 리모컨 카운트'),
+              subtitle: const Text('이어폰·리모컨 버튼으로 카운트 ±1'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => _RemoteKeyMappingScreen(
+                  species: settings.catchQuickSpecies
+                      .where((s) => s.trim().isNotEmpty)
+                      .toList(),
+                ),
+              )),
             ),
             ListTile(
               leading: const Icon(Icons.edit_document),
@@ -1071,6 +1085,164 @@ Future<void> _editCatchQuickSpecies(BuildContext context, WidgetRef ref) async {
     await ref
         .read(settingsProvider.notifier)
         .setCatchQuickSpecies([c1.text, c2.text]);
+  }
+}
+
+/// 블루투스 리모컨/이어폰 버튼을 조과 카운트 액션(어종별 +1/−1)에 지정하는 화면.
+class _RemoteKeyMappingScreen extends StatefulWidget {
+  final List<String> species;
+  const _RemoteKeyMappingScreen({required this.species});
+
+  @override
+  State<_RemoteKeyMappingScreen> createState() => _RemoteKeyMappingScreenState();
+}
+
+class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
+  Map<String, int> _map = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final m = await BtRemoteService.getKeyMap();
+    if (mounted) setState(() => _map = m);
+  }
+
+  static const _mediaCodes = {85, 126, 127, 87, 88, 86, 90, 89, 79};
+  String _keyLabel(int code) => switch (code) {
+        85 || 126 || 127 || 79 => '재생/정지',
+        87 => '다음곡',
+        88 => '이전곡',
+        86 => '정지(stop)',
+        90 => '빨리감기',
+        89 => '되감기',
+        24 => '볼륨 +',
+        25 => '볼륨 −',
+        _ => '키 $code',
+      };
+
+  Future<void> _register(String action) async {
+    int? captured;
+    bool isMedia = false;
+    BtRemoteService.onKey = (kc, media) {
+      if (captured != null) return;
+      captured = kc;
+      isMedia = media;
+      Navigator.of(context, rootNavigator: true).pop();
+    };
+    await BtRemoteService.captureStart();
+    if (!mounted) return;
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('버튼 등록'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.radio_button_checked, size: 40, color: Colors.redAccent),
+            SizedBox(height: 14),
+            Text('지금 리모컨 또는 이어폰 버튼을\n한 번 누르세요', textAlign: TextAlign.center),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('취소')),
+        ],
+      ),
+    );
+    BtRemoteService.onKey = null;
+    await BtRemoteService.captureStop();
+    final code = captured;
+    if (code == null || !mounted) return;
+    await BtRemoteService.setKey(action, code);
+    if (!mounted) return;
+    setState(() => _map[action] = code);
+    if (!isMedia) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('이 버튼은 미디어 키가 아니라서 화면이 꺼지면 동작하지 않을 수 있어요. '
+            '(카운터 화면이 켜져 있을 때만 동작)'),
+        duration: Duration(seconds: 5),
+      ));
+    }
+  }
+
+  Future<void> _clear(String action) async {
+    await BtRemoteService.clearKey(action);
+    if (mounted) setState(() => _map.remove(action));
+  }
+
+  Widget _actionRow(String action, String label) {
+    final code = _map[action];
+    final warn = code != null && !_mediaCodes.contains(code);
+    return ListTile(
+      dense: true,
+      leading: Text(label,
+          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+      title: Text(code != null ? _keyLabel(code) : '미지정',
+          style: TextStyle(
+              color: code != null ? null : Colors.grey,
+              fontWeight: code != null ? FontWeight.w600 : FontWeight.normal)),
+      subtitle: warn
+          ? const Text('화면 꺼짐 미동작 가능',
+              style: TextStyle(color: Colors.orange, fontSize: 12))
+          : null,
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (code != null)
+            IconButton(
+                icon: const Icon(Icons.close),
+                tooltip: '해제',
+                onPressed: () => _clear(action)),
+          TextButton(
+              onPressed: () => _register(action),
+              child: Text(code != null ? '변경' : '등록')),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('블루투스 리모컨 카운트')),
+      body: widget.species.isEmpty
+          ? const Center(
+              child: Padding(
+                padding: EdgeInsets.all(24),
+                child: Text('먼저 "조과 카운터"에서 어종을 지정하세요.',
+                    textAlign: TextAlign.center),
+              ),
+            )
+          : ListView(
+              children: [
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  child: Text(
+                    '블루투스 이어폰·리모컨 버튼으로 조과를 세어보세요.\n'
+                    '• 재생/정지·다음곡 같은 "미디어 키"는 화면이 꺼진 주머니 속에서도 동작합니다.\n'
+                    '• 조과 기록 중에는 그 버튼이 카운트 전용이 됩니다(음악 소리는 계속 나지만 '
+                    '버튼으로 곡 변경은 안 됩니다).',
+                    style: TextStyle(fontSize: 13, height: 1.5),
+                  ),
+                ),
+                for (int i = 0; i < widget.species.length; i++) ...[
+                  const Divider(height: 1),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 14, 16, 4),
+                    child: Text(widget.species[i],
+                        style: const TextStyle(
+                            fontSize: 15, fontWeight: FontWeight.bold)),
+                  ),
+                  _actionRow('add:$i', '+1'),
+                  _actionRow('rem:$i', '−1'),
+                ],
+              ],
+            ),
+    );
   }
 }
 

@@ -1,7 +1,10 @@
 package com.sgchoisg.nakkda
 
 import android.app.Activity
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
@@ -11,6 +14,7 @@ import android.os.Bundle
 import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
@@ -72,14 +76,54 @@ class CatchCounterActivity : Activity() {
         setContentView(buildRoot())
     }
 
+    // 리모컨으로 ± 되어 집계가 바뀌면(서비스가 브로드캐스트) 화면을 즉시 다시 그린다.
+    private val countsReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) = refreshCounts()
+    }
+
     override fun onResume() {
         super.onResume()
         // 파일에서 최신 집계를 다시 읽어 동기화(네이티브가 즉시 MD를 수정하므로 이게 정답값).
+        refreshCounts()
+        val filter = IntentFilter(CatchLogService.ACTION_COUNTS_CHANGED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(countsReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(countsReceiver, filter)
+        }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        try { unregisterReceiver(countsReceiver) } catch (_: Exception) {}
+    }
+
+    /** 파일 집계를 다시 읽어 모든 숫자판을 갱신. */
+    private fun refreshCounts() {
         val fileCounts = CatchLogService.loadCountsFromFile(this)
         for (i in species.indices) {
             counts[i] = fileCounts[species[i]] ?: 0
             updateDigits(i)
         }
+    }
+
+    /**
+     * 화면이 떠 있을 때 매핑된 **비미디어 키**(볼륨 등)를 ±로 처리.
+     * 미디어 키는 서비스의 MediaSession으로 라우팅되므로 여기서 받지 않는다(중복 방지).
+     */
+    override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+        if (!CatchLogService.isMediaKey(keyCode)) {
+            val action = CatchLogService.actionForKey(this, keyCode)
+            if (action != null) {
+                val idx = action.substringAfter(':', "").toIntOrNull()
+                if (idx != null && idx < species.size) {
+                    change(idx, if (action.startsWith("add:")) +1 else -1)
+                    return true
+                }
+            }
+        }
+        return super.onKeyDown(keyCode, event)
     }
 
     /** 회전 시 방향에 맞게 레이아웃을 다시 구성(가로=좌우/세로=상하). */

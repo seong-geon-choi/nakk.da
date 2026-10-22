@@ -11,6 +11,7 @@ import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.Settings
+import android.view.KeyEvent
 import androidx.core.view.WindowCompat
 import androidx.documentfile.provider.DocumentFile
 import io.flutter.embedding.android.FlutterActivity
@@ -21,6 +22,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import org.json.JSONArray
+import org.json.JSONObject
 
 class MainActivity : FlutterActivity() {
 
@@ -28,8 +30,13 @@ class MainActivity : FlutterActivity() {
     private val accessibilityChannelName = "com.sgchoisg.nakkda/accessibility"
     private val arChannelName = "com.sgchoisg.nakkda/ar"
     private val safChannelName = "com.sgchoisg.nakkda/saf"
+    private val btRemoteChannelName = "com.sgchoisg.nakkda/btremote"
 
     private var accessibilityChannel: MethodChannel? = null
+    private var btRemoteChannel: MethodChannel? = null
+    // 설정 화면의 "키 등록" 중에만 켜지는 캡처 세션/플래그.
+    private var captureSession: MediaButtonSession? = null
+    @Volatile private var captureActive = false
     private var pendingArResult: MethodChannel.Result? = null
     private var pendingGalleryResult: MethodChannel.Result? = null
     private var pendingMediaResult: MethodChannel.Result? = null
@@ -691,6 +698,93 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+
+        // ── 블루투스 리모컨 채널 (조과 카운트 키 매핑/캡처) ────────
+        btRemoteChannel = MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger, btRemoteChannelName
+        )
+        btRemoteChannel?.setMethodCallHandler { call, result ->
+            when (call.method) {
+                "getKeyMap" -> {
+                    // action -> keyCode 맵을 그대로 반환.
+                    result.success(CatchLogService.loadKeyMap(this))
+                }
+                "setKey" -> {
+                    val action = call.argument<String>("action")
+                    val keyCode = call.argument<Int>("keyCode")
+                    if (action == null || keyCode == null) {
+                        result.error("ARG", "action/keyCode missing", null)
+                    } else {
+                        writeKeyMap { it.put(action, keyCode) }
+                        result.success(null)
+                    }
+                }
+                "clearKey" -> {
+                    val action = call.argument<String>("action")
+                    if (action == null) {
+                        result.error("ARG", "action missing", null)
+                    } else {
+                        writeKeyMap { it.remove(action) }
+                        result.success(null)
+                    }
+                }
+                "captureStart" -> {
+                    startKeyCapture()
+                    result.success(null)
+                }
+                "captureStop" -> {
+                    stopKeyCapture()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    /** 매핑 JSON을 읽어 변형 후 저장. */
+    private fun writeKeyMap(mutate: (JSONObject) -> Unit) {
+        val prefs = CatchLogService.prefsOf(this)
+        val obj = try {
+            JSONObject(prefs.getString(CatchLogService.PREFS_BTMAP_KEY, "{}") ?: "{}")
+        } catch (_: Exception) { JSONObject() }
+        mutate(obj)
+        prefs.edit().putString(CatchLogService.PREFS_BTMAP_KEY, obj.toString()).apply()
+    }
+
+    /** 등록 모드: 임시 무음 세션으로 미디어 키까지 캡처해 Flutter로 올린다. */
+    private fun startKeyCapture() {
+        if (captureActive) return
+        captureActive = true
+        captureSession = MediaButtonSession(this, "nakkda_capture") { keyCode ->
+            reportCapturedKey(keyCode)
+        }.also { it.start() }
+    }
+
+    private fun stopKeyCapture() {
+        captureActive = false
+        captureSession?.stop()
+        captureSession = null
+    }
+
+    private fun reportCapturedKey(keyCode: Int) {
+        runOnUiThread {
+            btRemoteChannel?.invokeMethod(
+                "onRemoteKey",
+                mapOf("keyCode" to keyCode, "isMedia" to CatchLogService.isMediaKey(keyCode))
+            )
+        }
+    }
+
+    /** 등록 모드 동안 비미디어 키(볼륨 등)를 가로채 Flutter로 올리고 소비한다(BACK 제외). */
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (captureActive &&
+            event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 &&
+            event.keyCode != KeyEvent.KEYCODE_BACK
+        ) {
+            reportCapturedKey(event.keyCode)
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     @Deprecated("Deprecated in Java")
@@ -1020,5 +1114,6 @@ class MainActivity : FlutterActivity() {
     override fun onPause() {
         super.onPause()
         try { unregisterReceiver(voiceResultReceiver) } catch (_: Exception) {}
+        stopKeyCapture()
     }
 }

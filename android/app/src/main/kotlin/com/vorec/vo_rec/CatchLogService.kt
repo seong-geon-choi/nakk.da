@@ -41,6 +41,61 @@ class CatchLogService : Service() {
         const val EXTRA_SPECIES_INDEX = "speciesIndex"
         const val EXTRA_SPECIES_LIST = "speciesList"
 
+        // 블루투스 리모컨 키 매핑: JSON { "add:0": keyCode, "rem:0": keyCode, ... }
+        const val PREFS_BTMAP_KEY = "catch_btmap"
+        // 집계 변동(리모컨으로 ±) 시 카운터 화면이 즉시 다시 그리도록 알리는 로컬 브로드캐스트.
+        const val ACTION_COUNTS_CHANGED = "com.sgchoisg.nakkda.COUNTS_CHANGED"
+
+        /** 매핑(action→keyCode)을 읽는다. 값이 없거나 깨지면 빈 맵. */
+        fun loadKeyMap(context: Context): Map<String, Int> {
+            val raw = prefsOf(context).getString(PREFS_BTMAP_KEY, "{}") ?: "{}"
+            return try {
+                val obj = org.json.JSONObject(raw)
+                val m = HashMap<String, Int>()
+                for (k in obj.keys()) {
+                    val v = obj.optInt(k, -1)
+                    if (v >= 0) m[k] = v
+                }
+                m
+            } catch (_: Exception) { emptyMap() }
+        }
+
+        /**
+         * 재생/정지 계열 키를 하나로 정규화.
+         * 많은 블루투스 이어폰이 같은 버튼을 재생 상태에 따라 PLAY(126)/PAUSE(127)로
+         * 번갈아 보내므로, 이들(+PLAY_PAUSE/HEADSETHOOK)을 PLAY_PAUSE로 합쳐 매칭한다.
+         * 다음곡/이전곡 등은 그대로 두어 +1/−1을 구분할 수 있게 한다.
+         */
+        fun canonicalKey(keyCode: Int): Int = when (keyCode) {
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY,
+            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE,
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            android.view.KeyEvent.KEYCODE_HEADSETHOOK ->
+                android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+            else -> keyCode
+        }
+
+        /** 눌린 keyCode에 매핑된 action("add:0"/"rem:1" 등)을 역조회(정규화 비교). */
+        fun actionForKey(context: Context, keyCode: Int): String? {
+            val target = canonicalKey(keyCode)
+            return loadKeyMap(context).entries
+                .firstOrNull { canonicalKey(it.value) == target }?.key
+        }
+
+        /** 화면 꺼짐 상태에서 전역 수신 가능한 미디어 키인지. */
+        fun isMediaKey(keyCode: Int): Boolean = when (keyCode) {
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY,
+            android.view.KeyEvent.KEYCODE_MEDIA_PAUSE,
+            android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
+            android.view.KeyEvent.KEYCODE_MEDIA_NEXT,
+            android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS,
+            android.view.KeyEvent.KEYCODE_MEDIA_STOP,
+            android.view.KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
+            android.view.KeyEvent.KEYCODE_MEDIA_REWIND,
+            android.view.KeyEvent.KEYCODE_HEADSETHOOK -> true
+            else -> false
+        }
+
         private const val CHANNEL_ID = "nakkda_catch_channel_v2"
         private const val CHANNEL_ID_OLD = "nakkda_catch_channel"
         private const val NOTIFICATION_ID = 1008
@@ -168,6 +223,9 @@ class CatchLogService : Service() {
 
     private val io = Executors.newSingleThreadExecutor()
 
+    // 블루투스 리모컨/이어폰 미디어 버튼 수신용 무음 세션(포커스 미요청).
+    private var mediaButton: MediaButtonSession? = null
+
     // 날짜가 바뀌면(자정) 경로 기록처럼 세션을 종료한다.
     private val dateChangedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -206,6 +264,41 @@ class CatchLogService : Service() {
             @Suppress("UnspecifiedRegisterReceiverFlag")
             registerReceiver(dateChangedReceiver, filter)
         }
+        // 리모컨 미디어 버튼 수신(화면 꺼짐 포함).
+        syncMediaButton()
+    }
+
+    /**
+     * 매핑 존재 여부에 맞춰 무음 미디어 세션을 켜고 끈다.
+     * 매핑이 하나도 없으면 세션을 띄우지 않는다 — 리모컨을 안 쓰는 사용자의
+     * 이어폰 음악 버튼 제어권을 뺏지 않기 위함.
+     */
+    private fun syncMediaButton() {
+        val has = loadKeyMap(this).isNotEmpty()
+        if (has && mediaButton == null) {
+            mediaButton = MediaButtonSession(this, "nakkda_catch") { keyCode ->
+                onRemoteKey(keyCode)
+            }.also { it.start() }
+        } else if (!has && mediaButton != null) {
+            mediaButton?.stop()
+            mediaButton = null
+        }
+    }
+
+    /** 리모컨 키 → 매핑된 액션 실행(화면 꺼짐/백그라운드 경로). */
+    private fun onRemoteKey(keyCode: Int) {
+        val action = actionForKey(this, keyCode) ?: return
+        val idx = action.substringAfter(':', "").toIntOrNull() ?: return
+        when {
+            action.startsWith("add:") -> addCatch(idx)
+            action.startsWith("rem:") -> removeCatch(idx)
+        }
+    }
+
+    private fun sendCountsChanged() {
+        try {
+            sendBroadcast(Intent(ACTION_COUNTS_CHANGED).setPackage(packageName))
+        } catch (_: Exception) {}
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -229,6 +322,7 @@ class CatchLogService : Service() {
                     .putString(PREFS_SPECIES_KEY, speciesJson)
                     .putBoolean(PREFS_ACTIVE_KEY, true)
                     .apply()
+                syncMediaButton()
                 io.execute { updateNotification() }
                 return START_STICKY
             }
@@ -238,6 +332,8 @@ class CatchLogService : Service() {
     override fun onDestroy() {
         setActive(false)
         try { unregisterReceiver(dateChangedReceiver) } catch (_: Exception) {}
+        mediaButton?.stop()
+        mediaButton = null
         io.shutdown()
         super.onDestroy()
     }
@@ -251,6 +347,7 @@ class CatchLogService : Service() {
         fun commit(lat: Double?, lng: Double?) = io.execute {
             appendCatchToFile(this, species, lat, lng)
             updateNotification()
+            sendCountsChanged()
         }
         try {
             LocationServices.getFusedLocationProviderClient(this).lastLocation
@@ -267,6 +364,7 @@ class CatchLogService : Service() {
         io.execute {
             removeLastCatchFromFile(this, species)
             updateNotification()
+            sendCountsChanged()
         }
     }
 
