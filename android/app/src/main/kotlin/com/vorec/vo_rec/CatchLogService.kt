@@ -168,6 +168,14 @@ class CatchLogService : Service() {
 
     private val io = Executors.newSingleThreadExecutor()
 
+    // 날짜가 바뀌면(자정) 경로 기록처럼 세션을 종료한다.
+    private val dateChangedReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            setActive(false)
+            stopSelf()
+        }
+    }
+
     private fun prefs(): SharedPreferences = prefsOf(this)
     private fun setActive(active: Boolean) =
         prefs().edit().putBoolean(PREFS_ACTIVE_KEY, active).apply()
@@ -189,6 +197,14 @@ class CatchLogService : Service() {
             }
         } catch (e: SecurityException) {
             stopSelf()
+        }
+        // 자정(날짜 변경) 시 자동 종료 — 경로 기록 서비스와 동일.
+        val filter = IntentFilter(Intent.ACTION_DATE_CHANGED)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(dateChangedReceiver, filter, RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(dateChangedReceiver, filter)
         }
     }
 
@@ -221,6 +237,7 @@ class CatchLogService : Service() {
 
     override fun onDestroy() {
         setActive(false)
+        try { unregisterReceiver(dateChangedReceiver) } catch (_: Exception) {}
         io.shutdown()
         super.onDestroy()
     }
