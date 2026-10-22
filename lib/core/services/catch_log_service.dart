@@ -34,4 +34,11 @@ class CatchLogService {
       return false;
     }
   }
+
+  /// 잠금화면 카운터 화면(CatchCounterActivity)을 직접 띄운다.
+  Future<void> openCounter() async {
+    try {
+      await _channel.invokeMethod('openCatchCounter');
+    } catch (_) {}
+  }
 }

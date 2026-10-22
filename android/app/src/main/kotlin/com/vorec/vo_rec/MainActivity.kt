@@ -636,6 +636,15 @@ class MainActivity : FlutterActivity() {
                         result.success(CatchLogService.prefsOf(this)
                             .getBoolean(CatchLogService.PREFS_ACTIVE_KEY, false))
                     }
+                    "openCatchCounter" -> {
+                        try {
+                            startActivity(
+                                Intent(this, CatchCounterActivity::class.java)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        } catch (_: Exception) {}
+                        result.success(null)
+                    }
                     "canDrawOverlays" -> {
                         result.success(Settings.canDrawOverlays(this))
                     }

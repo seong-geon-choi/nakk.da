@@ -1142,13 +1142,10 @@ class _CatchLogButton extends ConsumerStatefulWidget {
 
 class _CatchLogButtonState extends ConsumerState<_CatchLogButton>
     with WidgetsBindingObserver {
-  bool _active = false;
-
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
-    _refreshStatus();
   }
 
   @override
@@ -1160,8 +1157,7 @@ class _CatchLogButtonState extends ConsumerState<_CatchLogButton>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _refreshStatus();
-      // 네이티브가 MD를 직접 수정했으므로 오늘 메모/지도 갱신
+      // 카운터 화면에서 네이티브가 MD를 직접 수정했을 수 있으므로 오늘 메모/지도 갱신
       final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
       if (savePath.isNotEmpty) {
         ref.invalidate(dayFileProvider(todayMemoFilePath(savePath)));
@@ -1169,21 +1165,7 @@ class _CatchLogButtonState extends ConsumerState<_CatchLogButton>
     }
   }
 
-  /// 네이티브 세션 활성 상태를 버튼에 반영.
-  Future<void> _refreshStatus() async {
-    final active = await CatchLogService().isCatchSession();
-    if (mounted) setState(() => _active = active);
-  }
-
   Future<void> _onTap() async {
-    if (_active) {
-      await CatchLogService().stopCatchSession();
-      if (mounted) {
-        setState(() => _active = false);
-        showAppToast(context, '조과 기록을 종료했습니다');
-      }
-      return;
-    }
     final settings = ref.read(settingsProvider).valueOrNull;
     final species = (settings?.catchQuickSpecies ?? const [])
         .map((s) => s.trim())
@@ -1199,12 +1181,10 @@ class _CatchLogButtonState extends ConsumerState<_CatchLogButton>
       final status = await Permission.locationWhenInUse.request();
       if (!status.isGranted) return;
     }
-    await CatchLogService().startCatchSession(species);
-    await _maybeAutoAddLocation(); // 첫 기록 시 현장 정보 자동 추가(옵션)
-    if (mounted) {
-      setState(() => _active = true);
-      showAppToast(context, '알림에서 어종 버튼으로 기록하세요');
-    }
+    // 카운터가 쓸 어종·저장경로를 네이티브에 동기화한 뒤 카운터 화면을 직접 띄운다.
+    await CatchLogService().syncConfig(species, settings!.savePath);
+    await _maybeAutoAddLocation(); // 첫 진입 시 현장 정보 자동 추가(옵션)
+    await CatchLogService().openCounter();
   }
 
   /// 옵션이 켜져 있고 오늘 파일에 현장 정보가 없으면, 카운터 시작 시 1회 자동 수집.
@@ -1230,9 +1210,7 @@ class _CatchLogButtonState extends ConsumerState<_CatchLogButton>
 
   @override
   Widget build(BuildContext context) {
-    final idle = Colors.orange.shade700;
-    final rec = Colors.red.shade600;
-    final base = _active ? rec : idle;
+    final base = Colors.orange.shade700;
     return GestureDetector(
       onTap: _onTap,
       child: Container(
@@ -1257,12 +1235,12 @@ class _CatchLogButtonState extends ConsumerState<_CatchLogButton>
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              Icons.phishing,
+              Icons.exposure_plus_1,
               color: Colors.white,
               size: 22,
             ),
             Text(
-              _active ? '기록 중' : '조과 기록',
+              '카운터',
               style: const TextStyle(
                 color: Colors.white,
                 fontSize: 9,

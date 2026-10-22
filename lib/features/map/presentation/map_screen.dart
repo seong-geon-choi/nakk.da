@@ -7,6 +7,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import '../../memo/domain/models/memo_entry.dart';
 import '../../memo/presentation/memo_provider.dart';
 import '../../location/domain/models/location_status.dart';
@@ -46,8 +47,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _showTrack = false;
   bool _showMemoPoints = true; // 메모 지점(파란 마커) 표시 여부. 끄면 숨김
   bool _showCatchChart = false; // 조과 보기: 조위+시간당 조과 차트 패널
-  double? _chartLeft; // 조과 차트 패널 위치(드래그 이동). null이면 기본(하단)
-  double? _chartTop;
+  // 조과 차트 패널 위치(드래그 이동, prefs 저장). left=null이면 기본(하단 중앙),
+  // bottom=0이면 광고 바로 위에 붙음. 위로 드래그하면 bottom 증가.
+  double? _chartLeft;
+  double? _chartBottom;
+  // 우측 세로 툴바 위치(드래그 이동, prefs 저장). null이면 기본(우상단).
+  double? _toolLeft;
+  double? _toolTop;
+  static const double _toolW = 40; // 툴바 폭(_toolBtn SizedBox 폭과 동일)
   List<TideEvent> _dayTides = const []; // 그날 현황 블록의 만조/간조(조위 곡선용)
   Map<String, List<DateTime>> _catchBySpecies = const {}; // 어종별 기록 시각(시간당 조과 막대)
   Timer? _noGpsTimer;
@@ -86,9 +93,44 @@ class _MapScreenState extends ConsumerState<MapScreen>
         vsync: this, duration: const Duration(milliseconds: 1400));
     _loadFromToday();
     _loadTrackPoints();
+    _loadPanelPositions();
     ref.read(settingsProvider.future).then((s) {
       if (mounted) setState(() => _savePath = s.savePath);
     });
+  }
+
+  // ── 패널/툴바 위치 저장·복원 ─────────────────────────────
+  static const _kToolLeft = 'map_tool_left';
+  static const _kToolTop = 'map_tool_top';
+  static const _kChartLeft = 'map_chart_left';
+  static const _kChartBottom = 'map_chart_bottom';
+
+  Future<void> _loadPanelPositions() async {
+    final p = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      _toolLeft = p.getDouble(_kToolLeft);
+      _toolTop = p.getDouble(_kToolTop);
+      _chartLeft = p.getDouble(_kChartLeft);
+      _chartBottom = p.getDouble(_kChartBottom);
+    });
+  }
+
+  Future<void> _savePanelPositions() async {
+    final p = await SharedPreferences.getInstance();
+    Future<void> put(String k, double? v) async =>
+        v == null ? p.remove(k) : p.setDouble(k, v);
+    await put(_kToolLeft, _toolLeft);
+    await put(_kToolTop, _toolTop);
+    await put(_kChartLeft, _chartLeft);
+    await put(_kChartBottom, _chartBottom);
+  }
+
+  /// 지도 스택(_mapStackKey)의 실제 크기. 첫 프레임 등 미측정 시 화면 크기로 근사.
+  Size _stackSize(BuildContext context) {
+    final box = _mapStackKey.currentContext?.findRenderObject() as RenderBox?;
+    if (box != null && box.hasSize) return box.size;
+    return MediaQuery.of(context).size;
   }
 
   void _loadFromToday() {
@@ -1436,10 +1478,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 ),
               ),
             ),
-          // 우측 세로 툴바 (가로모드에서 내비게이션 바에 가리지 않도록 세이프에어리어 반영)
+          // 우측 세로 툴바. 기본은 우상단(세이프에어리어 반영), 핸들을 끌어 이동하면
+          // 위치를 저장했다가 재사용. 미측정 첫 프레임은 화면 크기로 근사.
           Positioned(
-            top: 8 + MediaQuery.of(context).padding.top,
-            right: 8 + MediaQuery.of(context).padding.right,
+            left: (_toolLeft ??
+                    (_stackSize(context).width -
+                        _toolW -
+                        8 -
+                        MediaQuery.of(context).padding.right))
+                .clamp(0.0, _stackSize(context).width - _toolW),
+            top: (_toolTop ?? (8 + MediaQuery.of(context).padding.top))
+                .clamp(0.0, _stackSize(context).height - 40),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(8),
               child: Material(
@@ -1449,6 +1498,39 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
+                    // 드래그 핸들: 끌어서 버튼바 이동(마지막 위치 저장·재사용)
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onPanUpdate: (d) {
+                        final ts = _stackSize(context);
+                        final curLeft = _toolLeft ??
+                            (ts.width -
+                                _toolW -
+                                8 -
+                                MediaQuery.of(context).padding.right);
+                        final curTop = _toolTop ??
+                            (8 + MediaQuery.of(context).padding.top);
+                        setState(() {
+                          _toolLeft = (curLeft + d.delta.dx)
+                              .clamp(0.0, ts.width - _toolW);
+                          _toolTop = (curTop + d.delta.dy)
+                              .clamp(0.0, ts.height - 40);
+                        });
+                      },
+                      onPanEnd: (_) => _savePanelPositions(),
+                      child: SizedBox(
+                        width: _toolW,
+                        height: 22,
+                        child: Icon(Icons.drag_indicator,
+                            size: 16,
+                            color: Theme.of(context)
+                                .colorScheme
+                                .onSurfaceVariant
+                                .withValues(alpha: 0.7)),
+                      ),
+                    ),
+                    const Divider(
+                        height: 1, thickness: 1, indent: 6, endIndent: 6),
                     // 출퇴근 알림: 설정 마스터 토글이 켜진 경우에만 노출, 추적 켜고/끄기
                     if (commuteEnabled) ...[
                       _toolBtn(
@@ -1490,7 +1572,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     ),
                     _divider(),
                     _toolBtn(
-                      Icons.ssid_chart, // 사인형 곡선 아이콘
+                      Icons.bar_chart, // 시간당 조과 막대그래프
                       (_catchBySpecies.isNotEmpty || _dayTides.isNotEmpty)
                           ? (_showCatchChart
                               ? Theme.of(context).colorScheme.primary
@@ -1611,17 +1693,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   /// 조과 차트 패널. 제목줄을 드래그해 이동, ×로 닫기. 위치는 화면 안으로 클램프.
   Widget _buildChartPanel(BuildContext context) {
-    final mq = MediaQuery.of(context);
     final cs = Theme.of(context).colorScheme;
-    final panelW = math.min(mq.size.width - 16, 520.0);
-    final defLeft = (mq.size.width - panelW) / 2;
-    final defTop =
-        (mq.size.height - 300 - mq.padding.bottom).clamp(mq.padding.top + 8, mq.size.height - 140);
-    final left = (_chartLeft ?? defLeft).clamp(0.0, mq.size.width - panelW);
-    final top = (_chartTop ?? defTop).clamp(mq.padding.top, mq.size.height - 120);
+    final ts = _stackSize(context);
+    final panelW = math.min(ts.width - 16, 520.0);
+    final defLeft = (ts.width - panelW) / 2;
+    final left = (_chartLeft ?? defLeft).clamp(0.0, ts.width - panelW);
+    // bottom=0 → 광고(스택 하단) 바로 위에 붙음. 위로 드래그하면 bottom 증가.
+    final maxBottom = (ts.height - 48).clamp(0.0, double.infinity);
+    final bottom = (_chartBottom ?? 0.0).clamp(0.0, maxBottom);
     return Positioned(
       left: left,
-      top: top,
+      bottom: bottom,
       width: panelW,
       child: Material(
         elevation: 4,
@@ -1637,11 +1719,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
               GestureDetector(
                 behavior: HitTestBehavior.opaque,
                 onPanUpdate: (d) => setState(() {
-                  _chartLeft = (left + d.delta.dx)
-                      .clamp(0.0, mq.size.width - panelW);
-                  _chartTop =
-                      (top + d.delta.dy).clamp(mq.padding.top, mq.size.height - 120);
+                  _chartLeft =
+                      (left + d.delta.dx).clamp(0.0, ts.width - panelW);
+                  _chartBottom = (bottom - d.delta.dy).clamp(0.0, maxBottom);
                 }),
+                onPanEnd: (_) => _savePanelPositions(),
                 child: Row(
                   children: [
                     Icon(Icons.drag_indicator,

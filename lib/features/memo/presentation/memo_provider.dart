@@ -10,6 +10,7 @@ import '../../settings/presentation/settings_provider.dart';
 import '../../backup/presentation/backup_provider.dart';
 import '../../file_list/presentation/file_list_provider.dart';
 import '../../../core/utils/file_name_parser.dart';
+import '../../../core/services/review_service.dart';
 
 final memoRepositoryProvider = Provider<MemoRepository>(
   (ref) => MemoRepositoryImpl(),
@@ -61,6 +62,8 @@ class DayFileNotifier extends FamilyAsyncNotifier<DayFile?, String> {
     if (entry.videoPath != null) {
       unawaited(ref.read(backupProvider.notifier).syncMediaFile(entry.videoPath!));
     }
+    // 긍정적 행동(메모 저장) → 조건 충족 시 인앱 리뷰 요청(과요청 가드 내장)
+    unawaited(ReviewService().registerPositiveEvent());
   }
 
   /// 하루 단위 출조 정보(태클·조과) 저장.
