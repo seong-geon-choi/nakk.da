@@ -61,6 +61,112 @@ class BtRemoteService {
     } catch (_) {}
   }
 
+  /// 조과 효과음(TTS 음성) 사용 여부. 기본 켜짐.
+  static Future<bool> getSoundEnabled() async {
+    try {
+      return await _channel.invokeMethod<bool>('getSoundEnabled') ?? true;
+    } catch (_) {
+      return true;
+    }
+  }
+
+  static Future<void> setSoundEnabled(bool enabled) async {
+    try {
+      await _channel.invokeMethod('setSoundEnabled', {'enabled': enabled});
+    } catch (_) {}
+  }
+
+  /// +1 때 랜덤 재생할 추임새 멘트 목록(비면 네이티브 기본 세트).
+  static Future<List<String>> getSoundPhrases() async {
+    try {
+      final l = await _channel.invokeListMethod<String>('getSoundPhrases');
+      return l ?? const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static Future<void> setSoundPhrases(List<String> phrases) async {
+    try {
+      await _channel.invokeMethod('setSoundPhrases', {'phrases': phrases});
+    } catch (_) {}
+  }
+
+  /// 삭제(−1) 때 랜덤 재생할 멘트 목록(비면 네이티브 기본 세트).
+  static Future<List<String>> getSoundDelPhrases() async {
+    try {
+      final l = await _channel.invokeListMethod<String>('getSoundDelPhrases');
+      return l ?? const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  static Future<void> setSoundDelPhrases(List<String> phrases) async {
+    try {
+      await _channel.invokeMethod('setSoundDelPhrases', {'phrases': phrases});
+    } catch (_) {}
+  }
+
+  /// 설정 화면 미리듣기 — 지정 문구를 현재 톤·음성으로 즉시 발화.
+  static Future<void> previewSound(String text) async {
+    try {
+      await _channel.invokeMethod('previewSound', {'text': text});
+    } catch (_) {}
+  }
+
+  /// TTS 톤(pitch)·속도(rate). 기본 각 1.0.
+  static Future<({double pitch, double rate})> getSoundTone() async {
+    try {
+      final m = await _channel.invokeMapMethod<String, dynamic>('getSoundTone');
+      return (
+        pitch: (m?['pitch'] as num?)?.toDouble() ?? 1.0,
+        rate: (m?['rate'] as num?)?.toDouble() ?? 1.0,
+      );
+    } catch (_) {
+      return (pitch: 1.0, rate: 1.0);
+    }
+  }
+
+  static Future<void> setSoundTone(double pitch, double rate) async {
+    try {
+      await _channel
+          .invokeMethod('setSoundTone', {'pitch': pitch, 'rate': rate});
+    } catch (_) {}
+  }
+
+  /// 엔진이 제공하는 한국어 음성 이름 목록(설치된 것만).
+  static Future<List<String>> getSoundVoices() async {
+    try {
+      final l = await _channel.invokeListMethod<String>('getSoundVoices');
+      return l ?? const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 선택한 음성 이름(빈 문자열이면 엔진 기본).
+  static Future<String> getSoundVoice() async {
+    try {
+      return await _channel.invokeMethod<String>('getSoundVoice') ?? '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  static Future<void> setSoundVoice(String name) async {
+    try {
+      await _channel.invokeMethod('setSoundVoice', {'name': name});
+    } catch (_) {}
+  }
+
+  /// 효과음 관련 설정(멘트·음성·톤·on/off)을 처음 설치 기본값으로 되돌린다.
+  static Future<void> resetSound() async {
+    try {
+      await _channel.invokeMethod('resetSound');
+    } catch (_) {}
+  }
+
   /// 등록 모드 시작 — 임시 세션으로 미디어/비미디어 키를 캡처해 [onKey]로 올린다.
   static Future<void> captureStart() async {
     _ensureHandler();

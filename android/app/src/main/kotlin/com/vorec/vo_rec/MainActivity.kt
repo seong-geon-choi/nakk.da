@@ -14,6 +14,7 @@ import android.os.Environment
 import android.provider.DocumentsContract
 import android.provider.MediaStore
 import android.provider.Settings
+import android.speech.tts.TextToSpeech
 import android.view.KeyEvent
 import androidx.core.view.WindowCompat
 import androidx.documentfile.provider.DocumentFile
@@ -45,6 +46,11 @@ class MainActivity : FlutterActivity() {
     private var pendingGalleryResult: MethodChannel.Result? = null
     private var pendingMediaResult: MethodChannel.Result? = null
     private var pendingSafResult: MethodChannel.Result? = null
+    // 설정 화면 조과 효과음 미리듣기용 TTS(서비스와 별개, 지연 생성).
+    private var previewTts: TextToSpeech? = null
+    private var previewTtsReady = false
+    // 초기화 완료 전 들어온 요청(미리듣기/음성목록)을 보관했다가 준비되면 실행.
+    private val pendingTtsActions = ArrayList<(TextToSpeech) -> Unit>()
 
     companion object {
         private const val AR_REQUEST_CODE = 1001
@@ -756,6 +762,79 @@ class MainActivity : FlutterActivity() {
                     setBtEnabled(enabled)
                     result.success(null)
                 }
+                "getSoundEnabled" -> {
+                    result.success(CatchLogService.isSoundEnabled(this))
+                }
+                "setSoundEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: true
+                    CatchLogService.prefsOf(this).edit()
+                        .putBoolean(CatchLogService.PREFS_SOUND_ENABLED_KEY, enabled).apply()
+                    result.success(null)
+                }
+                "getSoundPhrases" -> {
+                    result.success(CatchLogService.loadSoundPhrases(this))
+                }
+                "setSoundPhrases" -> {
+                    val phrases = call.argument<List<String>>("phrases") ?: emptyList()
+                    val arr = JSONArray(); for (p in phrases) arr.put(p)
+                    CatchLogService.prefsOf(this).edit()
+                        .putString(CatchLogService.PREFS_SOUND_PHRASES_KEY, arr.toString()).apply()
+                    result.success(null)
+                }
+                "getSoundDelPhrases" -> {
+                    result.success(CatchLogService.loadSoundDelPhrases(this))
+                }
+                "setSoundDelPhrases" -> {
+                    val phrases = call.argument<List<String>>("phrases") ?: emptyList()
+                    val arr = JSONArray(); for (p in phrases) arr.put(p)
+                    CatchLogService.prefsOf(this).edit()
+                        .putString(CatchLogService.PREFS_SOUND_DEL_PHRASES_KEY, arr.toString()).apply()
+                    result.success(null)
+                }
+                "previewSound" -> {
+                    val text = call.argument<String>("text") ?: ""
+                    if (text.isNotBlank()) previewSpeak(text)
+                    result.success(null)
+                }
+                "getSoundTone" -> {
+                    result.success(mapOf(
+                        "pitch" to CatchLogService.soundPitch(this).toDouble(),
+                        "rate" to CatchLogService.soundRate(this).toDouble()
+                    ))
+                }
+                "setSoundTone" -> {
+                    val pitch = (call.argument<Double>("pitch") ?: 1.0).toFloat()
+                    val rate = (call.argument<Double>("rate") ?: 1.0).toFloat()
+                    CatchLogService.prefsOf(this).edit()
+                        .putFloat(CatchLogService.PREFS_SOUND_PITCH_KEY, pitch)
+                        .putFloat(CatchLogService.PREFS_SOUND_RATE_KEY, rate)
+                        .apply()
+                    result.success(null)
+                }
+                "getSoundVoices" -> {
+                    withPreviewTts { t -> result.success(koreanVoiceNames(t)) }
+                }
+                "getSoundVoice" -> {
+                    result.success(CatchLogService.soundVoice(this))
+                }
+                "resetSound" -> {
+                    // 사운드 관련 키를 모두 제거 → 로더가 기본값으로 폴백(= 처음 설치 상태).
+                    CatchLogService.prefsOf(this).edit()
+                        .remove(CatchLogService.PREFS_SOUND_ENABLED_KEY)
+                        .remove(CatchLogService.PREFS_SOUND_PHRASES_KEY)
+                        .remove(CatchLogService.PREFS_SOUND_DEL_PHRASES_KEY)
+                        .remove(CatchLogService.PREFS_SOUND_PITCH_KEY)
+                        .remove(CatchLogService.PREFS_SOUND_RATE_KEY)
+                        .remove(CatchLogService.PREFS_SOUND_VOICE_KEY)
+                        .apply()
+                    result.success(null)
+                }
+                "setSoundVoice" -> {
+                    val name = call.argument<String>("name") ?: ""
+                    CatchLogService.prefsOf(this).edit()
+                        .putString(CatchLogService.PREFS_SOUND_VOICE_KEY, name).apply()
+                    result.success(null)
+                }
                 "captureStart" -> {
                     startKeyCapture()
                     result.success(null)
@@ -802,6 +881,55 @@ class MainActivity : FlutterActivity() {
             } catch (_: Exception) {}
         }
     }
+
+    /** 미리듣기 TTS가 준비되면 action 실행(지연 초기화, 콜백은 메인 스레드). */
+    private fun withPreviewTts(action: (TextToSpeech) -> Unit) {
+        val t = previewTts
+        if (t != null && previewTtsReady) { action(t); return }
+        pendingTtsActions.add(action)
+        if (t == null) {
+            previewTts = TextToSpeech(this) { status ->
+                previewTtsReady = status == TextToSpeech.SUCCESS
+                val acts = ArrayList(pendingTtsActions)
+                pendingTtsActions.clear()
+                val pt = previewTts
+                if (previewTtsReady && pt != null) {
+                    try { pt.language = Locale.KOREAN } catch (_: Exception) {}
+                    acts.forEach { it(pt) }
+                }
+            }
+        }
+    }
+
+    /** 저장된 톤·속도·음성을 TTS에 적용. */
+    private fun applyTtsPrefs(t: TextToSpeech) {
+        try {
+            t.setPitch(CatchLogService.soundPitch(this))
+            t.setSpeechRate(CatchLogService.soundRate(this))
+            val vname = CatchLogService.soundVoice(this)
+            val v = if (vname.isEmpty()) t.defaultVoice
+                    else t.voices?.firstOrNull { it.name == vname }
+            if (v != null) t.voice = v
+        } catch (_: Exception) {}
+    }
+
+    /** 설정 화면 미리듣기: 현재 톤·음성을 적용해 즉시 발화(서비스와 별개). */
+    private fun previewSpeak(text: String) {
+        withPreviewTts { t ->
+            applyTtsPrefs(t)
+            try { t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "preview") } catch (_: Exception) {}
+        }
+    }
+
+    /** 한국어 음성 이름 목록(설치된 것만). */
+    private fun koreanVoiceNames(t: TextToSpeech): List<String> = try {
+        t.voices.orEmpty()
+            .filter { it.locale?.language == "ko" }
+            .filter { it.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) != true }
+            .map { it.name }
+            .distinct()
+            .sorted()
+    } catch (_: Exception) { emptyList() }
 
     /** 매핑 JSON을 읽어 변형 후 저장. */
     private fun writeKeyMap(mutate: (JSONObject) -> Unit) {
@@ -1182,5 +1310,13 @@ class MainActivity : FlutterActivity() {
         try { unregisterReceiver(voiceResultReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(catchCountsReceiver) } catch (_: Exception) {}
         stopKeyCapture()
+    }
+
+    override fun onDestroy() {
+        try { previewTts?.shutdown() } catch (_: Exception) {}
+        previewTts = null
+        previewTtsReady = false
+        pendingTtsActions.clear()
+        super.onDestroy()
     }
 }

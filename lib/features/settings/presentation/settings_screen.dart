@@ -354,6 +354,15 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               )),
             ),
             ListTile(
+              leading: const Icon(Icons.record_voice_over_outlined),
+              title: const Text('조과 효과음(음성)'),
+              subtitle: const Text('+1 때 추임새, 10마리마다 마릿수 음성'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const _CatchSoundScreen(),
+              )),
+            ),
+            ListTile(
               leading: const Icon(Icons.add_to_home_screen),
               title: const Text('홈화면 바로가기'),
               subtitle: const Text('홈 화면 아이콘으로 카운터를 바로 열기'),
@@ -1115,6 +1124,364 @@ Future<void> _editCatchQuickSpecies(BuildContext context, WidgetRef ref) async {
     await ref
         .read(settingsProvider.notifier)
         .setCatchQuickSpecies([c1.text, c2.text]);
+  }
+}
+
+/// 조과 +1 때 재생할 추임새(TTS) 멘트 편집 + on/off 화면.
+/// 멘트는 네이티브 prefs가 단일 소스이며, 여기서 채널로 읽고/쓴다.
+class _CatchSoundScreen extends StatefulWidget {
+  const _CatchSoundScreen();
+
+  @override
+  State<_CatchSoundScreen> createState() => _CatchSoundScreenState();
+}
+
+class _CatchSoundScreenState extends State<_CatchSoundScreen> {
+  bool _enabled = true;
+  bool _loaded = false;
+  final List<TextEditingController> _ctrls = [];
+  final List<TextEditingController> _delCtrls = [];
+  double _pitch = 1.0;
+  double _rate = 1.0;
+  List<String> _voices = const [];
+  String _voice = ''; // 빈 문자열 = 엔진 기본
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  Future<void> _load() async {
+    final en = await BtRemoteService.getSoundEnabled();
+    final phrases = await BtRemoteService.getSoundPhrases();
+    final delPhrases = await BtRemoteService.getSoundDelPhrases();
+    final tone = await BtRemoteService.getSoundTone();
+    final voices = await BtRemoteService.getSoundVoices();
+    final voice = await BtRemoteService.getSoundVoice();
+    if (!mounted) return;
+    setState(() {
+      _enabled = en;
+      for (final c in _ctrls) {
+        c.dispose();
+      }
+      for (final c in _delCtrls) {
+        c.dispose();
+      }
+      _ctrls
+        ..clear()
+        ..addAll(phrases.map((p) => TextEditingController(text: p)));
+      if (_ctrls.isEmpty) _ctrls.add(TextEditingController());
+      _delCtrls
+        ..clear()
+        ..addAll(delPhrases.map((p) => TextEditingController(text: p)));
+      if (_delCtrls.isEmpty) _delCtrls.add(TextEditingController());
+      _pitch = tone.pitch;
+      _rate = tone.rate;
+      _voices = voices;
+      _voice = voices.contains(voice) ? voice : '';
+      _loaded = true;
+    });
+  }
+
+  /// 현재 톤·음성으로 샘플 문구를 들려준다.
+  void _previewCurrent() {
+    final first = _ctrls
+        .map((c) => c.text.trim())
+        .firstWhere((t) => t.isNotEmpty, orElse: () => '한 마리!');
+    BtRemoteService.previewSound(first);
+  }
+
+  Future<void> _setTone() async {
+    await BtRemoteService.setSoundTone(_pitch, _rate);
+  }
+
+  Future<void> _setVoice(String name) async {
+    setState(() => _voice = name);
+    await BtRemoteService.setSoundVoice(name);
+    _previewCurrent();
+  }
+
+  /// 멘트·음성·톤·on/off를 처음 설치 기본값으로 되돌린다(확인 후).
+  Future<void> _reset() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('효과음 설정 초기화'),
+        content: const Text('멘트(+1·삭제)와 음성·톤 설정을 처음 설치 상태로 되돌립니다.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('취소')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('초기화')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await BtRemoteService.resetSound();
+    await _load();
+  }
+
+  @override
+  void dispose() {
+    for (final c in _ctrls) {
+      c.dispose();
+    }
+    for (final c in _delCtrls) {
+      c.dispose();
+    }
+    super.dispose();
+  }
+
+  Future<void> _setEnabled(bool v) async {
+    setState(() => _enabled = v);
+    await BtRemoteService.setSoundEnabled(v);
+  }
+
+  /// 현재 입력칸을 네이티브에 저장(빈 칸 제외). 모두 비면 기본 멘트로 폴백.
+  Future<void> _persist() async {
+    final phrases = _ctrls
+        .map((c) => c.text.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+    await BtRemoteService.setSoundPhrases(phrases);
+  }
+
+  void _addPhrase() {
+    setState(() => _ctrls.add(TextEditingController()));
+  }
+
+  void _removePhrase(int i) {
+    final c = _ctrls.removeAt(i);
+    c.dispose();
+    setState(() {});
+    _persist();
+  }
+
+  /// 삭제 멘트 저장(빈 칸 제외). 모두 비면 기본 멘트로 폴백.
+  Future<void> _persistDel() async {
+    final phrases = _delCtrls
+        .map((c) => c.text.trim())
+        .where((t) => t.isNotEmpty)
+        .toList();
+    await BtRemoteService.setSoundDelPhrases(phrases);
+  }
+
+  void _addDelPhrase() {
+    setState(() => _delCtrls.add(TextEditingController()));
+  }
+
+  void _removeDelPhrase(int i) {
+    final c = _delCtrls.removeAt(i);
+    c.dispose();
+    setState(() {});
+    _persistDel();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!_loaded) {
+      return Scaffold(
+        appBar: AppBar(title: const Text('조과 효과음')),
+        body: const Center(child: CircularProgressIndicator()),
+      );
+    }
+    return DefaultTabController(
+      length: 3,
+      child: Scaffold(
+        appBar: AppBar(
+          title: const Text('조과 효과음'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.restart_alt),
+              tooltip: '초기화',
+              onPressed: _reset,
+            ),
+          ],
+          bottom: const TabBar(
+            tabs: [
+              Tab(text: '+1 멘트'),
+              Tab(text: '삭제 멘트'),
+              Tab(text: '목소리·톤'),
+            ],
+          ),
+        ),
+        body: Column(
+          children: [
+            SwitchListTile(
+              value: _enabled,
+              onChanged: _setEnabled,
+              secondary: const Icon(Icons.record_voice_over_outlined),
+              title: const Text('조과 효과음 사용'),
+              subtitle: Text(_enabled
+                  ? '+1·삭제 때 음성이 재생됩니다'
+                  : '꺼져 있으면 소리가 나지 않습니다'),
+            ),
+            const Divider(height: 1),
+            Expanded(
+              child: TabBarView(
+                children: [
+                  _phraseTab(
+                    ctrls: _ctrls,
+                    hint: '멘트',
+                    addLabel: '+1 멘트 추가',
+                    onAdd: _addPhrase,
+                    onRemove: _removePhrase,
+                    onPersist: _persist,
+                    intro: '• +1 할 때 이 중 하나를 무작위로 읽어줍니다.\n'
+                        '• 10·20·30…500마리가 되면 "어종 N마리"를 읽습니다.\n'
+                        '• 모두 비우면 기본 멘트로 돌아갑니다.',
+                  ),
+                  _phraseTab(
+                    ctrls: _delCtrls,
+                    hint: '삭제 멘트',
+                    addLabel: '삭제 멘트 추가',
+                    onAdd: _addDelPhrase,
+                    onRemove: _removeDelPhrase,
+                    onPersist: _persistDel,
+                    intro: '−1 또는 "최근 1개 삭제" 때 이 중 하나를 읽어줍니다.\n'
+                        '모두 비우면 기본 멘트로 돌아갑니다.',
+                  ),
+                  _voiceTab(),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  /// +1/삭제 공용 멘트 편집 탭.
+  Widget _phraseTab({
+    required List<TextEditingController> ctrls,
+    required String hint,
+    required String addLabel,
+    required VoidCallback onAdd,
+    required void Function(int) onRemove,
+    required Future<void> Function() onPersist,
+    required String intro,
+  }) {
+    return ListView(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Text(intro,
+              style: const TextStyle(
+                  fontSize: 13, height: 1.5, color: Colors.grey)),
+        ),
+        for (int i = 0; i < ctrls.length; i++)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: ctrls[i],
+                    decoration: InputDecoration(
+                      isDense: true,
+                      hintText: '$hint ${i + 1}',
+                      border: const OutlineInputBorder(),
+                    ),
+                    onChanged: (_) => onPersist(),
+                  ),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.volume_up_outlined),
+                  tooltip: '미리듣기',
+                  onPressed: () {
+                    final t = ctrls[i].text.trim();
+                    if (t.isNotEmpty) BtRemoteService.previewSound(t);
+                  },
+                ),
+                IconButton(
+                  icon: const Icon(Icons.remove_circle_outline),
+                  tooltip: '삭제',
+                  onPressed: ctrls.length <= 1 ? null : () => onRemove(i),
+                ),
+              ],
+            ),
+          ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          child: OutlinedButton.icon(
+            onPressed: onAdd,
+            icon: const Icon(Icons.add),
+            label: Text(addLabel),
+          ),
+        ),
+      ],
+    );
+  }
+
+  /// 음성·톤·속도 탭.
+  Widget _voiceTab() {
+    return ListView(
+      children: [
+        const Padding(
+          padding: EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: Text(
+            '기기 음성(TTS)이라 남성/여성·나이대 구분은 제공되지 않아요. '
+            '음성을 골라 바꾸면 바로 들려주고, 톤을 낮추면 굵게·높이면 밝게 들립니다.',
+            style: TextStyle(fontSize: 12, color: Colors.grey, height: 1.4),
+          ),
+        ),
+        if (_voices.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 4),
+            child: DropdownButtonFormField<String>(
+              initialValue: _voice,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                isDense: true,
+                labelText: '음성',
+                border: OutlineInputBorder(),
+              ),
+              items: [
+                const DropdownMenuItem(value: '', child: Text('기본')),
+                for (int i = 0; i < _voices.length; i++)
+                  DropdownMenuItem(
+                      value: _voices[i], child: Text('음성 ${i + 1}')),
+              ],
+              onChanged: (v) => _setVoice(v ?? ''),
+            ),
+          ),
+        ListTile(
+          dense: true,
+          title: const Text('톤(높낮이)'),
+          subtitle: Slider(
+            value: _pitch,
+            min: 0.5,
+            max: 2.0,
+            divisions: 15,
+            label: _pitch.toStringAsFixed(2),
+            onChanged: (v) => setState(() => _pitch = v),
+            onChangeEnd: (v) {
+              _setTone();
+              _previewCurrent();
+            },
+          ),
+        ),
+        ListTile(
+          dense: true,
+          title: const Text('속도'),
+          subtitle: Slider(
+            value: _rate,
+            min: 0.5,
+            max: 2.0,
+            divisions: 15,
+            label: _rate.toStringAsFixed(2),
+            onChanged: (v) => setState(() => _rate = v),
+            onChangeEnd: (v) {
+              _setTone();
+              _previewCurrent();
+            },
+          ),
+        ),
+      ],
+    );
   }
 }
 

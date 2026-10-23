@@ -6,6 +6,7 @@ import android.content.*
 import android.content.pm.ServiceInfo
 import android.net.Uri
 import android.os.*
+import android.speech.tts.TextToSpeech
 import android.view.View
 import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
@@ -34,6 +35,20 @@ class CatchLogService : Service() {
         const val PREFS_SPECIES_KEY = "catch_species"    // JSON array of 어종 라벨
         const val PREFS_STYLES_KEY = "catch_counter_styles" // 카운터별 숫자판 스킨
         const val PREFS_SAVEPATH_KEY = "catch_savepath"  // SAF URI 또는 일반 경로
+
+        // 조과 효과음(TTS 음성) 사용 여부. 기본 켜짐.
+        const val PREFS_SOUND_ENABLED_KEY = "catch_sound_enabled"
+        // +1 때 랜덤 재생할 추임새 멘트(JSON array). 비면 DEFAULT_SOUND_PHRASES.
+        const val PREFS_SOUND_PHRASES_KEY = "catch_sound_phrases"
+        val DEFAULT_SOUND_PHRASES =
+            listOf("한 마리!", "오이예예예애애", "좋오오오았어!", "나이쓰!", "힛트으!")
+        // 삭제(−1) 때 랜덤 재생할 멘트(JSON array). 비면 DEFAULT_SOUND_DEL_PHRASES.
+        const val PREFS_SOUND_DEL_PHRASES_KEY = "catch_sound_del_phrases"
+        val DEFAULT_SOUND_DEL_PHRASES = listOf("취소", "뺐다", "아이고")
+        // TTS 톤(pitch)·속도(rate)·음성(voice 이름). 기본 1.0 / 1.0 / 엔진 기본.
+        const val PREFS_SOUND_PITCH_KEY = "catch_sound_pitch"
+        const val PREFS_SOUND_RATE_KEY = "catch_sound_rate"
+        const val PREFS_SOUND_VOICE_KEY = "catch_sound_voice"
 
         const val ACTION_ADD = "com.sgchoisg.nakkda.ADD_CATCH"
         const val ACTION_REMOVE = "com.sgchoisg.nakkda.REMOVE_CATCH"
@@ -128,6 +143,36 @@ class CatchLogService : Service() {
         fun loadSpecies(context: Context): List<String> =
             strArray(prefsOf(context).getString(PREFS_SPECIES_KEY, "[]"))
                 .map { it.trim() }.filter { it.isNotEmpty() }
+
+        /** 조과 효과음(TTS) 사용 여부. 기본 켜짐. */
+        fun isSoundEnabled(context: Context): Boolean =
+            prefsOf(context).getBoolean(PREFS_SOUND_ENABLED_KEY, true)
+
+        /** +1 추임새 멘트 목록. 저장값이 비면 기본 세트로 폴백(무음 방지). */
+        fun loadSoundPhrases(context: Context): List<String> {
+            val saved = strArray(prefsOf(context).getString(PREFS_SOUND_PHRASES_KEY, "[]"))
+                .map { it.trim() }.filter { it.isNotEmpty() }
+            return saved.ifEmpty { DEFAULT_SOUND_PHRASES }
+        }
+
+        /** 삭제(−1) 멘트 목록. 저장값이 비면 기본 세트로 폴백. */
+        fun loadSoundDelPhrases(context: Context): List<String> {
+            val saved = strArray(prefsOf(context).getString(PREFS_SOUND_DEL_PHRASES_KEY, "[]"))
+                .map { it.trim() }.filter { it.isNotEmpty() }
+            return saved.ifEmpty { DEFAULT_SOUND_DEL_PHRASES }
+        }
+
+        /** TTS 톤(0.5~2.0, 기본 1.0). */
+        fun soundPitch(context: Context): Float =
+            prefsOf(context).getFloat(PREFS_SOUND_PITCH_KEY, 1.0f).coerceIn(0.5f, 2.0f)
+
+        /** TTS 속도(0.5~2.0, 기본 1.0). */
+        fun soundRate(context: Context): Float =
+            prefsOf(context).getFloat(PREFS_SOUND_RATE_KEY, 1.0f).coerceIn(0.5f, 2.0f)
+
+        /** 선택한 음성 이름(빈 문자열이면 엔진 기본). */
+        fun soundVoice(context: Context): String =
+            prefsOf(context).getString(PREFS_SOUND_VOICE_KEY, "") ?: ""
 
         /** 카운터별 스킨 목록(저장된 것). 부족분은 호출측에서 기본값으로 채운다. */
         fun loadStyles(context: Context): List<String> =
@@ -256,6 +301,15 @@ class CatchLogService : Service() {
     // 블루투스 리모컨/이어폰 미디어 버튼 수신용 무음 세션(포커스 미요청).
     private var mediaButton: MediaButtonSession? = null
 
+    // 조과 효과음용 TTS(한국어). onCreate에서 초기화, onDestroy에서 종료.
+    private var tts: TextToSpeech? = null
+    @Volatile private var ttsReady = false
+    // 마지막으로 적용한 음성 이름(바뀔 때만 setVoice 조회).
+    private var appliedVoice: String? = null
+    // 알림 post 시각을 세션 동안 고정 — +1 갱신 때마다 현재 시각으로 찍히면
+    // 알림창에서 맨 위로 재정렬되므로, 한 번 정해 유지해 위치를 보존한다.
+    private val notifWhen = System.currentTimeMillis()
+
     // 날짜가 바뀌면(자정) 경로 기록처럼 세션을 종료한다.
     private val dateChangedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -277,7 +331,7 @@ class CatchLogService : Service() {
         try {
             // 초기 알림은 파일을 읽지 않는 가벼운 형태로 띄우고(메인 스레드 I/O 회피),
             // 곧바로 백그라운드에서 카운트를 읽어 갱신한다.
-            val notif = buildNotification(countsPlaceholder())
+            val notif = buildNotification(null)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                 startForeground(NOTIFICATION_ID, notif, ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
             } else {
@@ -296,6 +350,34 @@ class CatchLogService : Service() {
         }
         // 리모컨 미디어 버튼 수신(화면 꺼짐 포함).
         syncMediaButton()
+        // 조과 효과음(TTS) 초기화 — 첫 발화 지연을 줄이려 서비스 시작 때 엔진을 띄운다.
+        tts = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                try { tts?.language = Locale.KOREAN } catch (_: Exception) {}
+                ttsReady = true
+            }
+        }
+    }
+
+    /** TTS 발화. flush=true면 기존 큐를 끊고 즉시, false면 뒤에 이어서. */
+    private fun speak(text: String, flush: Boolean) {
+        if (!ttsReady) return
+        val t = tts ?: return
+        try {
+            t.setPitch(soundPitch(this))
+            t.setSpeechRate(soundRate(this))
+            val vname = soundVoice(this)
+            if (vname != appliedVoice) {
+                appliedVoice = vname
+                val v = if (vname.isEmpty()) t.defaultVoice
+                        else t.voices?.firstOrNull { it.name == vname }
+                if (v != null) t.voice = v
+            }
+        } catch (_: Exception) {}
+        val mode = if (flush) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+        try {
+            t.speak(text, mode, null, "nakkda_catch_${System.currentTimeMillis()}")
+        } catch (_: Exception) {}
     }
 
     /**
@@ -374,6 +456,8 @@ class CatchLogService : Service() {
         try { unregisterReceiver(dateChangedReceiver) } catch (_: Exception) {}
         mediaButton?.stop()
         mediaButton = null
+        try { tts?.stop(); tts?.shutdown() } catch (_: Exception) {}
+        tts = null
         io.shutdown()
         super.onDestroy()
     }
@@ -386,6 +470,15 @@ class CatchLogService : Service() {
         val species = speciesList().getOrNull(index) ?: return
         fun commit(lat: Double?, lng: Double?) = io.execute {
             appendCatchToFile(this, species, lat, lng)
+            if (isSoundEnabled(this)) {
+                val n = loadCount(this, species)
+                // 10·20·30…500마리: 추임새 없이 "어종 N마리"만. 그 외: 랜덤 추임새.
+                if (n in 1..500 && n % 10 == 0) {
+                    speak("$species ${n}마리", flush = true)
+                } else {
+                    loadSoundPhrases(this).randomOrNull()?.let { speak(it, flush = true) }
+                }
+            }
             updateNotification()
             sendCountsChanged()
         }
@@ -402,7 +495,12 @@ class CatchLogService : Service() {
     private fun removeCatch(index: Int) {
         val species = speciesList().getOrNull(index) ?: return
         io.execute {
+            val had = loadCount(this, species) > 0
             removeLastCatchFromFile(this, species)
+            // 실제로 지워진 경우에만 삭제 멘트.
+            if (had && isSoundEnabled(this)) {
+                loadSoundDelPhrases(this).randomOrNull()?.let { speak(it, flush = true) }
+            }
             updateNotification()
             sendCountsChanged()
         }
@@ -411,47 +509,42 @@ class CatchLogService : Service() {
     /** 어종 무관: 가장 최근 조과 1건 제거 + 알림 갱신(백그라운드). */
     private fun removeLastAnyCatch() {
         io.execute {
+            val had = loadCountsFromFile(this).values.any { it > 0 }
             removeLastAnyCatchFromFile(this)
+            if (had && isSoundEnabled(this)) {
+                loadSoundDelPhrases(this).randomOrNull()?.let { speak(it, flush = true) }
+            }
             updateNotification()
             sendCountsChanged()
         }
     }
 
     // ── 알림 ───────────────────────────────────────────────
-    private fun countsPlaceholder(): String {
-        val species = speciesList()
-        if (species.isEmpty()) return "기록을 시작하세요"
-        return species.joinToString("  ·  ") { "$it …" }
-    }
-
-    /** "주꾸미 7 · 갑오징어 3" — 파일에서 집계(백그라운드에서만 호출). */
-    private fun countsSummary(): String {
-        val species = speciesList()
-        if (species.isEmpty()) return "기록을 시작하세요"
+    /** 어종별 현재 집계(어종 인덱스 순). 파일 읽기이므로 백그라운드에서만 호출. */
+    private fun currentCounts(): List<Int> {
         val counts = loadCountsFromFile(this)
-        return species.joinToString("  ·  ") { "$it ${counts[it] ?: 0}" }
+        return speciesList().map { counts[it] ?: 0 }
     }
 
     private fun updateNotification() {
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-            .notify(NOTIFICATION_ID, buildNotification(countsSummary()))
+            .notify(NOTIFICATION_ID, buildNotification(currentCounts()))
     }
 
-    private fun buildRemote(showCounts: Boolean, summary: String): RemoteViews {
+    /** counts=null이면 집계 미상(초기 알림) — 버튼에 수를 표시하지 않는다. */
+    private fun buildRemote(counts: List<Int>?): RemoteViews {
         val piFlags = PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         val species = speciesList()
         val rv = RemoteViews(packageName, R.layout.catch_notification)
-        if (showCounts) {
-            rv.setViewVisibility(R.id.catch_counts, View.VISIBLE)
-            rv.setTextViewText(R.id.catch_counts, summary)
-        } else {
-            rv.setViewVisibility(R.id.catch_counts, View.GONE)
-        }
         val btnIds = intArrayOf(R.id.catch_btn0, R.id.catch_btn1)
         for (i in btnIds.indices) {
             if (i < species.size) {
                 rv.setViewVisibility(btnIds[i], View.VISIBLE)
-                rv.setTextViewText(btnIds[i], "${species[i]} +1")
+                // 버튼에 "어종 +1"과 현재 누적 수를 함께 표시(본문 카운트줄 제거).
+                val label = if (counts != null)
+                    "${species[i]} +1\n${counts.getOrElse(i) { 0 }}마리"
+                else "${species[i]} +1"
+                rv.setTextViewText(btnIds[i], label)
                 val addPi = PendingIntent.getService(
                     this, 100 + i,
                     Intent(this, CatchLogService::class.java).apply {
@@ -468,7 +561,7 @@ class CatchLogService : Service() {
         return rv
     }
 
-    private fun buildNotification(summary: String): Notification {
+    private fun buildNotification(counts: List<Int>?): Notification {
         val stopPi = PendingIntent.getService(
             this, 201,
             Intent(this, CatchLogService::class.java).apply { action = ACTION_STOP },
@@ -485,10 +578,12 @@ class CatchLogService : Service() {
             .setSmallIcon(android.R.drawable.ic_menu_edit)
             .setOngoing(false).setSilent(true)
             .setOnlyAlertOnce(true)
+            .setWhen(notifWhen).setShowWhen(false) // post 시각 고정 → 재정렬 방지
             .setPriority(NotificationCompat.PRIORITY_DEFAULT)
             .setStyle(NotificationCompat.DecoratedCustomViewStyle())
-            .setCustomContentView(buildRemote(false, summary)) // 접힘: 버튼만
-            .setCustomBigContentView(buildRemote(true, summary)) // 펼침: 카운트 + 버튼
+            // 접힘·펼침 모두 동일: 버튼에 누적 수까지 표시하므로 펼칠 필요가 없다.
+            .setCustomContentView(buildRemote(counts))
+            .setCustomBigContentView(buildRemote(counts))
             .setContentIntent(openPi) // 본문 탭 → 큰 카운터 화면
             .setDeleteIntent(stopPi) // 스와이프로 닫으면 세션 중지
             .build()
