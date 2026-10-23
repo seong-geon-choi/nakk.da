@@ -50,6 +50,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _showTrack = false;
   bool _showMemoPoints = true; // 메모 지점(파란 마커) 표시 여부. 끄면 숨김
   bool _showCatchChart = false; // 조과 보기: 조위+시간당 조과 차트 패널
+  bool _showCatchPoints = false; // 조과 마커 표시(그래프 창과 독립)
   Set<String> _hiddenCatchSpecies = {}; // 차트 범례에서 숨긴 어종(지도 마커도 숨김)
   // 조과 차트 패널 위치(드래그 이동, prefs 저장). left=null이면 기본(하단 중앙),
   // bottom=0이면 광고 바로 위에 붙음. 위로 드래그하면 bottom 증가.
@@ -201,10 +202,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
         }
       }
       if (b is LocationStatus) {
-        if (b.latitude != null && b.longitude != null) {
-          pts.add(_GpsPoint.fromLocation(b));
-        }
-        // 조위 곡선용: tides가 있는 첫 현황 블록을 사용
+        // 현장정보 수집(위치상태) 지점은 지도 마커로 표시하지 않는다(요청).
+        // 조위 곡선용 tides만 추출해 사용한다.
         if (dayTides.isEmpty && b.tides.isNotEmpty) dayTides = b.tides;
       }
     }
@@ -228,6 +227,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _showTrack = false;
         _showMemoPoints = true;
         _showCatchChart = false;
+        _showCatchPoints = false;
         _tideFetchTried = false; // 새 날짜 → 물때 자동 수집 재시도 허용
       }
       _dismissedNoGpsCard = false;
@@ -835,6 +835,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   // 클러스터에 묶인 지점들의 목록 시트. 항목을 누르면 그 지점으로 이동·확대하고 선택.
+  /// 클러스터 목록의 지점 설명: 조과면 어종, 메모면 그 내용(없으면 사진/동영상/주소).
+  String _pointSubtitle(_GpsPoint p) {
+    if (p.isCatch) {
+      final sp = p.species?.trim();
+      return (sp != null && sp.isNotEmpty) ? sp : '조과';
+    }
+    if (p.text != null && p.text!.trim().isNotEmpty) return p.text!.trim();
+    if (p.photoPath != null) return '사진';
+    if (p.videoPath != null) return '동영상';
+    return p.address ?? '메모';
+  }
+
   void _showClusterSheet(List<_GpsPoint> group) {
     final sorted = List<_GpsPoint>.from(group)
       ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
@@ -857,12 +869,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 itemCount: sorted.length,
                 itemBuilder: (_, i) {
                   final p = sorted[i];
-                  final sub = (p.text != null && p.text!.trim().isNotEmpty)
-                      ? p.text!.trim()
-                      : (p.address ??
-                          (p.photoPath != null
-                              ? '사진'
-                              : (p.videoPath != null ? '동영상' : '위치')));
+                  final sub = _pointSubtitle(p);
                   return ListTile(
                     dense: true,
                     leading: CircleAvatar(
@@ -1150,11 +1157,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
         .select((s) => s.valueOrNull?.commuteAlarmActive ?? true));
     // 시간대 필터 적용된 지점 목록(렌더링 전반에서 이 목록을 사용).
     final dataRange = _dataMinuteRange();
-    // 메모 지점 숨김 시 isMemo 지점 제외(청록 위치상태 지점은 유지). 시간대 필터도 함께 적용.
-    // 조과(🎣) 지점은 기본 숨김 — '조과 보기'(차트) ON일 때만 마커로 표시.
+    // 메모 지점 숨김 시 isMemo 지점 제외. 시간대 필터도 함께 적용.
+    // 조과(🎣) 지점은 '조과 마커'(_showCatchPoints) 토글로 표시 — 그래프 창과 독립.
     final fPoints = _points.where((p) {
       if (p.isCatch &&
-          (!_showCatchChart || _hiddenCatchSpecies.contains(p.species))) {
+          (!_showCatchPoints || _hiddenCatchSpecies.contains(p.species))) {
         return false;
       }
       if (!_showMemoPoints && p.isMemo) return false;
@@ -1174,32 +1181,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
     final markerThreshold = _thresholdDeg();
     final placedSorted = List<_PlacedPoint>.from(placed)
       ..sort((a, b) => a.point.timestamp.compareTo(b.point.timestamp));
-    // 좌표 보기 연결 노드 수 = 메모 지점 + 사용자가 찍은 좌표
     final markedCount = fTrack.where((p) => p.marked).length;
-    final lineNodeCount = placed.length + markedCount;
     // 메모 타임스탬프를 파일명 날짜 + HH:mm 으로 재구성해 트래킹과 동일한 기준으로 비교
     DateTime memoFullTs(_PlacedPoint p) => DateTime(
           _loadedDate.year, _loadedDate.month, _loadedDate.day,
           p.point.timestamp.hour, p.point.timestamp.minute);
-    final linePoints = () {
-      if (_showTrack && fTrack.isNotEmpty) {
-        final combined = <MapEntry<DateTime, LatLng>>[
-          for (final p in placedSorted)
-            MapEntry(memoFullTs(p), LatLng(p.point.lat, p.point.lng)),
-          for (final p in fTrack)
-            MapEntry(p.timestamp, LatLng(p.lat, p.lng)),
-        ]..sort((a, b) => a.key.compareTo(b.key));
-        return combined.map((e) => e.value).toList();
-      }
-      // 좌표 보기(메모지점 연결)일 때도 사용자가 찍은 좌표는 함께 선으로 연결
-      final memoAndMarked = [
-        for (final p in placedSorted)
-          MapEntry(memoFullTs(p), LatLng(p.point.lat, p.point.lng)),
-        for (final p in fTrack)
-          if (p.marked) MapEntry(p.timestamp, LatLng(p.lat, p.lng)),
-      ]..sort((a, b) => a.key.compareTo(b.key));
-      return memoAndMarked.map((e) => e.value).toList();
-    }();
+    // 연결선: 현재 '보이는' 모든 마커(메모·조과·현황 + 이동경로)를 시간순 단일 선으로.
+    // 이동경로 점은 route 토글(_showTrack) ON일 때만 노드로 포함(찍은 좌표는 항상 포함).
+    final lineNodes = <MapEntry<DateTime, LatLng>>[
+      for (final p in placedSorted)
+        MapEntry(memoFullTs(p), LatLng(p.point.lat, p.point.lng)),
+      for (final p in fTrack)
+        if (_showTrack || p.marked) MapEntry(p.timestamp, LatLng(p.lat, p.lng)),
+    ]..sort((a, b) => a.key.compareTo(b.key));
+    final linePoints = lineNodes.map((e) => e.value).toList();
+    final lineNodeCount = lineNodes.length; // 연결 가능한 보이는 노드 수
     return Scaffold(
       appBar: AppBar(
         title: Text(DateFormatter.toDateString(_loadedDate)),
@@ -1296,26 +1292,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   ],
                 ),
               ],
-              // 메모지점 연결(_showLines)이 켜지면 linePoints가 메모+트랙을
-              // 시간순 단일 선으로 그리므로, 트랙 전용 선은 중복이라 생략한다.
-              if (_showTrack && !_showLines && fTrack.length >= 2) ...[
-                PolylineLayer(
-                  polylines: [
-                    Polyline(
-                      points: fTrack
-                          .map((p) => LatLng(p.lat, p.lng))
-                          .toList(),
-                      color: const Color(0xFFFF6D00),
-                      strokeWidth: 6.0,
-                    ),
-                  ],
-                ),
-                // 진행 방향 화살표(선 안, 화면 픽셀 균일 간격)
-                MarkerLayer(
-                  markers: _directionArrows(
-                      fTrack.map((p) => LatLng(p.lat, p.lng)).toList()),
-                ),
-              ],
+              // 연결(_showLines): 보이는 모든 마커를 시간순 단일 선으로 연결.
+              // 이동경로만 켜진 경우엔 트랙 점들을 잇는 기존 경로선과 동일해진다.
               if (_showLines && linePoints.length >= 2) ...[
                 PolylineLayer(
                   polylines: [
@@ -1766,6 +1744,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     ],
                     _toolBtn(Icons.my_location, null, _moveToCurrentLocation),
                     _divider(),
+                    // ── 마커 표시(종류별 켜기) ─────────────────
                     _toolBtn(
                       _showMemoPoints ? Icons.location_on : Icons.location_off,
                       _points.any((p) => p.isMemo)
@@ -1781,26 +1760,81 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             }
                           : () => _showToastMessage('메모 지점이 없습니다'),
                     ),
+                    if (showTrackingButton)
+                      _toolBtn(
+                        Icons.route, // 이동경로 점 표시(선은 '연결'로 그림)
+                        _trackPoints.isNotEmpty
+                            ? (_showTrack
+                                ? Theme.of(context).colorScheme.primary
+                                : null)
+                            : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+                        _trackPoints.isNotEmpty
+                            ? () {
+                                final nowOn = !_showTrack;
+                                setState(() => _showTrack = nowOn);
+                                _showToastMessage(nowOn ? '이동 경로 표시중' : '이동 경로 숨김');
+                              }
+                            : () => _showToastMessage('이동 경로 기록이 없습니다'),
+                      ),
                     _divider(),
+                    // ── 연결(보이는 마커를 시간순 한 줄로) + 거리 ──
                     _toolBtn(
-                      Icons.bar_chart, // 시간당 조과 막대그래프
+                      _showLines ? Icons.timeline : Icons.timeline_outlined,
+                      lineNodeCount >= 2
+                          ? (_showLines
+                              ? Theme.of(context).colorScheme.primary
+                              : null)
+                          : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+                      lineNodeCount >= 2
+                          ? () {
+                              setState(() => _showLines = !_showLines);
+                              _showToastMessage(
+                                  _showLines ? '마커 연결 켜짐' : '마커 연결 꺼짐');
+                            }
+                          : () => _showToastMessage('연결할 마커가 2개 이상 필요합니다'),
+                    ),
+                    _toolBtn(
+                      Icons.straighten,
+                      placed.length >= 2 && _showLines && _showDistances
+                          ? Theme.of(context).colorScheme.primary
+                          : (placed.length < 2 || !_showLines)
+                              ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3)
+                              : null,
+                      placed.length < 2
+                          ? () => _showToastMessage('지점이 2개 이상 필요합니다')
+                          : !_showLines
+                              ? () => _showToastMessage('마커 연결을 먼저 켜세요')
+                              : () {
+                                  setState(() => _showDistances = !_showDistances);
+                                  _showToastMessage(
+                                      _showDistances ? '거리 표시 켜짐' : '거리 표시 꺼짐');
+                                },
+                    ),
+                    _divider(),
+                    // ── 오버레이(그래프·필터·시간) ─────────────
+                    // 그래프 = 조과 마커 토글 겸용. 활성 표시는 '마커 표시' 기준이라
+                    // 패널 ×로 닫아도(_showCatchChart=false) 마커가 켜져 있으면 활성 유지.
+                    // 패널을 다시 보려면 버튼을 2번(끄기→켜기) 누르면 된다.
+                    _toolBtn(
+                      Icons.bar_chart, // 조위+시간당 조과 그래프 패널 + 조과 마커
                       (_catchBySpecies.isNotEmpty || _dayTides.isNotEmpty)
-                          ? (_showCatchChart
+                          ? (_showCatchPoints
                               ? Theme.of(context).colorScheme.primary
                               : null)
                           : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
                       (_catchBySpecies.isNotEmpty || _dayTides.isNotEmpty)
                           ? () {
+                              final opening = !_showCatchPoints;
                               setState(() {
-                                _showCatchChart = !_showCatchChart;
-                                _hiddenCatchSpecies = {}; // 열고 닫을 때 숨김 초기화
+                                _showCatchPoints = opening; // 조과 마커
+                                _showCatchChart = opening; // 그래프 패널
+                                _hiddenCatchSpecies = {}; // 켤/끌 때 숨김 초기화
                               });
                               // 열 때 물때가 없으면 자동 수집해 곡선을 채운다.
-                              if (_showCatchChart) _ensureDayTides();
+                              if (opening) _ensureDayTides();
                             }
                           : () => _showToastMessage('조과·물때 정보가 없습니다'),
                     ),
-                    _divider(),
                     _toolBtn(
                       Icons.filter_alt,
                       dataRange != null
@@ -1812,7 +1846,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           ? () => setState(() => _showTimeFilter = !_showTimeFilter)
                           : () => _showToastMessage('필터할 시간 정보가 없습니다'),
                     ),
-                    _divider(),
                     _toolBtn(
                       Icons.schedule,
                       (placed.isNotEmpty || _trackPoints.isNotEmpty)
@@ -1828,57 +1861,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             }
                           : () => _showToastMessage('표시할 위치 정보가 없습니다'),
                     ),
-                    _divider(),
-                    _toolBtn(
-                      _showLines ? Icons.timeline : Icons.timeline_outlined,
-                      lineNodeCount >= 2
-                          ? (_showLines
-                              ? Theme.of(context).colorScheme.primary
-                              : null)
-                          : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
-                      lineNodeCount >= 2
-                          ? () {
-                              setState(() => _showLines = !_showLines);
-                              _showToastMessage(
-                                  _showLines ? '메모지점 연결 켜짐' : '메모지점 연결 꺼짐');
-                            }
-                          : () => _showToastMessage('연결할 지점이 2개 이상 필요합니다'),
-                    ),
-                    _toolBtn(
-                      Icons.straighten,
-                      placed.length >= 2 && _showLines && _showDistances
-                          ? Theme.of(context).colorScheme.primary
-                          : (placed.length < 2 || !_showLines)
-                              ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3)
-                              : null,
-                      placed.length < 2
-                          ? () => _showToastMessage('GPS 메모가 2개 이상 필요합니다')
-                          : !_showLines
-                              ? () => _showToastMessage('메모지점 연결을 먼저 켜세요')
-                              : () {
-                                  setState(() => _showDistances = !_showDistances);
-                                  _showToastMessage(
-                                      _showDistances ? '거리 표시 켜짐' : '거리 표시 꺼짐');
-                                },
-                    ),
-                    if (showTrackingButton) ...[
-                      _divider(),
-                      _toolBtn(
-                        Icons.route,
-                        _trackPoints.isNotEmpty
-                            ? (_showTrack
-                                ? Theme.of(context).colorScheme.primary
-                                : null)
-                            : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
-                        _trackPoints.isNotEmpty
-                            ? () {
-                                final nowOn = !_showTrack;
-                                setState(() => _showTrack = nowOn);
-                                _showToastMessage(nowOn ? '이동 경로 표시중' : '이동 경로 숨김');
-                              }
-                            : () => _showToastMessage('이동 경로 기록이 없습니다'),
-                      ),
-                    ],
                   ],
                 ),
               ),
@@ -2113,19 +2095,6 @@ class _GpsPoint {
         address = null,
         isCatch = e.quickCatch,
         species = e.fishSpecies;
-
-  _GpsPoint.fromLocation(LocationStatus l)
-      : timestamp = l.timestamp,
-        lat = l.latitude!,
-        lng = l.longitude!,
-        isMemo = false,
-        text = null,
-        photoPath = null,
-        videoPath = null,
-        fishLength = null,
-        address = l.address,
-        isCatch = false,
-        species = null;
 
   String get timeLabel {
     final h = timestamp.hour.toString().padLeft(2, '0');

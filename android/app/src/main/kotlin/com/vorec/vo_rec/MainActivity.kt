@@ -748,6 +748,14 @@ class MainActivity : FlutterActivity() {
                         result.success(null)
                     }
                 }
+                "getEnabled" -> {
+                    result.success(CatchLogService.isBtEnabled(this))
+                }
+                "setEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    setBtEnabled(enabled)
+                    result.success(null)
+                }
                 "captureStart" -> {
                     startKeyCapture()
                     result.success(null)
@@ -779,6 +787,20 @@ class MainActivity : FlutterActivity() {
             .setIntent(intent)
             .build()
         return try { sm.requestPinShortcut(info, null) } catch (_: Exception) { false }
+    }
+
+    /** 블루투스 연동 on/off 저장 + 카운터 서비스가 떠 있으면 세션을 즉시 재동기화. */
+    private fun setBtEnabled(enabled: Boolean) {
+        CatchLogService.prefsOf(this).edit()
+            .putBoolean(CatchLogService.PREFS_BTMAP_ENABLED_KEY, enabled).apply()
+        val active = CatchLogService.prefsOf(this)
+            .getBoolean(CatchLogService.PREFS_ACTIVE_KEY, false)
+        if (active) {
+            try {
+                startService(Intent(this, CatchLogService::class.java)
+                    .apply { action = CatchLogService.ACTION_SYNC_BT })
+            } catch (_: Exception) {}
+        }
     }
 
     /** 매핑 JSON을 읽어 변형 후 저장. */

@@ -37,14 +37,26 @@ class CatchLogService : Service() {
 
         const val ACTION_ADD = "com.sgchoisg.nakkda.ADD_CATCH"
         const val ACTION_REMOVE = "com.sgchoisg.nakkda.REMOVE_CATCH"
+        // 어종 무관: 그날 가장 최근에 추가된 조과 1건을 제거.
+        const val ACTION_REMOVE_LAST = "com.sgchoisg.nakkda.REMOVE_LAST_CATCH"
         const val ACTION_STOP = "com.sgchoisg.nakkda.STOP_CATCH"
         const val EXTRA_SPECIES_INDEX = "speciesIndex"
         const val EXTRA_SPECIES_LIST = "speciesList"
 
         // 블루투스 리모컨 키 매핑: JSON { "add:0": keyCode, "rem:0": keyCode, ... }
         const val PREFS_BTMAP_KEY = "catch_btmap"
+        // 어종 무관 '최근 1개 삭제' 매핑 액션 키.
+        const val ACTION_REM_LAST = "rem:last"
+        // 블루투스 버튼 연동 사용 여부(사용자가 켠 경우만 작동). 기본 꺼짐.
+        const val PREFS_BTMAP_ENABLED_KEY = "catch_btmap_enabled"
         // 집계 변동(리모컨으로 ±) 시 카운터 화면이 즉시 다시 그리도록 알리는 로컬 브로드캐스트.
         const val ACTION_COUNTS_CHANGED = "com.sgchoisg.nakkda.COUNTS_CHANGED"
+        // 설정에서 연동 on/off를 바꿨을 때 실행 중인 서비스가 세션을 즉시 재동기화하도록 하는 액션.
+        const val ACTION_SYNC_BT = "com.sgchoisg.nakkda.SYNC_BT"
+
+        /** 블루투스 버튼 연동이 사용자에 의해 켜져 있는지(기본 꺼짐). */
+        fun isBtEnabled(context: Context): Boolean =
+            prefsOf(context).getBoolean(PREFS_BTMAP_ENABLED_KEY, false)
 
         /** 매핑(action→keyCode)을 읽는다. 값이 없거나 깨지면 빈 맵. */
         fun loadKeyMap(context: Context): Map<String, Int> {
@@ -75,8 +87,12 @@ class CatchLogService : Service() {
             else -> keyCode
         }
 
-        /** 눌린 keyCode에 매핑된 action("add:0"/"rem:1" 등)을 역조회(정규화 비교). */
+        /**
+         * 눌린 keyCode에 매핑된 action("add:0"/"rem:1" 등)을 역조회(정규화 비교).
+         * 연동 스위치가 꺼져 있으면 매핑이 있어도 무시한다(화면 켜짐/꺼짐 공통 게이트).
+         */
         fun actionForKey(context: Context, keyCode: Int): String? {
+            if (!isBtEnabled(context)) return null
             val target = canonicalKey(keyCode)
             return loadKeyMap(context).entries
                 .firstOrNull { canonicalKey(it.value) == target }?.key
@@ -189,6 +205,20 @@ class CatchLogService : Service() {
             }
         }
 
+        /** 어종 무관: 그날 파일에서 가장 최근 조과 항목 1건(🎣 포함 블록) 제거. */
+        fun removeLastAnyCatchFromFile(context: Context) {
+            val txt = readMd(context) ?: return
+            val segs = txt.split("\n---\n").toMutableList()
+            var removeAt = -1
+            for (i in 1 until segs.size) {
+                if (segs[i].lineSequence().any { it.trim().startsWith("- 🎣 ") }) removeAt = i
+            }
+            if (removeAt >= 0) {
+                segs.removeAt(removeAt)
+                writeMd(context, segs.joinToString("\n---\n"))
+            }
+        }
+
         /** 그날 파일의 어종별 조과 수(- 🎣 어종 줄 집계). */
         fun loadCountsFromFile(context: Context): Map<String, Int> {
             val txt = readMd(context) ?: return emptyMap()
@@ -269,12 +299,12 @@ class CatchLogService : Service() {
     }
 
     /**
-     * 매핑 존재 여부에 맞춰 무음 미디어 세션을 켜고 끈다.
-     * 매핑이 하나도 없으면 세션을 띄우지 않는다 — 리모컨을 안 쓰는 사용자의
-     * 이어폰 음악 버튼 제어권을 뺏지 않기 위함.
+     * 연동 사용 여부 + 매핑 존재 여부에 맞춰 무음 미디어 세션을 켜고 끈다.
+     * 스위치가 꺼져 있거나 매핑이 하나도 없으면 세션을 띄우지 않는다 —
+     * 리모컨을 안 쓰는 사용자의 이어폰 음악 버튼 제어권을 뺏지 않기 위함.
      */
     private fun syncMediaButton() {
-        val has = loadKeyMap(this).isNotEmpty()
+        val has = isBtEnabled(this) && loadKeyMap(this).isNotEmpty()
         if (has && mediaButton == null) {
             mediaButton = MediaButtonSession(this, "nakkda_catch") { keyCode ->
                 onRemoteKey(keyCode)
@@ -288,6 +318,7 @@ class CatchLogService : Service() {
     /** 리모컨 키 → 매핑된 액션 실행(화면 꺼짐/백그라운드 경로). */
     private fun onRemoteKey(keyCode: Int) {
         val action = actionForKey(this, keyCode) ?: return
+        if (action == ACTION_REM_LAST) { removeLastAnyCatch(); return }
         val idx = action.substringAfter(':', "").toIntOrNull() ?: return
         when {
             action.startsWith("add:") -> addCatch(idx)
@@ -314,6 +345,15 @@ class CatchLogService : Service() {
             }
             ACTION_REMOVE -> {
                 removeCatch(intent.getIntExtra(EXTRA_SPECIES_INDEX, -1))
+                return START_STICKY
+            }
+            ACTION_REMOVE_LAST -> {
+                removeLastAnyCatch()
+                return START_STICKY
+            }
+            ACTION_SYNC_BT -> {
+                // 설정에서 연동 on/off가 바뀌면 세션을 즉시 반영(어종 목록은 건드리지 않음).
+                syncMediaButton()
                 return START_STICKY
             }
             else -> {
@@ -363,6 +403,15 @@ class CatchLogService : Service() {
         val species = speciesList().getOrNull(index) ?: return
         io.execute {
             removeLastCatchFromFile(this, species)
+            updateNotification()
+            sendCountsChanged()
+        }
+    }
+
+    /** 어종 무관: 가장 최근 조과 1건 제거 + 알림 갱신(백그라운드). */
+    private fun removeLastAnyCatch() {
+        io.execute {
+            removeLastAnyCatchFromFile(this)
             updateNotification()
             sendCountsChanged()
         }

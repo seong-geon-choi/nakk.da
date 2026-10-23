@@ -46,6 +46,21 @@ class BtRemoteService {
     } catch (_) {}
   }
 
+  /// 블루투스 버튼 연동 사용 여부(사용자가 켠 경우만 작동). 기본 꺼짐.
+  static Future<bool> getEnabled() async {
+    try {
+      return await _channel.invokeMethod<bool>('getEnabled') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> setEnabled(bool enabled) async {
+    try {
+      await _channel.invokeMethod('setEnabled', {'enabled': enabled});
+    } catch (_) {}
+  }
+
   /// 등록 모드 시작 — 임시 세션으로 미디어/비미디어 키를 캡처해 [onKey]로 올린다.
   static Future<void> captureStart() async {
     _ensureHandler();

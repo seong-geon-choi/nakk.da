@@ -1129,6 +1129,7 @@ class _RemoteKeyMappingScreen extends StatefulWidget {
 
 class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
   Map<String, int> _map = {};
+  bool _enabled = false;
 
   @override
   void initState() {
@@ -1138,7 +1139,13 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
 
   Future<void> _load() async {
     final m = await BtRemoteService.getKeyMap();
-    if (mounted) setState(() => _map = m);
+    final en = await BtRemoteService.getEnabled();
+    if (mounted) setState(() { _map = m; _enabled = en; });
+  }
+
+  Future<void> _setEnabled(bool v) async {
+    setState(() => _enabled = v);
+    await BtRemoteService.setEnabled(v);
   }
 
   static const _mediaCodes = {85, 126, 127, 87, 88, 86, 90, 89, 79};
@@ -1204,7 +1211,7 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
     if (mounted) setState(() => _map.remove(action));
   }
 
-  Widget _actionRow(String action, String label) {
+  Widget _actionRow(String action, String label, {String? hint}) {
     final code = _map[action];
     final warn = code != null && !_mediaCodes.contains(code);
     return ListTile(
@@ -1215,9 +1222,11 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
           style: TextStyle(
               color: code != null ? null : Colors.grey,
               fontWeight: code != null ? FontWeight.w600 : FontWeight.normal)),
-      subtitle: warn
-          ? const Text('화면 꺼짐 미동작 가능',
-              style: TextStyle(color: Colors.orange, fontSize: 12))
+      subtitle: (hint != null || warn)
+          ? Text(
+              [?hint, if (warn) '화면 꺼짐 미동작 가능'].join(' · '),
+              style: TextStyle(
+                  color: warn ? Colors.orange : Colors.grey, fontSize: 12))
           : null,
       trailing: Row(
         mainAxisSize: MainAxisSize.min,
@@ -1249,8 +1258,17 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
             )
           : ListView(
               children: [
+                SwitchListTile(
+                  value: _enabled,
+                  onChanged: _setEnabled,
+                  secondary: const Icon(Icons.settings_remote_outlined),
+                  title: const Text('블루투스 버튼 연동 사용'),
+                  subtitle: Text(_enabled
+                      ? '지정한 버튼으로 카운트가 올라갑니다'
+                      : '꺼져 있으면 버튼을 지정해도 동작하지 않습니다'),
+                ),
                 const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 16, 16, 8),
+                  padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
                   child: Text(
                     '블루투스 이어폰·리모컨 버튼으로 조과를 세어보세요.\n'
                     '• 재생/정지·다음곡 같은 "미디어 키"는 화면이 꺼진 주머니 속에서도 동작합니다.\n'
@@ -1270,6 +1288,14 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
                   _actionRow('add:$i', '+1'),
                   _actionRow('rem:$i', '−1'),
                 ],
+                const Divider(height: 1),
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
+                  child: Text('공통',
+                      style: TextStyle(
+                          fontSize: 15, fontWeight: FontWeight.bold)),
+                ),
+                _actionRow('rem:last', '⤺', hint: '최근 1개 삭제(어종 무관)'),
               ],
             ),
     );

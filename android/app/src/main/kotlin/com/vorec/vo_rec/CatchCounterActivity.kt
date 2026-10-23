@@ -131,6 +131,10 @@ class CatchCounterActivity : Activity() {
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
         if (!CatchLogService.isMediaKey(keyCode)) {
             val action = CatchLogService.actionForKey(this, keyCode)
+            if (action == CatchLogService.ACTION_REM_LAST) {
+                removeLastAny()
+                return true
+            }
             if (action != null) {
                 val idx = action.substringAfter(':', "").toIntOrNull()
                 if (idx != null && idx < species.size) {
@@ -429,6 +433,18 @@ class CatchCounterActivity : Activity() {
             startService(Intent(this, CatchLogService::class.java).apply {
                 this.action = action
                 putExtra(CatchLogService.EXTRA_SPECIES_INDEX, index)
+            })
+        } catch (_: Exception) {}
+    }
+
+    /**
+     * 어종 무관 '최근 1개 삭제'(리모컨 키). 어느 카운터가 줄지 미리 알 수 없어
+     * 서비스에 위임하고, 집계 변경 브로드캐스트로 화면을 갱신한다.
+     */
+    private fun removeLastAny() {
+        try {
+            startService(Intent(this, CatchLogService::class.java).apply {
+                action = CatchLogService.ACTION_REMOVE_LAST
             })
         } catch (_: Exception) {}
     }
