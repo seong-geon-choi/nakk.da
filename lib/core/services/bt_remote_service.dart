@@ -160,7 +160,37 @@ class BtRemoteService {
     } catch (_) {}
   }
 
-  /// 효과음 관련 설정(멘트·음성·톤·on/off)을 처음 설치 기본값으로 되돌린다.
+  /// +1 안내 모드: 'phrase'(추임새만) / 'count'(마릿수만) / 'both'(추임새+10단위).
+  static Future<String> getSoundMode() async {
+    try {
+      return await _channel.invokeMethod<String>('getSoundMode') ?? 'both';
+    } catch (_) {
+      return 'both';
+    }
+  }
+
+  static Future<void> setSoundMode(String mode) async {
+    try {
+      await _channel.invokeMethod('setSoundMode', {'mode': mode});
+    } catch (_) {}
+  }
+
+  /// 카운트 진동 알림 사용 여부(효과음·볼륨과 독립). 기본 꺼짐.
+  static Future<bool> getVibrateEnabled() async {
+    try {
+      return await _channel.invokeMethod<bool>('getVibrateEnabled') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> setVibrateEnabled(bool enabled) async {
+    try {
+      await _channel.invokeMethod('setVibrateEnabled', {'enabled': enabled});
+    } catch (_) {}
+  }
+
+  /// 효과음 관련 설정(멘트·음성·톤·진동·on/off)을 처음 설치 기본값으로 되돌린다.
   static Future<void> resetSound() async {
     try {
       await _channel.invokeMethod('resetSound');

@@ -355,8 +355,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ),
             ListTile(
               leading: const Icon(Icons.record_voice_over_outlined),
-              title: const Text('조과 효과음(음성)'),
-              subtitle: const Text('+1 때 추임새, 10마리마다 마릿수 음성'),
+              title: const Text('조과 카운트 효과(음성/진동)'),
+              subtitle: const Text('카운트 때 음성·진동으로 알림 · 10마리마다 마릿수'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => const _CatchSoundScreen(),
@@ -1138,6 +1138,8 @@ class _CatchSoundScreen extends StatefulWidget {
 
 class _CatchSoundScreenState extends State<_CatchSoundScreen> {
   bool _enabled = true;
+  bool _vibrate = true;
+  String _mode = 'both'; // phrase / count / both
   bool _loaded = false;
   final List<TextEditingController> _ctrls = [];
   final List<TextEditingController> _delCtrls = [];
@@ -1154,6 +1156,8 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
 
   Future<void> _load() async {
     final en = await BtRemoteService.getSoundEnabled();
+    final vib = await BtRemoteService.getVibrateEnabled();
+    final mode = await BtRemoteService.getSoundMode();
     final phrases = await BtRemoteService.getSoundPhrases();
     final delPhrases = await BtRemoteService.getSoundDelPhrases();
     final tone = await BtRemoteService.getSoundTone();
@@ -1162,6 +1166,8 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     if (!mounted) return;
     setState(() {
       _enabled = en;
+      _vibrate = vib;
+      _mode = mode;
       for (final c in _ctrls) {
         c.dispose();
       }
@@ -1207,8 +1213,8 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('효과음 설정 초기화'),
-        content: const Text('멘트(+1·삭제)와 음성·톤 설정을 처음 설치 상태로 되돌립니다.'),
+        title: const Text('카운트 효과 초기화'),
+        content: const Text('멘트(+1·삭제)·음성·진동 설정을 처음 설치 상태로 되돌립니다.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(ctx, false),
@@ -1238,6 +1244,47 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
   Future<void> _setEnabled(bool v) async {
     setState(() => _enabled = v);
     await BtRemoteService.setSoundEnabled(v);
+  }
+
+  Future<void> _setVibrate(bool v) async {
+    setState(() => _vibrate = v);
+    await BtRemoteService.setVibrateEnabled(v);
+  }
+
+  Future<void> _setMode(String m) async {
+    setState(() => _mode = m);
+    await BtRemoteService.setSoundMode(m);
+  }
+
+  /// +1 안내 방식 선택(추임새만 / 마릿수만 / 추임새+10단위).
+  Widget _modeSelector() {
+    const modes = [
+      ('phrase', '추임새만'),
+      ('count', '마릿수만'),
+      ('both', '추임새+10단위'),
+    ];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('안내 방식',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+          const SizedBox(height: 6),
+          Wrap(
+            spacing: 8,
+            children: [
+              for (final (v, label) in modes)
+                ChoiceChip(
+                  label: Text(label),
+                  selected: _mode == v,
+                  onSelected: (_) => _setMode(v),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
   }
 
   /// 현재 입력칸을 네이티브에 저장(빈 칸 제외). 모두 비면 기본 멘트로 폴백.
@@ -1284,7 +1331,7 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
   Widget build(BuildContext context) {
     if (!_loaded) {
       return Scaffold(
-        appBar: AppBar(title: const Text('조과 효과음')),
+        appBar: AppBar(title: const Text('조과 카운트 효과')),
         body: const Center(child: CircularProgressIndicator()),
       );
     }
@@ -1292,7 +1339,7 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
       length: 3,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('조과 효과음'),
+          title: const Text('조과 카운트 효과'),
           actions: [
             IconButton(
               icon: const Icon(Icons.restart_alt),
@@ -1314,10 +1361,19 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
               value: _enabled,
               onChanged: _setEnabled,
               secondary: const Icon(Icons.record_voice_over_outlined),
-              title: const Text('조과 효과음 사용'),
+              title: const Text('음성 알림 사용'),
               subtitle: Text(_enabled
-                  ? '+1·삭제 때 음성이 재생됩니다'
-                  : '꺼져 있으면 소리가 나지 않습니다'),
+                  ? '미디어 볼륨이 켜져 있으면 +1·삭제 음성을 재생합니다'
+                  : '꺼져 있으면 음성이 나지 않습니다'),
+            ),
+            SwitchListTile(
+              value: _vibrate,
+              onChanged: _setVibrate,
+              secondary: const Icon(Icons.vibration),
+              title: const Text('진동 알림 사용'),
+              subtitle: Text(_vibrate
+                  ? '카운트마다 짧게 진동합니다 (미디어 볼륨·음성과 무관)'
+                  : '꺼져 있으면 진동하지 않습니다'),
             ),
             const Divider(height: 1),
             Expanded(
@@ -1330,9 +1386,10 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
                     onAdd: _addPhrase,
                     onRemove: _removePhrase,
                     onPersist: _persist,
-                    intro: '• +1 할 때 이 중 하나를 무작위로 읽어줍니다.\n'
-                        '• 10·20·30…500마리가 되면 "어종 N마리"를 읽습니다.\n'
-                        '• 모두 비우면 기본 멘트로 돌아갑니다.',
+                    header: _modeSelector(),
+                    intro: '• 추임새만: 매번 추임새 / 마릿수만: 매번 "어종 N마리" / '
+                        '추임새+10단위: 평소 추임새·10마리마다 마릿수.\n'
+                        '• 아래 멘트는 "추임새"에 쓰입니다(모두 비우면 기본 멘트).',
                   ),
                   _phraseTab(
                     ctrls: _delCtrls,
@@ -1363,9 +1420,11 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     required void Function(int) onRemove,
     required Future<void> Function() onPersist,
     required String intro,
+    Widget? header,
   }) {
     return ListView(
       children: [
+        ?header,
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
           child: Text(intro,

@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
+import android.media.AudioManager
 import android.net.Uri
 import android.os.*
 import android.speech.tts.TextToSpeech
@@ -45,10 +46,15 @@ class CatchLogService : Service() {
         // 삭제(−1) 때 랜덤 재생할 멘트(JSON array). 비면 DEFAULT_SOUND_DEL_PHRASES.
         const val PREFS_SOUND_DEL_PHRASES_KEY = "catch_sound_del_phrases"
         val DEFAULT_SOUND_DEL_PHRASES = listOf("취소", "뺐다", "아이고")
+        // +1 안내 모드: "phrase"(추임새만) / "count"(마릿수만) / "both"(추임새+10단위). 기본 both.
+        const val PREFS_SOUND_MODE_KEY = "catch_sound_mode"
+        const val SOUND_MODE_DEFAULT = "both"
         // TTS 톤(pitch)·속도(rate)·음성(voice 이름). 기본 1.0 / 1.0 / 엔진 기본.
         const val PREFS_SOUND_PITCH_KEY = "catch_sound_pitch"
         const val PREFS_SOUND_RATE_KEY = "catch_sound_rate"
         const val PREFS_SOUND_VOICE_KEY = "catch_sound_voice"
+        // 카운트 진동 알림 사용 여부(효과음·볼륨과 독립). 기본 꺼짐.
+        const val PREFS_VIBRATE_ENABLED_KEY = "catch_vibrate_enabled"
 
         const val ACTION_ADD = "com.sgchoisg.nakkda.ADD_CATCH"
         const val ACTION_REMOVE = "com.sgchoisg.nakkda.REMOVE_CATCH"
@@ -162,6 +168,11 @@ class CatchLogService : Service() {
             return saved.ifEmpty { DEFAULT_SOUND_DEL_PHRASES }
         }
 
+        /** +1 안내 모드. */
+        fun soundMode(context: Context): String =
+            prefsOf(context).getString(PREFS_SOUND_MODE_KEY, SOUND_MODE_DEFAULT)
+                ?: SOUND_MODE_DEFAULT
+
         /** TTS 톤(0.5~2.0, 기본 1.0). */
         fun soundPitch(context: Context): Float =
             prefsOf(context).getFloat(PREFS_SOUND_PITCH_KEY, 1.0f).coerceIn(0.5f, 2.0f)
@@ -173,6 +184,10 @@ class CatchLogService : Service() {
         /** 선택한 음성 이름(빈 문자열이면 엔진 기본). */
         fun soundVoice(context: Context): String =
             prefsOf(context).getString(PREFS_SOUND_VOICE_KEY, "") ?: ""
+
+        /** 카운트 진동 알림 사용 여부(효과음·볼륨과 독립). 기본 꺼짐(필요 시 켬). */
+        fun isVibrateEnabled(context: Context): Boolean =
+            prefsOf(context).getBoolean(PREFS_VIBRATE_ENABLED_KEY, false)
 
         /** 카운터별 스킨 목록(저장된 것). 부족분은 호출측에서 기본값으로 채운다. */
         fun loadStyles(context: Context): List<String> =
@@ -359,6 +374,46 @@ class CatchLogService : Service() {
         }
     }
 
+    /**
+     * 카운트 피드백: 효과음과 진동은 서로 독립이다.
+     * - 효과음 켜짐 + 미디어 볼륨 ≥1: TTS([textIfSound]) — 미디어 스트림이라 들린다.
+     * - 진동 켜짐: 미디어 볼륨·효과음과 무관하게 항상 짧은 진동(동시 발생 가능).
+     */
+    private fun countFeedback(textIfSound: () -> String) {
+        val am = getSystemService(AUDIO_SERVICE) as? AudioManager
+        val mediaVol = am?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0
+        if (isSoundEnabled(this) && mediaVol > 0) {
+            val t = textIfSound()
+            if (t.isNotEmpty()) speak(t, flush = true)
+        }
+        if (isVibrateEnabled(this)) vibrateShort()
+    }
+
+    /** 짧은 진동(약 40ms). */
+    private fun vibrateShort() {
+        try {
+            val vib = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager).defaultVibrator
+            } else {
+                @Suppress("DEPRECATION")
+                getSystemService(VIBRATOR_SERVICE) as Vibrator
+            }
+            vib.vibrate(
+                VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE))
+        } catch (_: Exception) {}
+    }
+
+    /** +1 안내 문구를 모드에 맞게 생성. */
+    private fun catchAnnounce(species: String): String = when (soundMode(this)) {
+        "phrase" -> loadSoundPhrases(this).randomOrNull() ?: ""
+        "count" -> "$species ${loadCount(this, species)}마리"
+        else -> { // both: 10·20…500마리는 마릿수, 그 외는 추임새
+            val n = loadCount(this, species)
+            if (n in 1..500 && n % 10 == 0) "$species ${n}마리"
+            else loadSoundPhrases(this).randomOrNull() ?: ""
+        }
+    }
+
     /** TTS 발화. flush=true면 기존 큐를 끊고 즉시, false면 뒤에 이어서. */
     private fun speak(text: String, flush: Boolean) {
         if (!ttsReady) return
@@ -470,15 +525,8 @@ class CatchLogService : Service() {
         val species = speciesList().getOrNull(index) ?: return
         fun commit(lat: Double?, lng: Double?) = io.execute {
             appendCatchToFile(this, species, lat, lng)
-            if (isSoundEnabled(this)) {
-                val n = loadCount(this, species)
-                // 10·20·30…500마리: 추임새 없이 "어종 N마리"만. 그 외: 랜덤 추임새.
-                if (n in 1..500 && n % 10 == 0) {
-                    speak("$species ${n}마리", flush = true)
-                } else {
-                    loadSoundPhrases(this).randomOrNull()?.let { speak(it, flush = true) }
-                }
-            }
+            // 음성 문구는 안내 모드에 따름(진동은 countFeedback 내부에서 별도 처리).
+            countFeedback { catchAnnounce(species) }
             updateNotification()
             sendCountsChanged()
         }
@@ -497,10 +545,8 @@ class CatchLogService : Service() {
         io.execute {
             val had = loadCount(this, species) > 0
             removeLastCatchFromFile(this, species)
-            // 실제로 지워진 경우에만 삭제 멘트.
-            if (had && isSoundEnabled(this)) {
-                loadSoundDelPhrases(this).randomOrNull()?.let { speak(it, flush = true) }
-            }
+            // 실제로 지워진 경우에만 삭제 피드백(벨소리=멘트 / 진동·무음=진동).
+            if (had) countFeedback { loadSoundDelPhrases(this).randomOrNull() ?: "" }
             updateNotification()
             sendCountsChanged()
         }
@@ -511,9 +557,7 @@ class CatchLogService : Service() {
         io.execute {
             val had = loadCountsFromFile(this).values.any { it > 0 }
             removeLastAnyCatchFromFile(this)
-            if (had && isSoundEnabled(this)) {
-                loadSoundDelPhrases(this).randomOrNull()?.let { speak(it, flush = true) }
-            }
+            if (had) countFeedback { loadSoundDelPhrases(this).randomOrNull() ?: "" }
             updateNotification()
             sendCountsChanged()
         }

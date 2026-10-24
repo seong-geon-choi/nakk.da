@@ -817,6 +817,24 @@ class MainActivity : FlutterActivity() {
                 "getSoundVoice" -> {
                     result.success(CatchLogService.soundVoice(this))
                 }
+                "getSoundMode" -> {
+                    result.success(CatchLogService.soundMode(this))
+                }
+                "setSoundMode" -> {
+                    val mode = call.argument<String>("mode") ?: CatchLogService.SOUND_MODE_DEFAULT
+                    CatchLogService.prefsOf(this).edit()
+                        .putString(CatchLogService.PREFS_SOUND_MODE_KEY, mode).apply()
+                    result.success(null)
+                }
+                "getVibrateEnabled" -> {
+                    result.success(CatchLogService.isVibrateEnabled(this))
+                }
+                "setVibrateEnabled" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    CatchLogService.prefsOf(this).edit()
+                        .putBoolean(CatchLogService.PREFS_VIBRATE_ENABLED_KEY, enabled).apply()
+                    result.success(null)
+                }
                 "resetSound" -> {
                     // 사운드 관련 키를 모두 제거 → 로더가 기본값으로 폴백(= 처음 설치 상태).
                     CatchLogService.prefsOf(this).edit()
@@ -826,6 +844,8 @@ class MainActivity : FlutterActivity() {
                         .remove(CatchLogService.PREFS_SOUND_PITCH_KEY)
                         .remove(CatchLogService.PREFS_SOUND_RATE_KEY)
                         .remove(CatchLogService.PREFS_SOUND_VOICE_KEY)
+                        .remove(CatchLogService.PREFS_SOUND_MODE_KEY)
+                        .remove(CatchLogService.PREFS_VIBRATE_ENABLED_KEY)
                         .apply()
                     result.success(null)
                 }

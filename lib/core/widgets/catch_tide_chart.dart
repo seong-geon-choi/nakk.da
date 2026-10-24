@@ -187,7 +187,7 @@ class _CatchTideChartState extends State<CatchTideChart> {
                 decoration:
                     BoxDecoration(color: c, borderRadius: BorderRadius.circular(2))),
             const SizedBox(width: 4),
-            Text(label,
+            Text('$label(${widget.catchesBySpecies[label]?.length ?? 0})',
                 style: TextStyle(
                     fontSize: 11,
                     color: cs.onSurfaceVariant,
