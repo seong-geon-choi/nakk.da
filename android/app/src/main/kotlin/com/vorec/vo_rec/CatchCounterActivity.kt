@@ -79,24 +79,33 @@ class CatchCounterActivity : Activity() {
         setContentView(buildRoot())
     }
 
-    // 화면 버튼으로 마지막으로 ± 한 시각(ms). 자기 변경의 파일 기록이 연타를
-    // 못 따라잡아 과거값을 되읽는 깜빡임(2→1→2)을 막는 데 쓴다.
-    private var lastLocalChangeMs = 0L
+    // 화면 버튼으로 보냈으나 아직 파일에 반영되는 중인 ± 연산 수.
+    // 이 동안은 로컬값이 '진실'이고, 브로드캐스트가 나르는 '뒤처진 파일값'을 적용하지 않는다.
+    // (기존 시간창 방식은 증가 연타의 하향 지연만 막고, 감소 연타의 상향 지연을 못 막아
+    //  0→2→1→0처럼 숫자가 되튀는 문제가 있었다.)
+    private var pendingOps = 0
 
-    // 리모컨/알림으로 집계가 바뀌면(서비스가 브로드캐스트) 화면을 즉시 다시 그린다.
-    // 단, 방금 화면 버튼으로 누른 직후(연타)엔 파일 기록이 아직 못 따라잡아
-    // 로컬값보다 작게 읽힐 수 있다 → 그때의 '하향'만 무시해 깜빡임(2→1→2)을 막고,
-    // 외부(리모컨)로 늘어난 '상향'은 그대로 반영한다.
+    // 집계 변경 브로드캐스트(서비스 발신). 서비스는 ADD/REMOVE 1건당 정확히 1번 보낸다.
+    // 우리 연산이 전부 파일에 반영된 순간(pendingOps==0)에만 파일값으로 동기화해
+    // 연타 중 중간값이 화면에 튀지 않게 한다. 외부(리모컨/알림) 변경은 바로 반영된다.
     private val countsReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
-            val fileCounts = CatchLogService.loadCountsFromFile(this@CatchCounterActivity)
-            val recentLocal = System.currentTimeMillis() - lastLocalChangeMs < 800
-            for (i in species.indices) {
-                val f = fileCounts[species[i]] ?: 0
-                if (recentLocal && f < counts[i]) continue // 기록 지연에 의한 일시적 하향 무시
-                counts[i] = f
-                updateDigits(i)
+            if (pendingOps > 0) {
+                pendingOps--
+                // 우리가 보낸 마지막 연산이 파일에 반영된 순간 동기화(외부 변경까지 포함).
+                if (pendingOps == 0) applyFileCounts()
+                return
             }
+            applyFileCounts() // 외부에서 바뀐 경우
+        }
+    }
+
+    /** 파일 집계를 읽어 모든 숫자판을 파일값으로 맞춘다. */
+    private fun applyFileCounts() {
+        val fileCounts = CatchLogService.loadCountsFromFile(this)
+        for (i in species.indices) {
+            counts[i] = fileCounts[species[i]] ?: 0
+            updateDigits(i)
         }
     }
 
@@ -118,13 +127,10 @@ class CatchCounterActivity : Activity() {
         try { unregisterReceiver(countsReceiver) } catch (_: Exception) {}
     }
 
-    /** 파일 집계를 다시 읽어 모든 숫자판을 갱신. */
+    /** 파일 집계를 다시 읽어 모든 숫자판을 갱신(재개 시 — 로컬 진실은 파일로 리셋). */
     private fun refreshCounts() {
-        val fileCounts = CatchLogService.loadCountsFromFile(this)
-        for (i in species.indices) {
-            counts[i] = fileCounts[species[i]] ?: 0
-            updateDigits(i)
-        }
+        pendingOps = 0
+        applyFileCounts()
     }
 
     /**
@@ -152,6 +158,7 @@ class CatchCounterActivity : Activity() {
     /** 회전 시 방향에 맞게 레이아웃을 다시 구성(가로=좌우/세로=상하). */
     override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
         super.onConfigurationChanged(newConfig)
+        pendingOps = 0
         val fileCounts = CatchLogService.loadCountsFromFile(this)
         for (i in species.indices) counts[i] = fileCounts[species[i]] ?: 0
         digitCells.clear()
@@ -174,6 +181,11 @@ class CatchCounterActivity : Activity() {
     private fun unitSwipeDetector(index: Int): GestureDetector =
         GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
             override fun onDown(e: MotionEvent) = true
+            // 버튼이 아닌 카운터 영역(이름·숫자판)을 탭하면 재생 중인 추임새/TTS 중지.
+            override fun onSingleTapUp(e: MotionEvent): Boolean {
+                stopSound()
+                return true
+            }
             override fun onFling(
                 e1: MotionEvent?, e2: MotionEvent, vx: Float, vy: Float
             ): Boolean {
@@ -186,12 +198,27 @@ class CatchCounterActivity : Activity() {
             }
         })
 
+    /** 재생 중인 추임새/TTS 효과음을 중지(버튼 아닌 곳 탭 시). 세션·카운트는 그대로. */
+    private fun stopSound() {
+        try {
+            startService(Intent(this, CatchLogService::class.java).apply {
+                action = CatchLogService.ACTION_STOP_SOUND
+            })
+        } catch (_: Exception) {}
+    }
+
     // ── 레이아웃 ───────────────────────────────────────────
     private fun buildRoot(): View {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#0B1119"))
         }
+        // 빈 배경(버튼·카운터가 아닌 영역) 탭 → 재생 중인 추임새/TTS 중지.
+        val bgTap = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onSingleTapUp(e: MotionEvent): Boolean { stopSound(); return true }
+        })
+        @Suppress("ClickableViewAccessibility")
+        root.setOnTouchListener { _, e -> bgTap.onTouchEvent(e) }
         // 시스템 바(상태/내비) 인셋만큼 패딩을 더해 어떤 방향에서도 가리지 않게 한다.
         ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
             val b = insets.getInsets(WindowInsetsCompat.Type.systemBars())
@@ -431,7 +458,6 @@ class CatchCounterActivity : Activity() {
 
     private fun change(index: Int, delta: Int) {
         if (delta < 0 && counts[index] <= 0) return
-        lastLocalChangeMs = System.currentTimeMillis()
         counts[index] = (counts[index] + delta).coerceIn(0, 999)
         updateDigits(index)
         val action = if (delta > 0) CatchLogService.ACTION_ADD else CatchLogService.ACTION_REMOVE
@@ -440,6 +466,7 @@ class CatchCounterActivity : Activity() {
                 this.action = action
                 putExtra(CatchLogService.EXTRA_SPECIES_INDEX, index)
             })
+            pendingOps++ // 이 연산의 브로드캐스트가 돌아올 때까지 로컬값을 신뢰
         } catch (_: Exception) {}
     }
 

@@ -554,6 +554,20 @@ class MainActivity : FlutterActivity() {
                         }
                         result.success(list)
                     }
+                    "getAndClearStayPoints" -> {
+                        val prefs = getSharedPreferences(
+                            LocationTrackingService.PREFS_NAME, Context.MODE_PRIVATE
+                        )
+                        val list = synchronized(LocationTrackingService.pendingLock) {
+                            val json = prefs.getString(LocationTrackingService.PREFS_STAY_KEY, "[]") ?: "[]"
+                            val arr = try { JSONArray(json) } catch (_: Exception) { JSONArray() }
+                            val items = mutableListOf<String>()
+                            for (i in 0 until arr.length()) items.add(arr.getString(i))
+                            prefs.edit().remove(LocationTrackingService.PREFS_STAY_KEY).commit()
+                            items
+                        }
+                        result.success(list)
+                    }
                     "commuteSync" -> {
                         val prefs = getSharedPreferences(
                             CommuteAlarmService.PREFS_NAME, Context.MODE_PRIVATE)
@@ -812,6 +826,15 @@ class MainActivity : FlutterActivity() {
                         result.success(CatchLogService.importSoundFile(this, path, name))
                     }
                 }
+                "findDuplicateSound" -> {
+                    val path = call.argument<String>("path")
+                    val names = call.argument<List<String>>("names") ?: emptyList()
+                    if (path == null) {
+                        result.error("ARG", "path missing", null)
+                    } else {
+                        result.success(CatchLogService.findDuplicateSound(this, path, names))
+                    }
+                }
                 "previewAudio" -> {
                     val name = call.argument<String>("name") ?: ""
                     if (name.isNotBlank()) previewAudio(name)
@@ -852,6 +875,15 @@ class MainActivity : FlutterActivity() {
                         .putString(CatchLogService.PREFS_SOUND_MODE_KEY, mode).apply()
                     result.success(null)
                 }
+                "getSoundOrder" -> {
+                    result.success(CatchLogService.soundOrder(this))
+                }
+                "setSoundOrder" -> {
+                    val order = call.argument<String>("order") ?: CatchLogService.SOUND_ORDER_DEFAULT
+                    CatchLogService.prefsOf(this).edit()
+                        .putString(CatchLogService.PREFS_SOUND_ORDER_KEY, order).apply()
+                    result.success(null)
+                }
                 "getVibrateEnabled" -> {
                     result.success(CatchLogService.isVibrateEnabled(this))
                 }
@@ -871,6 +903,7 @@ class MainActivity : FlutterActivity() {
                         .remove(CatchLogService.PREFS_SOUND_RATE_KEY)
                         .remove(CatchLogService.PREFS_SOUND_VOICE_KEY)
                         .remove(CatchLogService.PREFS_SOUND_MODE_KEY)
+                        .remove(CatchLogService.PREFS_SOUND_ORDER_KEY)
                         .remove(CatchLogService.PREFS_VIBRATE_ENABLED_KEY)
                         .apply()
                     CatchLogService.clearAllSoundFiles(this)

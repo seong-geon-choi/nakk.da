@@ -400,7 +400,9 @@ class MdSerializer {
   // ── 전체 재빌드 ────────────────────────────────────────
 
   static String buildFullContent(DateTime date, List<dynamic> blocks,
-      [List<TrackPoint> trackPoints = const [], OutingInfo? outing]) {
+      [List<TrackPoint> trackPoints = const [],
+      OutingInfo? outing,
+      List<StayPoint> stayPoints = const []]) {
     final sb = StringBuffer(fileHeader(date));
     if (outing != null && !outing.isEmpty) {
       sb.write(serializeOuting(outing));
@@ -414,6 +416,9 @@ class MdSerializer {
     }
     if (trackPoints.isNotEmpty) {
       sb.write(trackCommentsFor(trackPoints));
+    }
+    if (stayPoints.isNotEmpty) {
+      sb.write(stayCommentsFor(stayPoints));
     }
     return sb.toString();
   }
@@ -512,6 +517,35 @@ class MdSerializer {
     final joined = points
         .map((p) =>
             '[//]: # (track:${_fmtDt(p.timestamp)} | 🛰 ${_fmt(p.lat)}, ${_fmt(p.lng)}${p.marked ? ' | ✓' : ''})')
+        .join('\n');
+    return '$joined\n';
+  }
+
+  // 체류지점: stay:시작시각 ~ 종료시각 | 🛰 lat, lng  (숨김 주석)
+  static final _stayRe = RegExp(
+      r'^\[//\]: # \(stay:(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*~\s*(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s*\|\s*🛰\s*(-?\d+\.\d+),\s*(-?\d+\.\d+)\)$');
+
+  static List<StayPoint> parseStayPoints(String content) {
+    final points = <StayPoint>[];
+    for (final line in content.split('\n')) {
+      final m = _stayRe.firstMatch(line.trim());
+      if (m == null) continue;
+      final st = DateTime.tryParse(m.group(1)!);
+      final en = DateTime.tryParse(m.group(2)!);
+      final lat = double.tryParse(m.group(3)!);
+      final lng = double.tryParse(m.group(4)!);
+      if (st != null && en != null && lat != null && lng != null) {
+        points.add(StayPoint(lat: lat, lng: lng, start: st, end: en));
+      }
+    }
+    return points;
+  }
+
+  static String stayCommentsFor(List<StayPoint> points) {
+    if (points.isEmpty) return '';
+    final joined = points
+        .map((p) =>
+            '[//]: # (stay:${_fmtDt(p.start)} ~ ${_fmtDt(p.end)} | 🛰 ${_fmt(p.lat)}, ${_fmt(p.lng)})')
         .join('\n');
     return '$joined\n';
   }

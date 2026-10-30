@@ -1160,6 +1160,7 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
   bool _enabled = true;
   bool _vibrate = true;
   String _mode = 'both'; // phrase / count / both
+  String _order = 'random'; // random / sequential
   bool _loaded = false;
   final List<_EditSound> _items = []; // +1 추임새(텍스트·오디오)
   final List<_EditSound> _delItems = []; // 삭제 멘트(텍스트·오디오)
@@ -1178,6 +1179,7 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     final en = await BtRemoteService.getSoundEnabled();
     final vib = await BtRemoteService.getVibrateEnabled();
     final mode = await BtRemoteService.getSoundMode();
+    final order = await BtRemoteService.getSoundOrder();
     final phrases = await BtRemoteService.getSoundPhrases();
     final delPhrases = await BtRemoteService.getSoundDelPhrases();
     final tone = await BtRemoteService.getSoundTone();
@@ -1188,6 +1190,7 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
       _enabled = en;
       _vibrate = vib;
       _mode = mode;
+      _order = order;
       for (final it in _items) {
         it.dispose();
       }
@@ -1280,6 +1283,42 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     await BtRemoteService.setSoundMode(m);
   }
 
+  Future<void> _setOrder(String o) async {
+    setState(() => _order = o);
+    await BtRemoteService.setSoundOrder(o);
+  }
+
+  /// 재생 순서 선택(랜덤 / 순차). +1·삭제 공통.
+  Widget _orderSelector() {
+    const orders = [('random', '랜덤'), ('sequential', '순차')];
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      child: Row(
+        children: [
+          const Icon(Icons.reorder, size: 20),
+          const SizedBox(width: 8),
+          const Text('재생 순서', style: TextStyle(fontSize: 14)),
+          const SizedBox(width: 12),
+          for (final (v, label) in orders) ...[
+            ChoiceChip(
+              label: Text(label),
+              selected: _order == v,
+              onSelected: (_) => _setOrder(v),
+            ),
+            const SizedBox(width: 8),
+          ],
+          Expanded(
+            child: Text(
+              _order == 'sequential' ? '목록 순서대로' : '매번 무작위',
+              textAlign: TextAlign.end,
+              style: const TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   /// +1 안내 방식 선택(추임새만 / 마릿수만 / 추임새+10단위).
   Widget _modeSelector() {
     const modes = [
@@ -1352,6 +1391,25 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
         ? picked.files.first
         : null;
     if (file == null || file.path == null) return;
+    // 같은 미디어(내용 동일)가 이미 등록돼 있으면 중복 추가하지 않는다.
+    final existing = [for (final e in list) if (e.isAudio) e.value];
+    final dup = await BtRemoteService.findDuplicateSound(file.path!, existing);
+    if (!mounted) return;
+    if (dup != null) {
+      var dupLabel = '';
+      for (final e in list) {
+        if (e.isAudio && e.value == dup) {
+          dupLabel = e.label;
+          break;
+        }
+      }
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(dupLabel.isNotEmpty
+            ? '이미 "$dupLabel"로 등록된 미디어예요.'
+            : '이미 등록된 미디어예요.'),
+      ));
+      return;
+    }
     final stored = await BtRemoteService.importSoundFile(file.path!, file.name);
     if (!mounted) return;
     if (stored == null) {
@@ -1395,6 +1453,7 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
         body: Column(
           children: [
             SwitchListTile(
+              dense: true,
               value: _enabled,
               onChanged: _setEnabled,
               secondary: const Icon(Icons.record_voice_over_outlined),
@@ -1404,6 +1463,7 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
                   : '꺼져 있으면 음성이 나지 않습니다'),
             ),
             SwitchListTile(
+              dense: true,
               value: _vibrate,
               onChanged: _setVibrate,
               secondary: const Icon(Icons.vibration),
@@ -1412,6 +1472,7 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
                   ? '카운트마다 짧게 진동합니다 (미디어 볼륨·음성과 무관)'
                   : '꺼져 있으면 진동하지 않습니다'),
             ),
+            _orderSelector(),
             const Divider(height: 1),
             Expanded(
               child: TabBarView(
@@ -1428,7 +1489,7 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
                     intro: '• 추임새만: 매번 추임새 / 마릿수만: 매번 "어종 N마리" / '
                         '추임새+10단위: 평소 추임새·10마리마다 마릿수.\n'
                         '• 멘트(글자)는 음성으로 읽고, 미디어(mp3·wav 등)는 그 소리를 재생합니다.\n'
-                        '• 여러 개면 매번 랜덤으로 하나가 재생됩니다(모두 비우면 기본 멘트).',
+                        '• 재생 순서는 위 "재생 순서"(랜덤/순차)를 따릅니다 · 손잡이(≡)를 끌어 순서를 바꿀 수 있어요.',
                   ),
                   _phraseTab(
                     items: _delItems,
@@ -1439,7 +1500,7 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
                     onRemove: _removeDelPhrase,
                     onPersist: _persistDel,
                     intro: '−1 또는 "최근 1개 삭제" 때 이 중 하나(글자=음성, 미디어=소리)를 재생합니다.\n'
-                        '모두 비우면 기본 멘트로 돌아갑니다.',
+                        '재생 순서는 "재생 순서" 설정을 따르고, 손잡이(≡)를 끌어 순서를 바꿀 수 있어요.',
                   ),
                   _voiceTab(),
                 ],
@@ -1451,7 +1512,18 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     );
   }
 
-  /// +1/삭제 공용 편집 탭(텍스트·오디오 혼합).
+  /// 드래그로 순서 변경 → 저장(순차 재생 시 이 순서로 읽힌다).
+  void _reorder(List<_EditSound> list, int oldIndex, int newIndex,
+      Future<void> Function() persist) {
+    setState(() {
+      if (newIndex > oldIndex) newIndex -= 1;
+      final it = list.removeAt(oldIndex);
+      list.insert(newIndex, it);
+    });
+    persist();
+  }
+
+  /// +1/삭제 공용 편집 탭(텍스트·오디오 혼합, 드래그로 순서 변경).
   Widget _phraseTab({
     required List<_EditSound> items,
     required String hint,
@@ -1463,22 +1535,45 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     required String intro,
     Widget? header,
   }) {
-    return ListView(
+    return Column(
       children: [
         ?header,
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: Text(intro,
-              style: const TextStyle(
-                  fontSize: 13, height: 1.5, color: Colors.grey)),
-        ),
-        for (int i = 0; i < items.length; i++)
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
-            child: _soundRow(items, i, hint, onRemove, onPersist),
+        // 도움말은 접을 수 있게(기본 접힘) 두어 목록 공간을 넓게 확보한다.
+        Theme(
+          data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+          child: ExpansionTile(
+            tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+            childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+            leading: const Icon(Icons.info_outline, size: 20, color: Colors.grey),
+            title: const Text('도움말',
+                style: TextStyle(fontSize: 13, color: Colors.grey)),
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(intro,
+                    style: const TextStyle(
+                        fontSize: 13, height: 1.5, color: Colors.grey)),
+              ),
+            ],
           ),
+        ),
+        Expanded(
+          child: ReorderableListView.builder(
+            buildDefaultDragHandles: false,
+            padding: const EdgeInsets.only(top: 4, bottom: 8),
+            itemCount: items.length,
+            onReorder: (o, n) => _reorder(items, o, n, onPersist),
+            itemBuilder: (ctx, i) => Padding(
+              key: ObjectKey(items[i]),
+              padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+              child: _soundRow(items, i, hint, onRemove, onPersist),
+            ),
+          ),
+        ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+          // 하단 추가 버튼이 시스템 내비게이션 바(홈버튼)에 가리지 않도록 여백 확보.
+          padding: EdgeInsets.fromLTRB(
+              16, 8, 16, 16 + MediaQuery.of(context).padding.bottom),
           child: Row(
             children: [
               Expanded(
@@ -1503,7 +1598,7 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     );
   }
 
-  /// 항목 한 줄: 텍스트는 입력칸, 오디오는 파일명 표시. 공통으로 미리듣기·삭제.
+  /// 항목 한 줄: 드래그 핸들 + (텍스트 입력칸 / 오디오 파일명) + 미리듣기·삭제.
   Widget _soundRow(
     List<_EditSound> items,
     int i,
@@ -1538,6 +1633,13 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
           );
     return Row(
       children: [
+        ReorderableDragStartListener(
+          index: i,
+          child: const Padding(
+            padding: EdgeInsets.only(right: 4),
+            child: Icon(Icons.drag_handle, color: Colors.grey),
+          ),
+        ),
         Expanded(child: content),
         IconButton(
           icon: const Icon(Icons.volume_up_outlined),
@@ -1866,7 +1968,7 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
                 const Divider(height: 1),
                 const Padding(
                   padding: EdgeInsets.fromLTRB(16, 14, 16, 4),
-                  child: Text('공통',
+                  child: Text('공통(마지막 조과 -1)',
                       style: TextStyle(
                           fontSize: 15, fontWeight: FontWeight.bold)),
                 ),

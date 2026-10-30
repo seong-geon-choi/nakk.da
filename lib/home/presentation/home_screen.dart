@@ -904,6 +904,17 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
         await repo.appendTrackPoints(entry.key, entry.value, settings.savePath);
       }
     }
+    final pendingStays = await TrackingService().getAndClearStayPoints();
+    if (pendingStays.isNotEmpty) {
+      final byDateStay = <DateTime, List<StayPoint>>{};
+      for (final p in pendingStays) {
+        final d = DateTime(p.start.year, p.start.month, p.start.day);
+        byDateStay.putIfAbsent(d, () => []).add(p);
+      }
+      for (final entry in byDateStay.entries) {
+        await repo.appendStayPoints(entry.key, entry.value, settings.savePath);
+      }
+    }
     final dayFile = await repo.loadDayFile(today, settings.savePath);
     if (mounted) {
       setState(() {

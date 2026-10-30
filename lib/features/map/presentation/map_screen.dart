@@ -43,6 +43,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   StreamSubscription<void>? _catchSub; // 조과 집계 변경 이벤트 구독
   List<_GpsPoint> _points = [];
   List<TrackPoint> _trackPoints = [];
+  List<StayPoint> _stayPoints = [];
   _GpsPoint? _selected;
   bool _showLines = false;
   bool _showTimes = false;
@@ -218,6 +219,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
           ? dayTides
           : (keepCamera ? _dayTides : const <TideEvent>[]);
       _trackPoints = [];
+      _stayPoints = [];
       _selected = prevSel == null ? null : _findPoint(pts, prevSel);
       _timeFilter = null; // 날짜 변경/새로고침 시 시간 필터 초기화
       if (resetToggles) {
@@ -270,6 +272,19 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
     }
 
+    final pendingStays = await TrackingService().getAndClearStayPoints();
+    if (pendingStays.isNotEmpty) {
+      final repo = ref.read(memoRepositoryProvider);
+      final byDateStay = <DateTime, List<StayPoint>>{};
+      for (final p in pendingStays) {
+        final d = DateTime(p.start.year, p.start.month, p.start.day);
+        byDateStay.putIfAbsent(d, () => []).add(p);
+      }
+      for (final entry in byDateStay.entries) {
+        await repo.appendStayPoints(entry.key, entry.value, settings.savePath);
+      }
+    }
+
     if (!mounted) return;
 
     // 현재 날짜의 트래킹 포인트 로드
@@ -278,7 +293,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (mounted) {
       final pts = dayFile?.trackPoints ?? [];
       pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      setState(() => _trackPoints = pts);
+      setState(() {
+        _trackPoints = pts;
+        _stayPoints = dayFile?.stayPoints ?? [];
+      });
       _fitAllPoints();
     }
   }
@@ -319,7 +337,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
         resetToggles: false, keepCamera: true, preserveSelection: true);
     final pts = dayFile?.trackPoints ?? [];
     pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-    setState(() => _trackPoints = pts);
+    final stays = dayFile?.stayPoints ?? [];
+    setState(() {
+      _trackPoints = pts;
+      _stayPoints = stays;
+    });
     if (!silent) _showToastMessage('새로고침 완료');
   }
 
@@ -419,7 +441,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     if (mounted) {
       final pts = dayFile?.trackPoints ?? [];
       pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
-      setState(() => _trackPoints = pts);
+      final stays = dayFile?.stayPoints ?? [];
+      setState(() {
+        _trackPoints = pts;
+        _stayPoints = stays;
+      });
     }
   }
 
@@ -1075,6 +1101,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _showToastMessage('$label 저장 시각 $hh:$mm:$ss');
   }
 
+  /// 체류지점을 누르면 머문 시간대와 체류 시간을 토스트로 표시한다.
+  void _showStayInfo(StayPoint p) {
+    String hm(DateTime t) =>
+        '${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}';
+    final mins = p.dwell.inMinutes;
+    final dur = mins >= 60 ? '${mins ~/ 60}시간 ${mins % 60}분' : '$mins분';
+    _showToastMessage('체류 ${hm(p.start)}~${hm(p.end)} ($dur)');
+  }
+
   /// 경로 표시 중, 탭 위치에서 화면상 가장 가까운 이동지점의 시각을 토스트로 표시.
   /// 확대하지 않아 점이 안 보이는 상태에서도 경로 선을 눌러 시간을 확인할 수 있다.
   /// 가까운 지점이 있어 표시했으면 true.
@@ -1368,6 +1403,39 @@ class _MapScreenState extends ConsumerState<MapScreen>
                               ),
                               child: const Center(
                                 child: CheckMark(size: 20, strokeWidth: 3.0),
+                              ),
+                            ),
+                          ),
+                        ),
+                  ],
+                ),
+              // 자동 감지된 체류지점: 이동경로(route) 토글과 함께 노출. 탭하면 체류 시간 표시.
+              if (_showTrack && _stayPoints.isNotEmpty)
+                MarkerLayer(
+                  markers: [
+                    for (final p in _stayPoints)
+                      if (_timeFilter == null || _passMinute(p.start))
+                        Marker(
+                          point: LatLng(p.lat, p.lng),
+                          width: 34,
+                          height: 34,
+                          child: GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTap: () => _showStayInfo(p),
+                            child: Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: const Color(0xFF00897B),
+                                border:
+                                    Border.all(color: Colors.white, width: 2),
+                                boxShadow: const [
+                                  BoxShadow(
+                                      blurRadius: 4, color: Color(0x66000000)),
+                                ],
+                              ),
+                              child: const Center(
+                                child: Icon(Icons.pause,
+                                    color: Colors.white, size: 18),
                               ),
                             ),
                           ),

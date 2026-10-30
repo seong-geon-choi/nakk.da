@@ -52,12 +52,14 @@ class MemoRepositoryImpl implements MemoRepository {
     if (content == null) return null;
     final blocks = MdSerializer.parseBlocks(content, date);
     final trackPoints = MdSerializer.parseTrackPoints(content);
+    final stayPoints = MdSerializer.parseStayPoints(content);
     final outing = MdSerializer.parseOuting(content);
     return DayFile(
         date: date,
         filePath: '$savePath/$filename',
         blocks: blocks,
         trackPoints: trackPoints,
+        stayPoints: stayPoints,
         outing: outing);
   }
 
@@ -68,8 +70,9 @@ class MemoRepositoryImpl implements MemoRepository {
         final dayFile = await loadDayFile(date, savePath);
         final blocks = dayFile?.blocks ?? const [];
         final points = dayFile?.trackPoints ?? const [];
+        final stays = dayFile?.stayPoints ?? const [];
         final content =
-            MdSerializer.buildFullContent(date, blocks, points, outing);
+            MdSerializer.buildFullContent(date, blocks, points, outing, stays);
         if (SafService.isSafUri(savePath)) {
           await _safEnsureHeader(savePath, filename, date);
           await _saf.writeFile(savePath, filename, content);
@@ -136,13 +139,30 @@ class MemoRepositoryImpl implements MemoRepository {
         final dayFile = await loadDayFile(date, savePath);
         if (dayFile == null) return;
         final content = MdSerializer.buildFullContent(
-            date, dayFile.blocks, points, dayFile.outing);
+            date, dayFile.blocks, points, dayFile.outing, dayFile.stayPoints);
         if (SafService.isSafUri(savePath)) {
           await _saf.writeFile(savePath, filename, content);
         } else {
           await File('$savePath/$filename').writeAsString(content);
         }
       });
+
+  @override
+  Future<void> appendStayPoints(DateTime date, List<StayPoint> points, String savePath) {
+    if (points.isEmpty) return Future.value();
+    return _withLock(_lockKey(date, savePath), () async {
+      final filename = _filenameFor(date);
+      final toAppend = MdSerializer.stayCommentsFor(points);
+      if (SafService.isSafUri(savePath)) {
+        await _safEnsureHeader(savePath, filename, date);
+        await _saf.appendFile(savePath, filename, toAppend);
+      } else {
+        final file = File('$savePath/$filename');
+        await _ensureHeader(file, date);
+        await file.writeAsString(toAppend, mode: FileMode.append);
+      }
+    });
+  }
 
   @override
   Future<void> appendLocationBlock(DateTime date, LocationStatus loc, String savePath) =>
@@ -173,7 +193,7 @@ class MemoRepositoryImpl implements MemoRepository {
               savePath,
               filename,
               MdSerializer.buildFullContent(
-                  date, blocks, dayFile.trackPoints, dayFile.outing));
+                  date, blocks, dayFile.trackPoints, dayFile.outing, dayFile.stayPoints));
         } else {
           final file = File('$savePath/$filename');
           if (!await file.exists()) return;
@@ -182,7 +202,7 @@ class MemoRepositoryImpl implements MemoRepository {
           final blocks = List<dynamic>.from(dayFile.blocks);
           blocks[blockIndex] = newBlock;
           await file.writeAsString(MdSerializer.buildFullContent(
-              date, blocks, dayFile.trackPoints, dayFile.outing));
+              date, blocks, dayFile.trackPoints, dayFile.outing, dayFile.stayPoints));
         }
       });
 
@@ -194,7 +214,7 @@ class MemoRepositoryImpl implements MemoRepository {
         if (dayFile == null || blockIndex >= dayFile.blocks.length) return;
         final blocks = List<dynamic>.from(dayFile.blocks)..removeAt(blockIndex);
         final content = MdSerializer.buildFullContent(
-            date, blocks, dayFile.trackPoints, dayFile.outing);
+            date, blocks, dayFile.trackPoints, dayFile.outing, dayFile.stayPoints);
         if (SafService.isSafUri(savePath)) {
           await _saf.writeFile(savePath, filename, content);
         } else {

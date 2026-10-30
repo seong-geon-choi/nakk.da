@@ -4,6 +4,10 @@ import android.annotation.SuppressLint
 import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
+import android.hardware.Sensor
+import android.hardware.SensorManager
+import android.hardware.TriggerEvent
+import android.hardware.TriggerEventListener
 import android.location.Location
 import android.os.*
 import androidx.core.app.NotificationCompat
@@ -25,15 +29,20 @@ class LocationTrackingService : Service() {
         const val ACTION_STOP = "com.sgchoisg.nakkda.STOP_TRACKING"
         const val PREFS_NAME = "nakkda_track_prefs"
         const val PREFS_PENDING_KEY = "pending_points"
+        const val PREFS_STAY_KEY = "pending_stays"
         const val PREFS_ACTIVE_KEY = "tracking_active"
         const val PREFS_QUICK_LAUNCH_MODE_KEY = "quick_launch_mode"
         const val PREFS_SHAKE_THRESHOLD_KEY = "shake_threshold_g"
         const val PREFS_SHAKE_ACTION_KEY = "shake_action"
         @JvmField val pendingLock = Any()
         private const val EXTRA_INTERVAL = "intervalMeters"
-        private const val UPDATE_INTERVAL_MS = 10000L  // 위치 갱신 주기(배터리 절감: GPS 웨이크업 완화)
+        private const val UPDATE_INTERVAL_MS = 10000L  // 이동 중 위치 갱신 주기
         private const val FASTEST_INTERVAL_MS = 2000L  // 최소 갱신 간격
         private const val MAX_ACCURACY_METERS = 1000f  // 이보다 부정확한 픽스는 제외
+        // 정지 감지(배터리 절감): 반경 안에서 이 시간 이상 머물면 저전력 모드로 전환
+        private const val STILL_ENTER_MS = 3 * 60 * 1000L   // 3분 이상 정지 시 진입
+        private const val STILL_RADIUS_M = 40f              // 정지로 간주할 반경
+        private const val STILL_INTERVAL_MS = 3 * 60 * 1000L // 정지 중 위치 확인 주기(저전력)
 
         fun getQuickLaunchMode(context: Context): String =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -66,17 +75,96 @@ class LocationTrackingService : Service() {
     private var minDistanceMeters: Float = 100f
     private var lastSavedLocation: Location? = null
 
+    // 정지 감지 상태
+    private var isStill = false
+    private var anchorLocation: Location? = null  // 정지 판정 기준점
+    private var anchorSinceMs = 0L                 // 기준점에 머물기 시작한 시각(elapsedRealtime)
+    private var stillStartWallMs = 0L              // 체류 시작 시각(wall clock, 체류지점 기록용)
+    private var sensorManager: SensorManager? = null
+    private var significantMotion: Sensor? = null
+    private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+
+    // 저전력 모드 중 유의미한 움직임이 감지되면 즉시 이동 모드로 복귀(권한 불필요).
+    private val motionListener = object : TriggerEventListener() {
+        override fun onTrigger(event: TriggerEvent?) {
+            mainHandler.post { exitStill() }
+        }
+    }
+
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
             val location = result.lastLocation ?: return
             // 지나치게 부정확한 네트워크 픽스 제외 (지하에서도 합리적인 점만 기록)
             if (location.hasAccuracy() && location.accuracy > MAX_ACCURACY_METERS) return
             val last = lastSavedLocation
-            if (last != null && last.distanceTo(location) < minDistanceMeters) return
-            lastSavedLocation = location
-            savePoint(location.latitude, location.longitude, location.time)
+            if (last == null || last.distanceTo(location) >= minDistanceMeters) {
+                lastSavedLocation = location
+                savePoint(location.latitude, location.longitude, location.time)
+            }
+            evaluateStillness(location)
         }
     }
+
+    // 연속 픽스로 정지/이동을 판정하고 모드를 전환한다.
+    private fun evaluateStillness(location: Location) {
+        if (isStill) {
+            // 저전력 폴링 중에도 반경을 벗어나면 이동 모드로 복귀
+            val anchor = anchorLocation
+            if (anchor == null || anchor.distanceTo(location) > STILL_RADIUS_M) exitStill()
+            return
+        }
+        val anchor = anchorLocation
+        if (anchor == null || anchor.distanceTo(location) > STILL_RADIUS_M) {
+            anchorLocation = location
+            anchorSinceMs = SystemClock.elapsedRealtime()
+            return
+        }
+        if (SystemClock.elapsedRealtime() - anchorSinceMs >= STILL_ENTER_MS) enterStill()
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun enterStill() {
+        if (isStill) return
+        isStill = true
+        stillStartWallMs = System.currentTimeMillis()
+        // 저전력·장주기 요청으로 교체
+        val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, STILL_INTERVAL_MS)
+            .setMinUpdateDistanceMeters(STILL_RADIUS_M)
+            .setWaitForAccurateLocation(false)
+            .build()
+        try {
+            fusedClient?.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
+        } catch (_: SecurityException) {}
+        // 움직임 감지 센서로 즉시 복귀(일회성 트리거)
+        significantMotion?.let { sensorManager?.requestTriggerSensor(motionListener, it) }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun exitStill() {
+        if (!isStill) return
+        finalizeStay()
+        isStill = false
+        significantMotion?.let { sensorManager?.cancelTriggerSensor(motionListener, it) }
+        anchorLocation = null
+        try {
+            fusedClient?.requestLocationUpdates(movingRequest(), locationCallback, Looper.getMainLooper())
+        } catch (_: SecurityException) {}
+    }
+
+    // 체류(정지) 구간을 종료 시점에 기록한다: 기준점 좌표 + 시작~종료 시각.
+    private fun finalizeStay() {
+        val anchor = anchorLocation ?: return
+        if (stillStartWallMs <= 0L) return
+        saveStay(anchor.latitude, anchor.longitude, stillStartWallMs, System.currentTimeMillis())
+        stillStartWallMs = 0L
+    }
+
+    private fun movingRequest(): LocationRequest =
+        LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, UPDATE_INTERVAL_MS)
+            .setMinUpdateIntervalMillis(FASTEST_INTERVAL_MS)
+            .setMinUpdateDistanceMeters(minDistanceMeters)
+            .setWaitForAccurateLocation(false)
+            .build()
 
     private val dateChangedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -86,6 +174,8 @@ class LocationTrackingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        sensorManager = getSystemService(SENSOR_SERVICE) as? SensorManager
+        significantMotion = sensorManager?.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION)
         createNotificationChannel()
         try {
             val notif = buildNotification()
@@ -123,13 +213,10 @@ class LocationTrackingService : Service() {
         // setWaitForAccurateLocation(false) → GPS 신호를 기다리지 않고 네트워크 위치도 즉시 수신
         // (지하철 등 GPS 음영에서도 WiFi/기지국 기반 위치 기록 가능)
         fusedClient = LocationServices.getFusedLocationProviderClient(this)
-        val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, UPDATE_INTERVAL_MS)
-            .setMinUpdateIntervalMillis(FASTEST_INTERVAL_MS)
-            .setMinUpdateDistanceMeters(minDistanceMeters)
-            .setWaitForAccurateLocation(false)
-            .build()
+        isStill = false
+        anchorLocation = null
         try {
-            fusedClient?.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
+            fusedClient?.requestLocationUpdates(movingRequest(), locationCallback, Looper.getMainLooper())
         } catch (_: SecurityException) {
             stopSelf()
         }
@@ -137,7 +224,9 @@ class LocationTrackingService : Service() {
     }
 
     override fun onDestroy() {
+        if (isStill) { try { finalizeStay() } catch (_: Exception) {} }
         try { fusedClient?.removeLocationUpdates(locationCallback) } catch (_: Exception) {}
+        try { significantMotion?.let { sensorManager?.cancelTriggerSensor(motionListener, it) } } catch (_: Exception) {}
         try { unregisterReceiver(dateChangedReceiver) } catch (_: Exception) {}
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(PREFS_ACTIVE_KEY, false).apply()
@@ -158,6 +247,19 @@ class LocationTrackingService : Service() {
             }
             arr.put("$lat,$lng,${timeFmt.format(java.util.Date(timeMs))}")
             prefs.edit().putString(PREFS_PENDING_KEY, arr.toString()).commit()
+        }
+    }
+
+    private fun saveStay(lat: Double, lng: Double, startMs: Long, endMs: Long) {
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        synchronized(pendingLock) {
+            val arr = try {
+                JSONArray(prefs.getString(PREFS_STAY_KEY, "[]"))
+            } catch (_: Exception) {
+                JSONArray()
+            }
+            arr.put("$lat,$lng,${timeFmt.format(java.util.Date(startMs))},${timeFmt.format(java.util.Date(endMs))}")
+            prefs.edit().putString(PREFS_STAY_KEY, arr.toString()).commit()
         }
     }
 

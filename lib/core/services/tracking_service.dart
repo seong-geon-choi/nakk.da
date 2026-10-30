@@ -24,6 +24,33 @@ class TrackPoint {
   }
 }
 
+/// 자동 감지된 체류지점. 한곳에 일정 시간 이상 머문 구간(시작~종료).
+class StayPoint {
+  final double lat, lng;
+  final DateTime start, end;
+
+  const StayPoint({
+    required this.lat,
+    required this.lng,
+    required this.start,
+    required this.end,
+  });
+
+  Duration get dwell => end.difference(start);
+
+  // 네이티브 포맷: "lat,lng,시작시각,종료시각" (시각은 yyyy-MM-dd HH:mm:ss).
+  static StayPoint? fromString(String s) {
+    final parts = s.split(',');
+    if (parts.length != 4) return null;
+    final lat = double.tryParse(parts[0]);
+    final lng = double.tryParse(parts[1]);
+    final st = DateTime.tryParse(parts[2]);
+    final en = DateTime.tryParse(parts[3]);
+    if (lat == null || lng == null || st == null || en == null) return null;
+    return StayPoint(lat: lat, lng: lng, start: st, end: en);
+  }
+}
+
 class TrackingService {
   static const _channel = MethodChannel('com.sgchoisg.nakkda/tracking');
 
@@ -99,6 +126,20 @@ class TrackingService {
       return list
           .map(TrackPoint.fromString)
           .whereType<TrackPoint>()
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  Future<List<StayPoint>> getAndClearStayPoints() async {
+    try {
+      final list =
+          await _channel.invokeListMethod<String>('getAndClearStayPoints') ??
+              [];
+      return list
+          .map(StayPoint.fromString)
+          .whereType<StayPoint>()
           .toList();
     } catch (_) {
       return [];

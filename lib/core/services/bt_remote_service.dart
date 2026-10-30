@@ -163,6 +163,17 @@ class BtRemoteService {
     }
   }
 
+  /// 선택한 파일과 **내용이 같은** 이미 등록된 저장 파일명을 [storedNames] 중에서 찾는다(없으면 null).
+  static Future<String?> findDuplicateSound(
+      String path, List<String> storedNames) async {
+    try {
+      return await _channel.invokeMethod<String>(
+          'findDuplicateSound', {'path': path, 'names': storedNames});
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// 설정 화면 미리듣기 — 저장된 오디오 추임새를 즉시 재생.
   static Future<void> previewAudio(String fileName) async {
     try {
@@ -241,6 +252,21 @@ class BtRemoteService {
   static Future<void> setSoundMode(String mode) async {
     try {
       await _channel.invokeMethod('setSoundMode', {'mode': mode});
+    } catch (_) {}
+  }
+
+  /// 추임새/멘트 재생 순서: 'random'(랜덤) / 'sequential'(순차). 기본 random.
+  static Future<String> getSoundOrder() async {
+    try {
+      return await _channel.invokeMethod<String>('getSoundOrder') ?? 'random';
+    } catch (_) {
+      return 'random';
+    }
+  }
+
+  static Future<void> setSoundOrder(String order) async {
+    try {
+      await _channel.invokeMethod('setSoundOrder', {'order': order});
     } catch (_) {}
   }
 

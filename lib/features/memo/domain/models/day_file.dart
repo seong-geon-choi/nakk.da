@@ -8,6 +8,7 @@ class DayFile {
   final String filePath;
   final List<dynamic> blocks; // MemoEntry | LocationStatus 순서 유지
   final List<TrackPoint> trackPoints;
+  final List<StayPoint> stayPoints; // 자동 감지된 체류지점
   final OutingInfo? outing; // 하루 단위 출조 정보(태클·조과)
 
   const DayFile({
@@ -15,6 +16,7 @@ class DayFile {
     required this.filePath,
     required this.blocks,
     this.trackPoints = const [],
+    this.stayPoints = const [],
     this.outing,
   });
 

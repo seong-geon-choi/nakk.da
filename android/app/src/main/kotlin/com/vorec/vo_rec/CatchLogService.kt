@@ -65,6 +65,9 @@ class CatchLogService : Service() {
         // +1 안내 모드: "phrase"(추임새만) / "count"(마릿수만) / "both"(추임새+10단위). 기본 both.
         const val PREFS_SOUND_MODE_KEY = "catch_sound_mode"
         const val SOUND_MODE_DEFAULT = "both"
+        // 추임새/멘트 재생 순서: "random"(랜덤) / "sequential"(순차). 기본 random.
+        const val PREFS_SOUND_ORDER_KEY = "catch_sound_order"
+        const val SOUND_ORDER_DEFAULT = "random"
         // TTS 톤(pitch)·속도(rate)·음성(voice 이름). 기본 1.0 / 1.0 / 엔진 기본.
         const val PREFS_SOUND_PITCH_KEY = "catch_sound_pitch"
         const val PREFS_SOUND_RATE_KEY = "catch_sound_rate"
@@ -77,6 +80,8 @@ class CatchLogService : Service() {
         // 어종 무관: 그날 가장 최근에 추가된 조과 1건을 제거.
         const val ACTION_REMOVE_LAST = "com.sgchoisg.nakkda.REMOVE_LAST_CATCH"
         const val ACTION_STOP = "com.sgchoisg.nakkda.STOP_CATCH"
+        // 재생 중인 추임새/TTS 효과음만 즉시 중지(세션·카운트는 그대로).
+        const val ACTION_STOP_SOUND = "com.sgchoisg.nakkda.STOP_SOUND"
         const val EXTRA_SPECIES_INDEX = "speciesIndex"
         const val EXTRA_SPECIES_LIST = "speciesList"
 
@@ -255,10 +260,32 @@ class CatchLogService : Service() {
             try { soundsDir(context).listFiles()?.forEach { it.delete() } } catch (_: Exception) {}
         }
 
+        /**
+         * [srcPath] 파일과 **내용이 같은**(크기+바이트) 저장 파일명을 [names] 중에서 찾는다.
+         * 같은 미디어 중복 등록 방지용. 없으면 null.
+         */
+        fun findDuplicateSound(context: Context, srcPath: String, names: List<String>): String? {
+            return try {
+                val src = File(srcPath)
+                if (!src.exists()) return null
+                val srcLen = src.length()
+                val srcBytes by lazy { src.readBytes() }
+                names.firstOrNull { n ->
+                    val f = soundFile(context, n)
+                    f.exists() && f.length() == srcLen && f.readBytes().contentEquals(srcBytes)
+                }
+            } catch (_: Exception) { null }
+        }
+
         /** +1 안내 모드. */
         fun soundMode(context: Context): String =
             prefsOf(context).getString(PREFS_SOUND_MODE_KEY, SOUND_MODE_DEFAULT)
                 ?: SOUND_MODE_DEFAULT
+
+        /** 추임새/멘트 재생 순서(random/sequential). */
+        fun soundOrder(context: Context): String =
+            prefsOf(context).getString(PREFS_SOUND_ORDER_KEY, SOUND_ORDER_DEFAULT)
+                ?: SOUND_ORDER_DEFAULT
 
         /** TTS 톤(0.5~2.0, 기본 1.0). */
         fun soundPitch(context: Context): Float =
@@ -409,6 +436,9 @@ class CatchLogService : Service() {
     private var tts: TextToSpeech? = null
     @Volatile private var ttsReady = false
     @Volatile private var player: MediaPlayer? = null
+    // 순차 재생용 커서(+1·삭제 각각). 랜덤 순서면 쓰이지 않는다.
+    private var addSeq = 0
+    private var delSeq = 0
     // 마지막으로 적용한 음성 이름(바뀔 때만 setVoice 조회).
     private var appliedVoice: String? = null
     // 알림 post 시각을 세션 동안 고정 — +1 갱신 때마다 현재 시각으로 찍히면
@@ -534,14 +564,23 @@ class CatchLogService : Service() {
         } catch (_: Exception) {}
     }
 
+    /** 설정 순서(순차/랜덤)에 맞춰 목록에서 다음 항목을 고른다. */
+    private fun nextItem(items: List<SoundItem>, isDel: Boolean): SoundItem? {
+        if (items.isEmpty()) return null
+        if (soundOrder(this) != "sequential") return items.randomOrNull()
+        val idx = ((if (isDel) delSeq else addSeq) % items.size + items.size) % items.size
+        if (isDel) delSeq = idx + 1 else addSeq = idx + 1
+        return items[idx]
+    }
+
     /** +1 안내 항목을 모드에 맞게 생성. 마릿수 안내는 항상 텍스트(TTS). */
     private fun catchAnnounce(species: String): SoundItem? = when (soundMode(this)) {
-        "phrase" -> loadAddItems(this).randomOrNull()
+        "phrase" -> nextItem(loadAddItems(this), false)
         "count" -> SoundItem(SoundItem.TYPE_TEXT, "$species ${loadCount(this, species)}마리")
         else -> { // both: 10·20…500마리는 마릿수, 그 외는 추임새
             val n = loadCount(this, species)
             if (n in 1..500 && n % 10 == 0) SoundItem(SoundItem.TYPE_TEXT, "$species ${n}마리")
-            else loadAddItems(this).randomOrNull()
+            else nextItem(loadAddItems(this), false)
         }
     }
 
@@ -624,6 +663,10 @@ class CatchLogService : Service() {
                 removeLastAnyCatch()
                 return START_STICKY
             }
+            ACTION_STOP_SOUND -> {
+                stopPlayback() // 재생 중인 추임새/TTS만 중지
+                return START_STICKY
+            }
             ACTION_SYNC_BT -> {
                 // 설정에서 연동 on/off가 바뀌면 세션을 즉시 반영(어종 목록은 건드리지 않음).
                 syncMediaButton()
@@ -684,7 +727,7 @@ class CatchLogService : Service() {
             val had = loadCount(this, species) > 0
             removeLastCatchFromFile(this, species)
             // 실제로 지워진 경우에만 삭제 피드백(멘트/오디오 / 진동).
-            if (had) countFeedback { loadDelItems(this).randomOrNull() }
+            if (had) countFeedback { nextItem(loadDelItems(this), true) }
             updateNotification()
             sendCountsChanged()
         }
@@ -695,7 +738,7 @@ class CatchLogService : Service() {
         io.execute {
             val had = loadCountsFromFile(this).values.any { it > 0 }
             removeLastAnyCatchFromFile(this)
-            if (had) countFeedback { loadDelItems(this).randomOrNull() }
+            if (had) countFeedback { nextItem(loadDelItems(this), true) }
             updateNotification()
             sendCountsChanged()
         }
