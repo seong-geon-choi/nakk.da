@@ -5,6 +5,7 @@ import '../domain/location_service.dart';
 import '../domain/models/location_status.dart';
 import '../../weather/data/weather_service.dart';
 import '../../tide/data/tide_service.dart';
+import '../../tide/domain/models/tide_station.dart';
 import '../../settings/presentation/settings_provider.dart';
 
 final locationServiceProvider = Provider<LocationService>(
@@ -91,6 +92,51 @@ class LocationNotifier extends AsyncNotifier<LocationStatus?> {
       windDeg: weather?.windDeg,
       weatherCode: weather?.weatherCode,
       tides: tideResult?.tides ?? const [],
+    );
+  }
+
+  /// 기존 현장정보의 관측소를 [station]으로 바꿔 조석·조위·거리를 그 관측소 기준으로
+  /// 다시 조회한 LocationStatus를 돌려준다. 물때(음력 기반)·기온/바람 등은 그대로 둔다.
+  /// 좌표가 없거나 조회 실패 시 원본을 그대로 반환한다.
+  Future<LocationStatus> applyStation(
+      LocationStatus existing, TideStation station) async {
+    final lat = existing.latitude;
+    final lng = existing.longitude;
+    if (lat == null || lng == null) return existing;
+
+    final settings = await ref.read(settingsProvider.future);
+    final apiKey = settings.effectiveKhoaApiKey;
+    final date = DateTime(existing.timestamp.year, existing.timestamp.month,
+        existing.timestamp.day);
+    final now = DateTime.now();
+    final isToday =
+        date.year == now.year && date.month == now.month && date.day == now.day;
+
+    final tideResult = await ref
+        .read(_tideServiceProvider)
+        .getTideResult(lat, lng, apiKey, date: date, station: station);
+    if (tideResult == null) return existing;
+
+    return LocationStatus(
+      timestamp: existing.timestamp,
+      latitude: lat,
+      longitude: lng,
+      address: existing.address,
+      temperature: existing.temperature,
+      tideName: existing.tideName, // 물때는 날짜 기준이라 관측소 바뀌어도 동일
+      tideTime: tideResult.nextTideTime != null
+          ? '${tideResult.nextTideType} ${tideResult.nextTideTime}'
+          : null,
+      // 수온은 현재값이라 오늘만 갱신(과거 날짜엔 기존값 유지).
+      waterTemp: isToday ? tideResult.waterTemp : existing.waterTemp,
+      stationName: tideResult.station.name,
+      stationDistance:
+          double.parse(tideResult.distanceKm.toStringAsFixed(1)),
+      isMove: existing.isMove,
+      windSpeed: existing.windSpeed,
+      windDeg: existing.windDeg,
+      weatherCode: existing.weatherCode,
+      tides: tideResult.tides,
     );
   }
 

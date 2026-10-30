@@ -4,6 +4,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:nakkda/features/location/domain/models/location_status.dart';
 import 'package:nakkda/features/location/presentation/location_provider.dart';
+import 'package:nakkda/features/tide/domain/models/tide_station.dart';
 import 'package:nakkda/features/memo/presentation/memo_input_sheet.dart';
 import 'package:nakkda/features/memo/presentation/voice_input_provider.dart';
 import 'package:nakkda/features/permission/presentation/permission_provider.dart';
@@ -32,6 +33,22 @@ class _FakeLocationNotifier extends AsyncNotifier<LocationStatus?>
   @override
   Future<LocationStatus> buildEnrichedLocation({bool isMove = false}) async =>
       LocationStatus(timestamp: DateTime.now(), isMove: isMove);
+
+  @override
+  Future<LocationStatus> buildEnrichedAt({
+    required double lat,
+    required double lng,
+    required DateTime date,
+  }) async =>
+      LocationStatus(timestamp: date, latitude: lat, longitude: lng);
+
+  @override
+  Future<LocationStatus> applyStation(
+          LocationStatus existing, TideStation station) async =>
+      existing;
+
+  @override
+  Future<String?> resolveWatermarkAddress() async => null;
 }
 
 // Fake VoiceInputNotifier
@@ -63,7 +80,7 @@ class _FakePermissionStatusNotifier
       };
 
   @override
-  Future<void> requestAll() async {}
+  Future<void> requestAll({bool includeLocation = true}) async {}
 
   @override
   bool get areAllGranted => true;

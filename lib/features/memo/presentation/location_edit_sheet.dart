@@ -2,6 +2,9 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../location/domain/models/location_status.dart';
+import '../../location/presentation/location_provider.dart';
+import '../../tide/domain/models/tide_station.dart';
+import '../../tide/presentation/station_picker.dart';
 import '../../settings/presentation/settings_provider.dart';
 import 'memo_provider.dart';
 
@@ -49,7 +52,9 @@ class _LocationEditSheetState extends ConsumerState<LocationEditSheet> {
   late final TextEditingController _waterTemp;
   late final TextEditingController _stationName;
   late final TextEditingController _stationDist;
+  late List<TideEvent> _tides; // 관측소 변경 시 재조회해 교체되는 당일 조석/조위
   bool _saving = false;
+  bool _stationLoading = false;
 
   @override
   void initState() {
@@ -63,6 +68,7 @@ class _LocationEditSheetState extends ConsumerState<LocationEditSheet> {
     _stationName = TextEditingController(text: e.stationName ?? '');
     _stationDist = TextEditingController(
         text: e.stationDistance?.toStringAsFixed(1) ?? '');
+    _tides = e.tides;
   }
 
   @override
@@ -120,12 +126,7 @@ class _LocationEditSheetState extends ConsumerState<LocationEditSheet> {
                 Expanded(child: _field('조석 (예: 만조 18:03)', _tideTime)),
               ]),
               const SizedBox(height: 8),
-              Row(children: [
-                Expanded(child: _field('관측소명', _stationName)),
-                const SizedBox(width: 8),
-                Expanded(child: _field('거리 (km)', _stationDist,
-                    inputType: const TextInputType.numberWithOptions(decimal: true))),
-              ]),
+              _stationTile(),
               const SizedBox(height: 16),
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
@@ -150,6 +151,71 @@ class _LocationEditSheetState extends ConsumerState<LocationEditSheet> {
         ),
       ),
     );
+  }
+
+  /// 관측소 표시 + 변경(탭) 타일. 좌표가 있어야 변경 가능(거리·조위 재계산에 필요).
+  Widget _stationTile() {
+    final cs = Theme.of(context).colorScheme;
+    final hasCoords =
+        widget.existing.latitude != null && widget.existing.longitude != null;
+    final name = _stationName.text.trim();
+    final dist = _stationDist.text.trim();
+    final display = name.isEmpty
+        ? (hasCoords ? '관측소를 선택하세요' : '좌표 정보가 없어 변경할 수 없습니다')
+        : (dist.isEmpty ? name : '$name (${dist}km)');
+    return InkWell(
+      onTap: hasCoords && !_stationLoading ? _changeStation : null,
+      borderRadius: BorderRadius.circular(4),
+      child: InputDecorator(
+        decoration: const InputDecoration(
+          labelText: '관측소',
+          border: OutlineInputBorder(),
+          isDense: true,
+          contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 12),
+        ),
+        child: Row(children: [
+          Expanded(
+              child: Text(display,
+                  style: TextStyle(
+                      fontSize: 14,
+                      color: name.isEmpty
+                          ? cs.onSurface.withValues(alpha: 0.6)
+                          : null))),
+          if (_stationLoading)
+            const SizedBox(
+                width: 16,
+                height: 16,
+                child: CircularProgressIndicator(strokeWidth: 2))
+          else if (hasCoords)
+            Text('변경',
+                style: TextStyle(
+                    fontSize: 13,
+                    color: cs.primary,
+                    fontWeight: FontWeight.w600)),
+        ]),
+      ),
+    );
+  }
+
+  Future<void> _changeStation() async {
+    final lat = widget.existing.latitude;
+    final lng = widget.existing.longitude;
+    if (lat == null || lng == null) return;
+    final cur = _stationName.text.trim();
+    final picked = await StationPicker.show(context,
+        lat: lat, lng: lng, currentName: cur.isEmpty ? null : cur);
+    if (picked == null || !mounted) return;
+    setState(() => _stationLoading = true);
+    final updated =
+        await ref.read(locationProvider.notifier).applyStation(widget.existing, picked);
+    if (!mounted) return;
+    setState(() {
+      _stationName.text = updated.stationName ?? picked.name;
+      _stationDist.text = updated.stationDistance?.toStringAsFixed(1) ?? '';
+      if (updated.tideTime != null) _tideTime.text = updated.tideTime!;
+      _tides = updated.tides;
+      _stationLoading = false;
+    });
   }
 
   Widget _field(String label, TextEditingController ctrl,
@@ -183,7 +249,7 @@ class _LocationEditSheetState extends ConsumerState<LocationEditSheet> {
         waterTemp: double.tryParse(_waterTemp.text.trim()),
         stationName: _stationName.text.trim().isEmpty ? null : _stationName.text.trim(),
         stationDistance: double.tryParse(_stationDist.text.trim()),
-        tides: e.tides,
+        tides: _tides,
       );
       if (widget.onEditSave != null) {
         await widget.onEditSave!(widget.blockIndex, updated);

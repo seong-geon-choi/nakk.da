@@ -3,6 +3,8 @@ import 'package:lunar/lunar.dart';
 import '../../features/location/domain/models/location_status.dart';
 import '../../features/weather/data/weather_service.dart';
 import '../../features/tide/data/astro_calc.dart';
+import '../../features/tide/domain/models/tide_station.dart';
+import '../../features/tide/presentation/station_picker.dart';
 
 const _highTideColor = Color(0xFFD32F2F); // 만조 ▲ 빨강
 const _lowTideColor = Color(0xFF1976D2); // 간조 ▼ 파랑
@@ -10,7 +12,15 @@ const _lowTideColor = Color(0xFF1976D2); // 간조 ▼ 파랑
 class LocationStatusCard extends StatelessWidget {
   final LocationStatus status;
 
-  const LocationStatusCard({super.key, required this.status});
+  /// 주면 물때 팝업에 '관측소 변경'이 뜨고, 선택한 관측소를 넘겨 재조회·저장을 맡긴다.
+  /// 좌표가 있을 때만 노출된다(거리·조위 재계산에 필요).
+  final Future<void> Function(TideStation station)? onStationChanged;
+
+  const LocationStatusCard({
+    super.key,
+    required this.status,
+    this.onStationChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -192,6 +202,21 @@ class LocationStatusCard extends StatelessWidget {
           ),
         ),
         actions: [
+          if (onStationChanged != null &&
+              status.latitude != null &&
+              status.longitude != null)
+            TextButton(
+              onPressed: () async {
+                final picked = await StationPicker.show(ctx,
+                    lat: status.latitude!,
+                    lng: status.longitude!,
+                    currentName: status.stationName);
+                if (picked == null) return;
+                if (ctx.mounted) Navigator.pop(ctx);
+                await onStationChanged!(picked);
+              },
+              child: const Text('관측소 변경'),
+            ),
           TextButton(
               onPressed: () => Navigator.pop(ctx), child: const Text('닫기')),
         ],

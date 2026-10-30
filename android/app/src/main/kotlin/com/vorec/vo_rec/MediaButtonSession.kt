@@ -5,6 +5,7 @@ import android.content.Intent
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioTrack
+import android.media.VolumeProvider
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
@@ -19,10 +20,16 @@ import android.view.KeyEvent
  * 미디어 버튼이 음악앱 대신 이쪽으로 라우팅된다(그 시간 동안 음악 곡 변경은 불가 — 트레이드오프).
  *
  * onKey(keyCode)로 ACTION_DOWN(비반복) 키만 전달한다.
+ *
+ * hookVolume=true면 세션을 '원격 볼륨'으로 선언(setPlaybackToRemote)해 하드웨어 볼륨 업/다운
+ * 키가 시스템 미디어 볼륨 대신 이쪽으로 들어오게 한다 → 볼륨 버튼 리모컨을 화면 꺼짐·백그라운드에서
+ * +1/−1로 쓸 수 있다(그 대신 세션이 활성인 동안 하드웨어 볼륨으로 음악 볼륨 조절 불가 — 트레이드오프).
+ * 볼륨 업 → KEYCODE_VOLUME_UP, 볼륨 다운 → KEYCODE_VOLUME_DOWN 으로 변환해 onKey로 전달한다.
  */
 class MediaButtonSession(
     private val context: Context,
     private val tag: String,
+    private val hookVolume: Boolean = false,
     private val onKey: (Int) -> Unit,
 ) {
     private var session: MediaSession? = null
@@ -58,6 +65,19 @@ class MediaButtonSession(
                 .setState(PlaybackState.STATE_PLAYING, 0L, 1f)
                 .build()
         )
+        // 볼륨 버튼 후킹: 세션을 '원격 볼륨'으로 선언하면 볼륨 키가 onAdjustVolume으로 들어온다.
+        if (hookVolume) {
+            s.setPlaybackToRemote(
+                object : VolumeProvider(VolumeProvider.VOLUME_CONTROL_RELATIVE, 100, 50) {
+                    override fun onAdjustVolume(direction: Int) {
+                        when {
+                            direction > 0 -> onKey(KeyEvent.KEYCODE_VOLUME_UP)
+                            direction < 0 -> onKey(KeyEvent.KEYCODE_VOLUME_DOWN)
+                        }
+                    }
+                }
+            )
+        }
         s.isActive = true
         session = s
         startSilentAudio()

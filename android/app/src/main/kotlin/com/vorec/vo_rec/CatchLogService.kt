@@ -4,7 +4,9 @@ import android.annotation.SuppressLint
 import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
+import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.*
 import android.speech.tts.TextToSpeech
@@ -14,11 +16,25 @@ import androidx.core.app.NotificationCompat
 import androidx.documentfile.provider.DocumentFile
 import com.google.android.gms.location.LocationServices
 import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+
+/**
+ * 추임새/삭제 멘트 1개. 텍스트(TTS) 또는 오디오 파일 중 하나.
+ * - [type] "text"면 [value]가 발화할 문구, "audio"면 [value]가 내부 저장 파일명.
+ * - [label] 오디오일 때 표시용 원본 파일명.
+ */
+data class SoundItem(val type: String, val value: String, val label: String = "") {
+    val isAudio: Boolean get() = type == TYPE_AUDIO
+    companion object {
+        const val TYPE_TEXT = "text"
+        const val TYPE_AUDIO = "audio"
+    }
+}
 
 /**
  * 조과(어획) 기록 서비스.
@@ -70,6 +86,9 @@ class CatchLogService : Service() {
         const val ACTION_REM_LAST = "rem:last"
         // 블루투스 버튼 연동 사용 여부(사용자가 켠 경우만 작동). 기본 꺼짐.
         const val PREFS_BTMAP_ENABLED_KEY = "catch_btmap_enabled"
+        // 볼륨 버튼으로 카운트(원격 볼륨 후킹). 켜면 볼륨 키가 백그라운드에서도 들어오나
+        // 그동안 하드웨어 볼륨으로 음악 볼륨 조절은 안 된다. 기본 꺼짐.
+        const val PREFS_BTVOL_ENABLED_KEY = "catch_btvol_enabled"
         // 집계 변동(리모컨으로 ±) 시 카운터 화면이 즉시 다시 그리도록 알리는 로컬 브로드캐스트.
         const val ACTION_COUNTS_CHANGED = "com.sgchoisg.nakkda.COUNTS_CHANGED"
         // 설정에서 연동 on/off를 바꿨을 때 실행 중인 서비스가 세션을 즉시 재동기화하도록 하는 액션.
@@ -78,6 +97,10 @@ class CatchLogService : Service() {
         /** 블루투스 버튼 연동이 사용자에 의해 켜져 있는지(기본 꺼짐). */
         fun isBtEnabled(context: Context): Boolean =
             prefsOf(context).getBoolean(PREFS_BTMAP_ENABLED_KEY, false)
+
+        /** 볼륨 버튼 후킹(원격 볼륨)이 켜져 있는지(기본 꺼짐). */
+        fun isBtVolEnabled(context: Context): Boolean =
+            prefsOf(context).getBoolean(PREFS_BTVOL_ENABLED_KEY, false)
 
         /** 매핑(action→keyCode)을 읽는다. 값이 없거나 깨지면 빈 맵. */
         fun loadKeyMap(context: Context): Map<String, Int> {
@@ -154,18 +177,82 @@ class CatchLogService : Service() {
         fun isSoundEnabled(context: Context): Boolean =
             prefsOf(context).getBoolean(PREFS_SOUND_ENABLED_KEY, true)
 
-        /** +1 추임새 멘트 목록. 저장값이 비면 기본 세트로 폴백(무음 방지). */
-        fun loadSoundPhrases(context: Context): List<String> {
-            val saved = strArray(prefsOf(context).getString(PREFS_SOUND_PHRASES_KEY, "[]"))
-                .map { it.trim() }.filter { it.isNotEmpty() }
-            return saved.ifEmpty { DEFAULT_SOUND_PHRASES }
+        /** +1 추임새 항목(텍스트·오디오 혼합). 비면 기본 텍스트 세트로 폴백(무음 방지). */
+        fun loadAddItems(context: Context): List<SoundItem> =
+            loadSoundItems(context, PREFS_SOUND_PHRASES_KEY, DEFAULT_SOUND_PHRASES)
+
+        /** 삭제(−1) 멘트 항목(텍스트·오디오 혼합). 비면 기본 세트로 폴백. */
+        fun loadDelItems(context: Context): List<SoundItem> =
+            loadSoundItems(context, PREFS_SOUND_DEL_PHRASES_KEY, DEFAULT_SOUND_DEL_PHRASES)
+
+        /**
+         * 저장된 사운드 항목을 파싱한다. 하위호환:
+         * 요소가 문자열이면 텍스트 추임새로(구형식), 객체면 {t,v,label}로 해석.
+         */
+        fun loadSoundItems(
+            context: Context, key: String, defaults: List<String>): List<SoundItem> {
+            val items = parseItems(prefsOf(context).getString(key, "[]"))
+            return items.ifEmpty { defaults.map { SoundItem(SoundItem.TYPE_TEXT, it) } }
         }
 
-        /** 삭제(−1) 멘트 목록. 저장값이 비면 기본 세트로 폴백. */
-        fun loadSoundDelPhrases(context: Context): List<String> {
-            val saved = strArray(prefsOf(context).getString(PREFS_SOUND_DEL_PHRASES_KEY, "[]"))
-                .map { it.trim() }.filter { it.isNotEmpty() }
-            return saved.ifEmpty { DEFAULT_SOUND_DEL_PHRASES }
+        private fun parseItems(json: String?): List<SoundItem> = try {
+            val a = JSONArray(json ?: "[]")
+            val out = ArrayList<SoundItem>()
+            for (i in 0 until a.length()) {
+                val e = a.opt(i)
+                if (e is JSONObject) {
+                    val v = e.optString("v", "").trim()
+                    if (v.isNotEmpty()) {
+                        out.add(SoundItem(
+                            e.optString("t", SoundItem.TYPE_TEXT),
+                            v,
+                            e.optString("label", "")))
+                    }
+                } else {
+                    val s = e?.toString()?.trim() ?: ""
+                    if (s.isNotEmpty()) out.add(SoundItem(SoundItem.TYPE_TEXT, s))
+                }
+            }
+            out
+        } catch (_: Exception) { emptyList() }
+
+        // ── 오디오 추임새 파일 저장(앱 내부: filesDir/catch_sounds) ──
+        private fun soundsDir(context: Context): File {
+            val d = File(context.filesDir, "catch_sounds")
+            if (!d.exists()) d.mkdirs()
+            return d
+        }
+
+        fun soundFile(context: Context, name: String): File = File(soundsDir(context), name)
+
+        /** [srcPath]의 오디오를 내부 저장소로 복사하고 저장 파일명을 돌려준다(실패 시 null). */
+        fun importSoundFile(context: Context, srcPath: String, origName: String?): String? =
+            try {
+                val ext = (origName ?: srcPath).substringAfterLast('.', "").lowercase()
+                val suffix = if (ext.isNotEmpty() && ext.length <= 5) ".$ext" else ""
+                val name = "snd_${System.currentTimeMillis()}$suffix"
+                File(srcPath).inputStream().use { input ->
+                    soundFile(context, name).outputStream().use { input.copyTo(it) }
+                }
+                name
+            } catch (_: Exception) { null }
+
+        fun deleteSoundFile(context: Context, name: String) {
+            try { soundFile(context, name).delete() } catch (_: Exception) {}
+        }
+
+        /** 목록에서 참조되지 않는 오디오 파일을 정리(목록 저장 후 호출). */
+        fun pruneSoundFiles(context: Context) {
+            try {
+                val used = (loadAddItems(context) + loadDelItems(context))
+                    .filter { it.isAudio }.map { it.value }.toSet()
+                soundsDir(context).listFiles()?.forEach { if (it.name !in used) it.delete() }
+            } catch (_: Exception) {}
+        }
+
+        /** 복사된 오디오 파일 전체 삭제(초기화 시). */
+        fun clearAllSoundFiles(context: Context) {
+            try { soundsDir(context).listFiles()?.forEach { it.delete() } } catch (_: Exception) {}
         }
 
         /** +1 안내 모드. */
@@ -315,10 +402,13 @@ class CatchLogService : Service() {
 
     // 블루투스 리모컨/이어폰 미디어 버튼 수신용 무음 세션(포커스 미요청).
     private var mediaButton: MediaButtonSession? = null
+    // 현재 세션이 볼륨 후킹 상태로 떠 있는지(토글 변경 시 재생성 판단용).
+    private var mediaButtonVol = false
 
     // 조과 효과음용 TTS(한국어). onCreate에서 초기화, onDestroy에서 종료.
     private var tts: TextToSpeech? = null
     @Volatile private var ttsReady = false
+    @Volatile private var player: MediaPlayer? = null
     // 마지막으로 적용한 음성 이름(바뀔 때만 setVoice 조회).
     private var appliedVoice: String? = null
     // 알림 post 시각을 세션 동안 고정 — +1 갱신 때마다 현재 시각으로 찍히면
@@ -379,14 +469,55 @@ class CatchLogService : Service() {
      * - 효과음 켜짐 + 미디어 볼륨 ≥1: TTS([textIfSound]) — 미디어 스트림이라 들린다.
      * - 진동 켜짐: 미디어 볼륨·효과음과 무관하게 항상 짧은 진동(동시 발생 가능).
      */
-    private fun countFeedback(textIfSound: () -> String) {
+    private fun countFeedback(itemIfSound: () -> SoundItem?) {
         val am = getSystemService(AUDIO_SERVICE) as? AudioManager
         val mediaVol = am?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0
         if (isSoundEnabled(this) && mediaVol > 0) {
-            val t = textIfSound()
-            if (t.isNotEmpty()) speak(t, flush = true)
+            val item = itemIfSound()
+            if (item != null) playItem(item)
         }
         if (isVibrateEnabled(this)) vibrateShort()
+    }
+
+    /** 진행 중인 효과음(TTS·오디오)을 모두 중단 — 새 카운트 시작 전 flush. */
+    private fun stopPlayback() {
+        try { tts?.stop() } catch (_: Exception) {}
+        val p = player
+        player = null
+        try { p?.stop(); p?.release() } catch (_: Exception) {}
+    }
+
+    /** 추임새 1개 재생: 텍스트는 TTS, 오디오는 내부 저장 파일을 미디어 스트림으로. */
+    private fun playItem(item: SoundItem) {
+        stopPlayback()
+        if (item.isAudio) playAudio(item.value) else speak(item.value, flush = true)
+    }
+
+    /** 내부 저장 오디오 파일을 재생(미디어 스트림 → 음악과 공존·미디어 볼륨 기준). */
+    private fun playAudio(fileName: String) {
+        val f = soundFile(this, fileName)
+        if (!f.exists()) return
+        try {
+            val mp = MediaPlayer()
+            mp.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build())
+            mp.setDataSource(f.absolutePath)
+            mp.setOnCompletionListener {
+                try { it.release() } catch (_: Exception) {}
+                if (player === it) player = null
+            }
+            mp.setOnErrorListener { p, _, _ ->
+                try { p.release() } catch (_: Exception) {}
+                if (player === p) player = null
+                true
+            }
+            mp.prepare() // 로컬 짧은 클립이라 즉시 준비(io 스레드에서 호출됨).
+            player = mp
+            mp.start()
+        } catch (_: Exception) {}
     }
 
     /** 짧은 진동(약 40ms). */
@@ -403,14 +534,14 @@ class CatchLogService : Service() {
         } catch (_: Exception) {}
     }
 
-    /** +1 안내 문구를 모드에 맞게 생성. */
-    private fun catchAnnounce(species: String): String = when (soundMode(this)) {
-        "phrase" -> loadSoundPhrases(this).randomOrNull() ?: ""
-        "count" -> "$species ${loadCount(this, species)}마리"
+    /** +1 안내 항목을 모드에 맞게 생성. 마릿수 안내는 항상 텍스트(TTS). */
+    private fun catchAnnounce(species: String): SoundItem? = when (soundMode(this)) {
+        "phrase" -> loadAddItems(this).randomOrNull()
+        "count" -> SoundItem(SoundItem.TYPE_TEXT, "$species ${loadCount(this, species)}마리")
         else -> { // both: 10·20…500마리는 마릿수, 그 외는 추임새
             val n = loadCount(this, species)
-            if (n in 1..500 && n % 10 == 0) "$species ${n}마리"
-            else loadSoundPhrases(this).randomOrNull() ?: ""
+            if (n in 1..500 && n % 10 == 0) SoundItem(SoundItem.TYPE_TEXT, "$species ${n}마리")
+            else loadAddItems(this).randomOrNull()
         }
     }
 
@@ -442,13 +573,18 @@ class CatchLogService : Service() {
      */
     private fun syncMediaButton() {
         val has = isBtEnabled(this) && loadKeyMap(this).isNotEmpty()
-        if (has && mediaButton == null) {
-            mediaButton = MediaButtonSession(this, "nakkda_catch") { keyCode ->
+        val wantVol = has && isBtVolEnabled(this)
+        if (has && (mediaButton == null || mediaButtonVol != wantVol)) {
+            // 볼륨 후킹 on/off가 바뀌면 세션을 재생성해야 원격 볼륨 선언이 반영된다.
+            mediaButton?.stop()
+            mediaButtonVol = wantVol
+            mediaButton = MediaButtonSession(this, "nakkda_catch", hookVolume = wantVol) { keyCode ->
                 onRemoteKey(keyCode)
             }.also { it.start() }
         } else if (!has && mediaButton != null) {
             mediaButton?.stop()
             mediaButton = null
+            mediaButtonVol = false
         }
     }
 
@@ -513,6 +649,8 @@ class CatchLogService : Service() {
         mediaButton = null
         try { tts?.stop(); tts?.shutdown() } catch (_: Exception) {}
         tts = null
+        try { player?.release() } catch (_: Exception) {}
+        player = null
         io.shutdown()
         super.onDestroy()
     }
@@ -545,8 +683,8 @@ class CatchLogService : Service() {
         io.execute {
             val had = loadCount(this, species) > 0
             removeLastCatchFromFile(this, species)
-            // 실제로 지워진 경우에만 삭제 피드백(벨소리=멘트 / 진동·무음=진동).
-            if (had) countFeedback { loadSoundDelPhrases(this).randomOrNull() ?: "" }
+            // 실제로 지워진 경우에만 삭제 피드백(멘트/오디오 / 진동).
+            if (had) countFeedback { loadDelItems(this).randomOrNull() }
             updateNotification()
             sendCountsChanged()
         }
@@ -557,7 +695,7 @@ class CatchLogService : Service() {
         io.execute {
             val had = loadCountsFromFile(this).values.any { it > 0 }
             removeLastAnyCatchFromFile(this)
-            if (had) countFeedback { loadSoundDelPhrases(this).randomOrNull() ?: "" }
+            if (had) countFeedback { loadDelItems(this).randomOrNull() }
             updateNotification()
             sendCountsChanged()
         }

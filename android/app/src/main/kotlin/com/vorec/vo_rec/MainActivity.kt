@@ -6,6 +6,8 @@ import android.content.pm.ServiceInfo
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.drawable.Icon
+import android.media.AudioAttributes
+import android.media.MediaPlayer
 import android.media.MediaScannerConnection
 import android.net.Uri
 import android.os.Build
@@ -49,6 +51,7 @@ class MainActivity : FlutterActivity() {
     // 설정 화면 조과 효과음 미리듣기용 TTS(서비스와 별개, 지연 생성).
     private var previewTts: TextToSpeech? = null
     private var previewTtsReady = false
+    private var previewPlayer: MediaPlayer? = null
     // 초기화 완료 전 들어온 요청(미리듣기/음성목록)을 보관했다가 준비되면 실행.
     private val pendingTtsActions = ArrayList<(TextToSpeech) -> Unit>()
 
@@ -762,6 +765,14 @@ class MainActivity : FlutterActivity() {
                     setBtEnabled(enabled)
                     result.success(null)
                 }
+                "getVolHook" -> {
+                    result.success(CatchLogService.isBtVolEnabled(this))
+                }
+                "setVolHook" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    setBtVolHook(enabled)
+                    result.success(null)
+                }
                 "getSoundEnabled" -> {
                     result.success(CatchLogService.isSoundEnabled(this))
                 }
@@ -772,28 +783,43 @@ class MainActivity : FlutterActivity() {
                     result.success(null)
                 }
                 "getSoundPhrases" -> {
-                    result.success(CatchLogService.loadSoundPhrases(this))
+                    result.success(itemsToMaps(CatchLogService.loadAddItems(this)))
                 }
                 "setSoundPhrases" -> {
-                    val phrases = call.argument<List<String>>("phrases") ?: emptyList()
-                    val arr = JSONArray(); for (p in phrases) arr.put(p)
-                    CatchLogService.prefsOf(this).edit()
-                        .putString(CatchLogService.PREFS_SOUND_PHRASES_KEY, arr.toString()).apply()
+                    val items = call.argument<List<Map<String, Any?>>>("items") ?: emptyList()
+                    saveSoundItems(CatchLogService.PREFS_SOUND_PHRASES_KEY, items)
                     result.success(null)
                 }
                 "getSoundDelPhrases" -> {
-                    result.success(CatchLogService.loadSoundDelPhrases(this))
+                    result.success(itemsToMaps(CatchLogService.loadDelItems(this)))
                 }
                 "setSoundDelPhrases" -> {
-                    val phrases = call.argument<List<String>>("phrases") ?: emptyList()
-                    val arr = JSONArray(); for (p in phrases) arr.put(p)
-                    CatchLogService.prefsOf(this).edit()
-                        .putString(CatchLogService.PREFS_SOUND_DEL_PHRASES_KEY, arr.toString()).apply()
+                    val items = call.argument<List<Map<String, Any?>>>("items") ?: emptyList()
+                    saveSoundItems(CatchLogService.PREFS_SOUND_DEL_PHRASES_KEY, items)
                     result.success(null)
                 }
                 "previewSound" -> {
                     val text = call.argument<String>("text") ?: ""
                     if (text.isNotBlank()) previewSpeak(text)
+                    result.success(null)
+                }
+                "importSoundFile" -> {
+                    val path = call.argument<String>("path")
+                    val name = call.argument<String>("name")
+                    if (path == null) {
+                        result.error("ARG", "path missing", null)
+                    } else {
+                        result.success(CatchLogService.importSoundFile(this, path, name))
+                    }
+                }
+                "previewAudio" -> {
+                    val name = call.argument<String>("name") ?: ""
+                    if (name.isNotBlank()) previewAudio(name)
+                    result.success(null)
+                }
+                "deleteSoundFile" -> {
+                    val name = call.argument<String>("name")
+                    if (name != null) CatchLogService.deleteSoundFile(this, name)
                     result.success(null)
                 }
                 "getSoundTone" -> {
@@ -847,6 +873,7 @@ class MainActivity : FlutterActivity() {
                         .remove(CatchLogService.PREFS_SOUND_MODE_KEY)
                         .remove(CatchLogService.PREFS_VIBRATE_ENABLED_KEY)
                         .apply()
+                    CatchLogService.clearAllSoundFiles(this)
                     result.success(null)
                 }
                 "setSoundVoice" -> {
@@ -892,6 +919,18 @@ class MainActivity : FlutterActivity() {
     private fun setBtEnabled(enabled: Boolean) {
         CatchLogService.prefsOf(this).edit()
             .putBoolean(CatchLogService.PREFS_BTMAP_ENABLED_KEY, enabled).apply()
+        resyncBtSession()
+    }
+
+    /** 볼륨 후킹 on/off 저장 + 세션 즉시 재동기화(원격 볼륨 선언 반영). */
+    private fun setBtVolHook(enabled: Boolean) {
+        CatchLogService.prefsOf(this).edit()
+            .putBoolean(CatchLogService.PREFS_BTVOL_ENABLED_KEY, enabled).apply()
+        resyncBtSession()
+    }
+
+    /** 카운터 서비스가 떠 있으면 미디어 세션을 즉시 다시 맞춘다. */
+    private fun resyncBtSession() {
         val active = CatchLogService.prefsOf(this)
             .getBoolean(CatchLogService.PREFS_ACTIVE_KEY, false)
         if (active) {
@@ -939,6 +978,49 @@ class MainActivity : FlutterActivity() {
             applyTtsPrefs(t)
             try { t.speak(text, TextToSpeech.QUEUE_FLUSH, null, "preview") } catch (_: Exception) {}
         }
+    }
+
+    /** 설정 화면 오디오 추임새 미리듣기(저장된 파일명 기준, 서비스 재생과 별개). */
+    private fun previewAudio(name: String) {
+        try {
+            val f = CatchLogService.soundFile(this, name)
+            if (!f.exists()) return
+            try { previewPlayer?.release() } catch (_: Exception) {}
+            previewPlayer = null
+            val mp = MediaPlayer()
+            mp.setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                    .build())
+            mp.setDataSource(f.absolutePath)
+            mp.setOnCompletionListener {
+                try { it.release() } catch (_: Exception) {}
+                if (previewPlayer === it) previewPlayer = null
+            }
+            mp.prepare()
+            previewPlayer = mp
+            mp.start()
+        } catch (_: Exception) {}
+    }
+
+    /** SoundItem 목록 → Flutter로 넘길 맵 목록. */
+    private fun itemsToMaps(items: List<SoundItem>): List<Map<String, String>> =
+        items.map { mapOf("t" to it.type, "v" to it.value, "label" to it.label) }
+
+    /** Flutter에서 받은 항목 맵 목록을 prefs에 JSON으로 저장(빈 값 제외) + 미참조 파일 정리. */
+    private fun saveSoundItems(key: String, items: List<Map<String, Any?>>) {
+        val arr = JSONArray()
+        for (m in items) {
+            val v = (m["v"] as? String)?.trim() ?: ""
+            if (v.isEmpty()) continue
+            arr.put(JSONObject()
+                .put("t", (m["t"] as? String) ?: SoundItem.TYPE_TEXT)
+                .put("v", v)
+                .put("label", (m["label"] as? String) ?: ""))
+        }
+        CatchLogService.prefsOf(this).edit().putString(key, arr.toString()).apply()
+        CatchLogService.pruneSoundFiles(this)
     }
 
     /** 한국어 음성 이름 목록(설치된 것만). */
@@ -1336,6 +1418,8 @@ class MainActivity : FlutterActivity() {
         try { previewTts?.shutdown() } catch (_: Exception) {}
         previewTts = null
         previewTtsReady = false
+        try { previewPlayer?.release() } catch (_: Exception) {}
+        previewPlayer = null
         pendingTtsActions.clear()
         super.onDestroy()
     }

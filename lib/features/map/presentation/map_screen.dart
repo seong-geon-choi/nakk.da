@@ -1817,23 +1817,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     // 패널을 다시 보려면 버튼을 2번(끄기→켜기) 누르면 된다.
                     _toolBtn(
                       Icons.bar_chart, // 조위+시간당 조과 그래프 패널 + 조과 마커
-                      (_catchBySpecies.isNotEmpty || _dayTides.isNotEmpty)
-                          ? (_showCatchPoints
-                              ? Theme.of(context).colorScheme.primary
-                              : null)
-                          : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
-                      (_catchBySpecies.isNotEmpty || _dayTides.isNotEmpty)
-                          ? () {
-                              final opening = !_showCatchPoints;
-                              setState(() {
-                                _showCatchPoints = opening; // 조과 마커
-                                _showCatchChart = opening; // 그래프 패널
-                                _hiddenCatchSpecies = {}; // 켤/끌 때 숨김 초기화
-                              });
-                              // 열 때 물때가 없으면 자동 수집해 곡선을 채운다.
-                              if (opening) _ensureDayTides();
-                            }
-                          : () => _showToastMessage('조과·물때 정보가 없습니다'),
+                      // 조과가 없어도 물때·조위는 볼 수 있어야 하므로 항상 활성.
+                      _showCatchPoints
+                          ? Theme.of(context).colorScheme.primary
+                          : null,
+                      () {
+                        final opening = !_showCatchPoints;
+                        setState(() {
+                          _showCatchPoints = opening; // 조과 마커
+                          _showCatchChart = opening; // 그래프 패널
+                          _hiddenCatchSpecies = {}; // 켤/끌 때 숨김 초기화
+                        });
+                        // 열 때 물때가 없으면 자동 수집해 곡선을 채운다.
+                        // (조과가 없어도 조위 곡선은 표시된다.)
+                        if (opening) _ensureDayTides();
+                      },
                     ),
                     _toolBtn(
                       Icons.filter_alt,

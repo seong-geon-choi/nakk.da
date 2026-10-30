@@ -5,15 +5,18 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Build
 import android.os.Bundle
 import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -277,9 +280,12 @@ class CatchCounterActivity : Activity() {
             gravity = Gravity.CENTER
             setPadding(0, dp(16), 0, 0)
         }
-        controls.addView(circleButton("−", "#37475A", "#263241") { change(index, -1) })
-        controls.addView(View(this), LinearLayout.LayoutParams(dp(22), 1))
-        controls.addView(circleButton("+", "#D8673F", "#A6401F") { change(index, +1) })
+        // 버튼은 항상 정사각(= 정원)으로 고정 — 회전 시 부모 제약에 눌려 타원이 되지 않게.
+        controls.addView(circleButton("−", "#37475A", "#263241") { change(index, -1) },
+            LinearLayout.LayoutParams(dp(76), dp(76)))
+        controls.addView(View(this), LinearLayout.LayoutParams(dp(22), dp(1)))
+        controls.addView(circleButton("+", "#D8673F", "#A6401F") { change(index, +1) },
+            LinearLayout.LayoutParams(dp(76), dp(76)))
         unit.addView(controls)
         return unit
     }
@@ -450,7 +456,10 @@ class CatchCounterActivity : Activity() {
     }
 
     // ── 버튼 ───────────────────────────────────────────────
-    /** 원형 +/− 버튼: 위→아래 그라데이션 + 흰 글리프. */
+    /**
+     * 원형 +/− 버튼: 위→아래 그라데이션 + 흰 글리프.
+     * 크기는 호출측 LayoutParams(정사각)로 고정하고, 탭 시 클릭 효과(리플·수축·햅틱)를 준다.
+     */
     private fun circleButton(glyph: String, top: String, bottom: String, onClick: () -> Unit): TextView =
         TextView(this).apply {
             text = glyph
@@ -458,7 +467,6 @@ class CatchCounterActivity : Activity() {
             setTextColor(Color.WHITE)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 34f)
             typeface = Typeface.DEFAULT_BOLD
-            width = dp(76); height = dp(76)
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
                 intArrayOf(Color.parseColor(top), Color.parseColor(bottom))
@@ -466,8 +474,28 @@ class CatchCounterActivity : Activity() {
                 shape = GradientDrawable.OVAL
                 setStroke(dp(1), Color.parseColor("#33FFFFFF"))
             }
+            // 눌림 리플(원형 마스크로 버튼 밖으로 안 번지게).
+            foreground = RippleDrawable(
+                ColorStateList.valueOf(Color.parseColor("#66FFFFFF")),
+                null,
+                GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) })
             isClickable = true
-            setOnClickListener { onClick() }
+            isFocusable = true
+            setOnClickListener {
+                performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                onClick()
+            }
+            // 눌렀다 뗄 때 살짝 수축하는 '클릭' 모션(클릭 처리는 그대로 진행).
+            @Suppress("ClickableViewAccessibility")
+            setOnTouchListener { v, e ->
+                when (e.action) {
+                    MotionEvent.ACTION_DOWN ->
+                        v.animate().scaleX(0.9f).scaleY(0.9f).setDuration(60).start()
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->
+                        v.animate().scaleX(1f).scaleY(1f).setDuration(90).start()
+                }
+                false
+            }
         }
 
     private fun smallButton(label: String, onClick: () -> Unit): Button =

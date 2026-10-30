@@ -1,5 +1,29 @@
 import 'package:flutter/services.dart';
 
+/// 추임새/삭제 멘트 1개. 텍스트(TTS) 또는 오디오 파일 중 하나.
+/// - [type]=='text'면 [value]가 발화 문구, 'audio'면 [value]가 내부 저장 파일명.
+/// - [label]은 오디오일 때 표시용 원본 파일명.
+class SoundItem {
+  final String type; // 'text' | 'audio'
+  final String value;
+  final String label;
+  const SoundItem({required this.type, required this.value, this.label = ''});
+
+  bool get isAudio => type == 'audio';
+
+  factory SoundItem.text(String t) => SoundItem(type: 'text', value: t);
+  factory SoundItem.audio(String fileName, String label) =>
+      SoundItem(type: 'audio', value: fileName, label: label);
+
+  factory SoundItem.fromMap(Map<dynamic, dynamic> m) => SoundItem(
+        type: (m['t'] ?? 'text').toString(),
+        value: (m['v'] ?? '').toString(),
+        label: (m['label'] ?? '').toString(),
+      );
+
+  Map<String, String> toMap() => {'t': type, 'v': value, 'label': label};
+}
+
 /// 블루투스 리모컨/이어폰 버튼 → 조과 카운트 액션 매핑의 Flutter 측 래퍼.
 /// 매핑 저장소는 네이티브(prefs)이며, 백그라운드 서비스/카운터가 직접 읽는다.
 /// action 형식: "add:0"(어종0 +1) / "rem:0"(어종0 −1) / "add:1" / "rem:1".
@@ -61,6 +85,22 @@ class BtRemoteService {
     } catch (_) {}
   }
 
+  /// 볼륨 버튼으로 카운트(원격 볼륨 후킹) 사용 여부. 기본 꺼짐.
+  /// 켜면 볼륨 키가 백그라운드·화면꺼짐에서도 ±로 들어오나, 그동안 음악 볼륨 조절은 안 된다.
+  static Future<bool> getVolHook() async {
+    try {
+      return await _channel.invokeMethod<bool>('getVolHook') ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static Future<void> setVolHook(bool enabled) async {
+    try {
+      await _channel.invokeMethod('setVolHook', {'enabled': enabled});
+    } catch (_) {}
+  }
+
   /// 조과 효과음(TTS 음성) 사용 여부. 기본 켜짐.
   static Future<bool> getSoundEnabled() async {
     try {
@@ -76,35 +116,64 @@ class BtRemoteService {
     } catch (_) {}
   }
 
-  /// +1 때 랜덤 재생할 추임새 멘트 목록(비면 네이티브 기본 세트).
-  static Future<List<String>> getSoundPhrases() async {
+  /// +1 때 랜덤 재생할 추임새 항목(텍스트·오디오 혼합. 비면 네이티브 기본 세트).
+  static Future<List<SoundItem>> getSoundPhrases() async {
+    return _getItems('getSoundPhrases');
+  }
+
+  static Future<void> setSoundPhrases(List<SoundItem> items) async {
+    await _setItems('setSoundPhrases', items);
+  }
+
+  /// 삭제(−1) 때 랜덤 재생할 항목(텍스트·오디오 혼합. 비면 네이티브 기본 세트).
+  static Future<List<SoundItem>> getSoundDelPhrases() async {
+    return _getItems('getSoundDelPhrases');
+  }
+
+  static Future<void> setSoundDelPhrases(List<SoundItem> items) async {
+    await _setItems('setSoundDelPhrases', items);
+  }
+
+  static Future<List<SoundItem>> _getItems(String method) async {
     try {
-      final l = await _channel.invokeListMethod<String>('getSoundPhrases');
-      return l ?? const [];
+      final res = await _channel.invokeMethod(method);
+      final list = (res as List?) ?? const [];
+      return list
+          .map((e) => SoundItem.fromMap(e as Map))
+          .toList(growable: false);
     } catch (_) {
       return const [];
     }
   }
 
-  static Future<void> setSoundPhrases(List<String> phrases) async {
+  static Future<void> _setItems(String method, List<SoundItem> items) async {
     try {
-      await _channel.invokeMethod('setSoundPhrases', {'phrases': phrases});
+      await _channel.invokeMethod(
+          method, {'items': items.map((e) => e.toMap()).toList()});
     } catch (_) {}
   }
 
-  /// 삭제(−1) 때 랜덤 재생할 멘트 목록(비면 네이티브 기본 세트).
-  static Future<List<String>> getSoundDelPhrases() async {
+  /// 선택한 오디오 파일을 앱 내부 저장소로 복사하고 저장 파일명을 돌려준다(실패 시 null).
+  static Future<String?> importSoundFile(String path, String name) async {
     try {
-      final l = await _channel.invokeListMethod<String>('getSoundDelPhrases');
-      return l ?? const [];
+      return await _channel
+          .invokeMethod<String>('importSoundFile', {'path': path, 'name': name});
     } catch (_) {
-      return const [];
+      return null;
     }
   }
 
-  static Future<void> setSoundDelPhrases(List<String> phrases) async {
+  /// 설정 화면 미리듣기 — 저장된 오디오 추임새를 즉시 재생.
+  static Future<void> previewAudio(String fileName) async {
     try {
-      await _channel.invokeMethod('setSoundDelPhrases', {'phrases': phrases});
+      await _channel.invokeMethod('previewAudio', {'name': fileName});
+    } catch (_) {}
+  }
+
+  /// 내부 저장 오디오 파일 삭제(항목 제거 시).
+  static Future<void> deleteSoundFile(String fileName) async {
+    try {
+      await _channel.invokeMethod('deleteSoundFile', {'name': fileName});
     } catch (_) {}
   }
 

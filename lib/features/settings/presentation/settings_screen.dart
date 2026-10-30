@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -1127,8 +1128,27 @@ Future<void> _editCatchQuickSpecies(BuildContext context, WidgetRef ref) async {
   }
 }
 
-/// 조과 +1 때 재생할 추임새(TTS) 멘트 편집 + on/off 화면.
-/// 멘트는 네이티브 prefs가 단일 소스이며, 여기서 채널로 읽고/쓴다.
+/// 편집 중인 추임새 1개(텍스트는 입력 컨트롤러, 오디오는 저장 파일명·표시명).
+class _EditSound {
+  final String type; // 'text' | 'audio'
+  final TextEditingController? ctrl; // text 전용
+  final String value; // audio: 저장 파일명
+  final String label; // audio: 표시용 원본 파일명
+  _EditSound._(this.type, this.ctrl, this.value, this.label);
+  factory _EditSound.text([String t = '']) =>
+      _EditSound._('text', TextEditingController(text: t), '', '');
+  factory _EditSound.audio(String value, String label) =>
+      _EditSound._('audio', null, value, label);
+
+  bool get isAudio => type == 'audio';
+  SoundItem toItem() => isAudio
+      ? SoundItem.audio(value, label)
+      : SoundItem.text(ctrl!.text.trim());
+  void dispose() => ctrl?.dispose();
+}
+
+/// 조과 +1/−1 때 재생할 추임새(텍스트 TTS 또는 오디오 파일) 편집 + on/off 화면.
+/// 항목은 네이티브 prefs가 단일 소스이며, 여기서 채널로 읽고/쓴다.
 class _CatchSoundScreen extends StatefulWidget {
   const _CatchSoundScreen();
 
@@ -1141,8 +1161,8 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
   bool _vibrate = true;
   String _mode = 'both'; // phrase / count / both
   bool _loaded = false;
-  final List<TextEditingController> _ctrls = [];
-  final List<TextEditingController> _delCtrls = [];
+  final List<_EditSound> _items = []; // +1 추임새(텍스트·오디오)
+  final List<_EditSound> _delItems = []; // 삭제 멘트(텍스트·오디오)
   double _pitch = 1.0;
   double _rate = 1.0;
   List<String> _voices = const [];
@@ -1168,20 +1188,20 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
       _enabled = en;
       _vibrate = vib;
       _mode = mode;
-      for (final c in _ctrls) {
-        c.dispose();
+      for (final it in _items) {
+        it.dispose();
       }
-      for (final c in _delCtrls) {
-        c.dispose();
+      for (final it in _delItems) {
+        it.dispose();
       }
-      _ctrls
+      _items
         ..clear()
-        ..addAll(phrases.map((p) => TextEditingController(text: p)));
-      if (_ctrls.isEmpty) _ctrls.add(TextEditingController());
-      _delCtrls
+        ..addAll(phrases.map(_toEdit));
+      if (_items.isEmpty) _items.add(_EditSound.text());
+      _delItems
         ..clear()
-        ..addAll(delPhrases.map((p) => TextEditingController(text: p)));
-      if (_delCtrls.isEmpty) _delCtrls.add(TextEditingController());
+        ..addAll(delPhrases.map(_toEdit));
+      if (_delItems.isEmpty) _delItems.add(_EditSound.text());
       _pitch = tone.pitch;
       _rate = tone.rate;
       _voices = voices;
@@ -1190,10 +1210,14 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     });
   }
 
-  /// 현재 톤·음성으로 샘플 문구를 들려준다.
+  static _EditSound _toEdit(SoundItem i) =>
+      i.isAudio ? _EditSound.audio(i.value, i.label) : _EditSound.text(i.value);
+
+  /// 현재 톤·음성으로 샘플 문구를 들려준다(첫 텍스트 추임새, 없으면 기본).
   void _previewCurrent() {
-    final first = _ctrls
-        .map((c) => c.text.trim())
+    final first = _items
+        .where((e) => !e.isAudio)
+        .map((e) => e.ctrl!.text.trim())
         .firstWhere((t) => t.isNotEmpty, orElse: () => '한 마리!');
     BtRemoteService.previewSound(first);
   }
@@ -1232,11 +1256,11 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
 
   @override
   void dispose() {
-    for (final c in _ctrls) {
-      c.dispose();
+    for (final it in _items) {
+      it.dispose();
     }
-    for (final c in _delCtrls) {
-      c.dispose();
+    for (final it in _delItems) {
+      it.dispose();
     }
     super.dispose();
   }
@@ -1287,44 +1311,57 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     );
   }
 
-  /// 현재 입력칸을 네이티브에 저장(빈 칸 제외). 모두 비면 기본 멘트로 폴백.
+  /// 항목을 SoundItem으로 변환(빈 텍스트 제외, 오디오는 항상 유지)해 네이티브에 저장.
+  List<SoundItem> _toItems(List<_EditSound> list) => [
+        for (final e in list)
+          if (e.isAudio || e.ctrl!.text.trim().isNotEmpty) e.toItem(),
+      ];
+
   Future<void> _persist() async {
-    final phrases = _ctrls
-        .map((c) => c.text.trim())
-        .where((t) => t.isNotEmpty)
-        .toList();
-    await BtRemoteService.setSoundPhrases(phrases);
+    await BtRemoteService.setSoundPhrases(_toItems(_items));
+  }
+
+  Future<void> _persistDel() async {
+    await BtRemoteService.setSoundDelPhrases(_toItems(_delItems));
   }
 
   void _addPhrase() {
-    setState(() => _ctrls.add(TextEditingController()));
+    setState(() => _items.add(_EditSound.text()));
   }
 
   void _removePhrase(int i) {
-    final c = _ctrls.removeAt(i);
-    c.dispose();
+    _items.removeAt(i).dispose();
     setState(() {});
     _persist();
   }
 
-  /// 삭제 멘트 저장(빈 칸 제외). 모두 비면 기본 멘트로 폴백.
-  Future<void> _persistDel() async {
-    final phrases = _delCtrls
-        .map((c) => c.text.trim())
-        .where((t) => t.isNotEmpty)
-        .toList();
-    await BtRemoteService.setSoundDelPhrases(phrases);
-  }
-
   void _addDelPhrase() {
-    setState(() => _delCtrls.add(TextEditingController()));
+    setState(() => _delItems.add(_EditSound.text()));
   }
 
   void _removeDelPhrase(int i) {
-    final c = _delCtrls.removeAt(i);
-    c.dispose();
+    _delItems.removeAt(i).dispose();
     setState(() {});
     _persistDel();
+  }
+
+  /// 미디어를 골라 내부 저장소로 복사한 뒤 항목으로 추가한다(추가 후 행에서 미리듣기 가능).
+  Future<void> _addAudio(List<_EditSound> list, Future<void> Function() persist) async {
+    final picked = await FilePicker.platform.pickFiles(type: FileType.audio);
+    final file = (picked != null && picked.files.isNotEmpty)
+        ? picked.files.first
+        : null;
+    if (file == null || file.path == null) return;
+    final stored = await BtRemoteService.importSoundFile(file.path!, file.name);
+    if (!mounted) return;
+    if (stored == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('미디어 파일을 불러오지 못했어요.')),
+      );
+      return;
+    }
+    setState(() => list.add(_EditSound.audio(stored, file.name)));
+    await persist();
   }
 
   @override
@@ -1380,25 +1417,28 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
               child: TabBarView(
                 children: [
                   _phraseTab(
-                    ctrls: _ctrls,
+                    items: _items,
                     hint: '멘트',
                     addLabel: '+1 멘트 추가',
                     onAdd: _addPhrase,
+                    onAddAudio: () => _addAudio(_items, _persist),
                     onRemove: _removePhrase,
                     onPersist: _persist,
                     header: _modeSelector(),
                     intro: '• 추임새만: 매번 추임새 / 마릿수만: 매번 "어종 N마리" / '
                         '추임새+10단위: 평소 추임새·10마리마다 마릿수.\n'
-                        '• 아래 멘트는 "추임새"에 쓰입니다(모두 비우면 기본 멘트).',
+                        '• 멘트(글자)는 음성으로 읽고, 미디어(mp3·wav 등)는 그 소리를 재생합니다.\n'
+                        '• 여러 개면 매번 랜덤으로 하나가 재생됩니다(모두 비우면 기본 멘트).',
                   ),
                   _phraseTab(
-                    ctrls: _delCtrls,
+                    items: _delItems,
                     hint: '삭제 멘트',
                     addLabel: '삭제 멘트 추가',
                     onAdd: _addDelPhrase,
+                    onAddAudio: () => _addAudio(_delItems, _persistDel),
                     onRemove: _removeDelPhrase,
                     onPersist: _persistDel,
-                    intro: '−1 또는 "최근 1개 삭제" 때 이 중 하나를 읽어줍니다.\n'
+                    intro: '−1 또는 "최근 1개 삭제" 때 이 중 하나(글자=음성, 미디어=소리)를 재생합니다.\n'
                         '모두 비우면 기본 멘트로 돌아갑니다.',
                   ),
                   _voiceTab(),
@@ -1411,12 +1451,13 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     );
   }
 
-  /// +1/삭제 공용 멘트 편집 탭.
+  /// +1/삭제 공용 편집 탭(텍스트·오디오 혼합).
   Widget _phraseTab({
-    required List<TextEditingController> ctrls,
+    required List<_EditSound> items,
     required String hint,
     required String addLabel,
     required VoidCallback onAdd,
+    required Future<void> Function() onAddAudio,
     required void Function(int) onRemove,
     required Future<void> Function() onPersist,
     required String intro,
@@ -1431,45 +1472,89 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
               style: const TextStyle(
                   fontSize: 13, height: 1.5, color: Colors.grey)),
         ),
-        for (int i = 0; i < ctrls.length; i++)
+        for (int i = 0; i < items.length; i++)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 4, 8, 4),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: ctrls[i],
-                    decoration: InputDecoration(
-                      isDense: true,
-                      hintText: '$hint ${i + 1}',
-                      border: const OutlineInputBorder(),
-                    ),
-                    onChanged: (_) => onPersist(),
-                  ),
-                ),
-                IconButton(
-                  icon: const Icon(Icons.volume_up_outlined),
-                  tooltip: '미리듣기',
-                  onPressed: () {
-                    final t = ctrls[i].text.trim();
-                    if (t.isNotEmpty) BtRemoteService.previewSound(t);
-                  },
-                ),
-                IconButton(
-                  icon: const Icon(Icons.remove_circle_outline),
-                  tooltip: '삭제',
-                  onPressed: ctrls.length <= 1 ? null : () => onRemove(i),
-                ),
-              ],
-            ),
+            child: _soundRow(items, i, hint, onRemove, onPersist),
           ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-          child: OutlinedButton.icon(
-            onPressed: onAdd,
-            icon: const Icon(Icons.add),
-            label: Text(addLabel),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onAdd,
+                  icon: const Icon(Icons.add),
+                  label: Text(addLabel),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: onAddAudio,
+                  icon: const Icon(Icons.library_music_outlined),
+                  label: const Text('미디어 추가'),
+                ),
+              ),
+            ],
           ),
+        ),
+      ],
+    );
+  }
+
+  /// 항목 한 줄: 텍스트는 입력칸, 오디오는 파일명 표시. 공통으로 미리듣기·삭제.
+  Widget _soundRow(
+    List<_EditSound> items,
+    int i,
+    String hint,
+    void Function(int) onRemove,
+    Future<void> Function() onPersist,
+  ) {
+    final item = items[i];
+    final canRemove = items.length > 1;
+    final Widget content = item.isAudio
+        ? InputDecorator(
+            decoration: const InputDecoration(
+              isDense: true,
+              border: OutlineInputBorder(),
+              prefixIcon: Icon(Icons.audiotrack, size: 20),
+            ),
+            child: Text(
+              item.label.isNotEmpty ? item.label : '오디오 파일',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 14),
+            ),
+          )
+        : TextField(
+            controller: item.ctrl,
+            decoration: InputDecoration(
+              isDense: true,
+              hintText: '$hint ${i + 1}',
+              border: const OutlineInputBorder(),
+            ),
+            onChanged: (_) => onPersist(),
+          );
+    return Row(
+      children: [
+        Expanded(child: content),
+        IconButton(
+          icon: const Icon(Icons.volume_up_outlined),
+          tooltip: '미리듣기',
+          onPressed: () {
+            if (item.isAudio) {
+              BtRemoteService.previewAudio(item.value);
+            } else {
+              final t = item.ctrl!.text.trim();
+              if (t.isNotEmpty) BtRemoteService.previewSound(t);
+            }
+          },
+        ),
+        IconButton(
+          icon: const Icon(Icons.remove_circle_outline),
+          tooltip: '삭제',
+          onPressed: canRemove ? () => onRemove(i) : null,
         ),
       ],
     );
@@ -1556,6 +1641,7 @@ class _RemoteKeyMappingScreen extends StatefulWidget {
 class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
   Map<String, int> _map = {};
   bool _enabled = false;
+  bool _volHook = false;
 
   @override
   void initState() {
@@ -1566,7 +1652,8 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
   Future<void> _load() async {
     final m = await BtRemoteService.getKeyMap();
     final en = await BtRemoteService.getEnabled();
-    if (mounted) setState(() { _map = m; _enabled = en; });
+    final vh = await BtRemoteService.getVolHook();
+    if (mounted) setState(() { _map = m; _enabled = en; _volHook = vh; });
   }
 
   Future<void> _setEnabled(bool v) async {
@@ -1574,7 +1661,34 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
     await BtRemoteService.setEnabled(v);
   }
 
+  Future<void> _setVolHook(bool v) async {
+    setState(() => _volHook = v);
+    await BtRemoteService.setVolHook(v);
+  }
+
   static const _mediaCodes = {85, 126, 127, 87, 88, 86, 90, 89, 79};
+  static const _volumeCodes = {24, 25};
+
+  /// 화면 꺼짐·백그라운드에서 그 키가 들어올 수 있는지.
+  /// 미디어 키는 항상, 볼륨 키는 볼륨 후킹이 켜져 있을 때만.
+  bool _worksInBackground(int code) =>
+      _mediaCodes.contains(code) ||
+      (_volHook && _volumeCodes.contains(code));
+
+  /// 재생/정지 계열(play·pause·play_pause·headsethook)을 하나로 합쳐 비교.
+  /// 네이티브 CatchLogService.canonicalKey와 동일 기준이어야 중복 판정이 실제 동작과 맞는다.
+  int _canonical(int code) =>
+      const {85, 126, 127, 79}.contains(code) ? 85 : code;
+
+  /// 액션 키("add:0"/"rem:1"/"rem:last")를 사람이 읽는 라벨로.
+  String _actionLabel(String action) {
+    if (action == 'rem:last') return '최근 1개 삭제';
+    final idx = int.tryParse(action.split(':').last);
+    final name = (idx != null && idx >= 0 && idx < widget.species.length)
+        ? widget.species[idx]
+        : '어종';
+    return action.startsWith('add:') ? '$name +1' : '$name −1';
+  }
   String _keyLabel(int code) => switch (code) {
         85 || 126 || 127 || 79 => '재생/정지',
         87 => '다음곡',
@@ -1620,10 +1734,34 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
     await BtRemoteService.captureStop();
     final code = captured;
     if (code == null || !mounted) return;
+    // 중복 방지: 같은 버튼(정규화 기준)이 다른 액션에 이미 걸려 있으면 저장하지 않는다.
+    String? dupAction;
+    for (final e in _map.entries) {
+      if (e.key != action && _canonical(e.value) == _canonical(code)) {
+        dupAction = e.key;
+        break;
+      }
+    }
+    if (dupAction != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('이 버튼은 이미 "${_actionLabel(dupAction)}"에 등록되어 있어요. '
+            '다른 버튼을 사용하거나, 그 등록을 먼저 해제하세요.'),
+        duration: const Duration(seconds: 5),
+      ));
+      return;
+    }
     await BtRemoteService.setKey(action, code);
     if (!mounted) return;
     setState(() => _map[action] = code);
-    if (!isMedia) {
+    final isVolume = _volumeCodes.contains(code);
+    if (isVolume && !_volHook) {
+      // 볼륨 키인데 볼륨 후킹이 꺼져 있음 → 켜면 백그라운드에서도 동작함을 안내.
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('볼륨 버튼이네요. 아래 "볼륨 버튼 연동 사용"을 켜면 '
+            '화면이 꺼진 상태에서도 동작합니다.'),
+        duration: Duration(seconds: 5),
+      ));
+    } else if (!isMedia && !isVolume) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('이 버튼은 미디어 키가 아니라서 화면이 꺼지면 동작하지 않을 수 있어요. '
             '(카운터 화면이 켜져 있을 때만 동작)'),
@@ -1639,7 +1777,7 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
 
   Widget _actionRow(String action, String label, {String? hint}) {
     final code = _map[action];
-    final warn = code != null && !_mediaCodes.contains(code);
+    final warn = code != null && !_worksInBackground(code);
     return ListTile(
       dense: true,
       leading: Text(label,
@@ -1693,11 +1831,22 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
                       ? '지정한 버튼으로 카운트가 올라갑니다'
                       : '꺼져 있으면 버튼을 지정해도 동작하지 않습니다'),
                 ),
+                SwitchListTile(
+                  value: _volHook,
+                  onChanged: _setVolHook,
+                  secondary: const Icon(Icons.volume_up_outlined),
+                  title: const Text('볼륨 버튼 연동 사용'),
+                  subtitle: Text(_volHook
+                      ? '볼륨 +/− 버튼이 화면 꺼짐에서도 동작합니다 · 이 동안 음악 볼륨 조절은 안 됩니다'
+                      : '켜면 볼륨 버튼 리모컨을 백그라운드에서 쓸 수 있습니다'),
+                ),
                 const Padding(
                   padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
                   child: Text(
                     '블루투스 이어폰·리모컨 버튼으로 조과를 세어보세요.\n'
                     '• 재생/정지·다음곡 같은 "미디어 키"는 화면이 꺼진 주머니 속에서도 동작합니다.\n'
+                    '• 볼륨 +/− 버튼은 "볼륨 버튼 연동 사용"을 켜야 화면 꺼짐에서도 동작합니다 '
+                    '(켜는 동안 음악 볼륨 조절은 불가).\n'
                     '• 조과 기록 중에는 그 버튼이 카운트 전용이 됩니다(음악 소리는 계속 나지만 '
                     '버튼으로 곡 변경은 안 됩니다).',
                     style: TextStyle(fontSize: 13, height: 1.5),

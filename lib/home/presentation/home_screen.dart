@@ -419,7 +419,28 @@ class _BodyState extends ConsumerState<_Body> {
                   savePath: ref.read(settingsProvider).valueOrNull?.savePath ?? '',
                   galleryItems: galleryItems)
               : block is LocationStatus
-                  ? LocationStatusCard(status: block)
+                  ? LocationStatusCard(
+                      status: block,
+                      onStationChanged: (station) async {
+                        final updated = await ref
+                            .read(locationProvider.notifier)
+                            .applyStation(block, station);
+                        if (widget.onEditLocationSave != null) {
+                          await widget.onEditLocationSave!(index, updated);
+                        } else {
+                          final savePath = ref
+                                  .read(settingsProvider)
+                                  .valueOrNull
+                                  ?.savePath ??
+                              '';
+                          await ref
+                              .read(dayFileProvider(
+                                      todayMemoFilePath(savePath))
+                                  .notifier)
+                              .editBlock(index, updated);
+                        }
+                      },
+                    )
                   : const SizedBox.shrink(),
         );
       },

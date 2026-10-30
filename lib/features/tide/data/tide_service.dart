@@ -40,21 +40,24 @@ class TideService {
 
   /// [date]를 주면 그 날짜 기준(물때·만조/간조), 없으면 오늘 기준으로 조회한다.
   /// 수온은 해양 API 특성상 항상 현재값이다(과거 날짜엔 근사).
+  /// [station]을 주면 그 관측소로, 없으면 좌표에서 가장 가까운 관측소로 조회한다
+  /// (거리는 항상 조회 좌표 기준으로 계산).
   Future<TideResult?> getTideResult(
     double lat,
     double lng,
     String apiKey, {
     DateTime? date,
+    TideStation? station,
   }) async {
     final when = date ?? DateTime.now();
-    final station = _nearestStation(lat, lng);
-    final distKm = _haversine(lat, lng, station.latitude, station.longitude);
+    final chosen = station ?? _nearestStation(lat, lng);
+    final distKm = _haversine(lat, lng, chosen.latitude, chosen.longitude);
     final mulTaeLabel = _calcMulTaeLabel(when);
 
     final dateStr = _dateStr(when);
-    final tides = await _fetchTideEvents(station.code, dateStr, apiKey);
+    final tides = await _fetchTideEvents(chosen.code, dateStr, apiKey);
     // 사용자 위치가 내륙일 수 있으므로 해안 관측소 좌표로 수온 조회
-    final waterTemp = await _fetchWaterTemp(station.latitude, station.longitude);
+    final waterTemp = await _fetchWaterTemp(chosen.latitude, chosen.longitude);
 
     String? nextType;
     String? nextTime;
@@ -65,7 +68,7 @@ class TideService {
     }
 
     return TideResult(
-      station: station,
+      station: chosen,
       distanceKm: distKm,
       mulTaeLabel: mulTaeLabel,
       nextTideType: nextType,
