@@ -28,6 +28,7 @@ final restoreProgressProvider = StateProvider<(int, int)?>((_) => null);
 class BackupState {
   final bool enabled;
   final bool includeMedia;
+  final bool memoIncluded;
   final String? accountEmail;
   final DateTime? lastSyncAt;
   final bool? lastSyncSuccess;
@@ -35,6 +36,7 @@ class BackupState {
   const BackupState({
     this.enabled = false,
     this.includeMedia = false,
+    this.memoIncluded = true,
     this.accountEmail,
     this.lastSyncAt,
     this.lastSyncSuccess,
@@ -56,6 +58,7 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     return BackupState(
       enabled: settings.driveBackupEnabled,
       includeMedia: settings.driveBackupIncludeMedia,
+      memoIncluded: settings.driveBackupMemoIncluded,
       accountEmail: isSignedIn ? svc.accountEmail : null,
       lastSyncAt: settings.lastSyncAt,
       lastSyncSuccess: settings.lastSyncSuccess,
@@ -83,8 +86,13 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     );
   }
 
-  Future<void> setIncludeMedia(bool value) async {
-    await ref.read(settingsProvider.notifier).updateDriveBackup(includeMedia: value);
+  /// 동기화 범위 설정: 설정만(memo=false,media=false) / 설정+메모(memo=true,media=false)
+  /// / 설정+메모+사진(memo=true,media=true).
+  Future<void> setScope({required bool memoIncluded, required bool includeMedia}) async {
+    await ref.read(settingsProvider.notifier).updateDriveBackup(
+          memoIncluded: memoIncluded,
+          includeMedia: includeMedia,
+        );
   }
 
   /// 출퇴근/프리셋 설정 백업을 예약 — 3초 디바운스로 마지막 호출 1회만 업로드.
@@ -170,10 +178,38 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     );
   }
 
-  /// 메모 저장/삭제 후 호출 — Wi-Fi 확인 후 md 파일 업로드
+  /// 메모·사진은 올리지 않고 설정(출퇴근·카운터·워터마크)만 업로드.
+  Future<({bool ok, bool skippedNoWifi})> backupSettingsOnly() async {
+    final settings = await ref.read(settingsProvider.future);
+    if (!settings.driveBackupEnabled) return (ok: false, skippedNoWifi: false);
+    final svc = ref.read(driveBackupServiceProvider);
+    if (!await svc.isWifi()) return (ok: false, skippedNoWifi: true);
+    try {
+      await svc.uploadCommuteSettings(
+          jsonEncode(ref.read(settingsProvider.notifier).commuteBackupJson()));
+      await svc.uploadCounterSettings(
+          jsonEncode(await BtRemoteService.exportSoundConfig()));
+      for (final name in await BtRemoteService.listSoundFiles()) {
+        final bytes = await BtRemoteService.readSoundBytes(name);
+        if (bytes != null && bytes.isNotEmpty) {
+          await svc.syncSoundBytes(name, bytes);
+        }
+      }
+      await svc.uploadWatermarkSettings(
+          jsonEncode(ref.read(settingsProvider.notifier).watermarkBackupJson()));
+      await _updateSyncStatus(true);
+      return (ok: true, skippedNoWifi: false);
+    } catch (_) {
+      await _updateSyncStatus(false);
+      return (ok: false, skippedNoWifi: false);
+    }
+  }
+
+  /// 메모 저장/삭제 후 호출 — Wi-Fi 확인 후 md 파일 업로드.
+  /// 동기화 범위가 "설정만"이면 메모는 자동 백업하지 않는다.
   Future<void> syncMdFile(DateTime date, String savePath) async {
     final settings = await ref.read(settingsProvider.future);
-    if (!settings.driveBackupEnabled) return;
+    if (!settings.driveBackupEnabled || !settings.driveBackupMemoIncluded) return;
     final svc = ref.read(driveBackupServiceProvider);
     if (!await svc.isWifi()) return;
     try {

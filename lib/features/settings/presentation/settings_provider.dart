@@ -637,6 +637,7 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
   Future<void> updateDriveBackup({
     bool? enabled,
     bool? includeMedia,
+    bool? memoIncluded,
     DateTime? lastSyncAt,
     bool? lastSyncSuccess,
     bool clearLastSync = false,
@@ -646,6 +647,7 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     final updated = current.copyWith(
       driveBackupEnabled: enabled,
       driveBackupIncludeMedia: includeMedia,
+      driveBackupMemoIncluded: memoIncluded,
       lastSyncAt: lastSyncAt,
       lastSyncSuccess: lastSyncSuccess,
       clearLastSync: clearLastSync,

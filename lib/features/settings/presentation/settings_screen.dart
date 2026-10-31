@@ -2518,6 +2518,15 @@ ListTileThemeData _subtitleTheme(BuildContext ctx) => ListTileThemeData(
 
 // ── 백업 하위 화면 ───────────────────────────────────────────────
 
+/// 백업/복원 동기화 범위. 설정만 ⊂ 설정+메모 ⊂ 설정+메모+사진.
+enum _SyncScope { settings, memo, photo }
+
+String _scopeLabel(_SyncScope s) => switch (s) {
+      _SyncScope.settings => '설정만',
+      _SyncScope.memo => '설정 + 메모',
+      _SyncScope.photo => '설정 + 메모 + 사진',
+    };
+
 class _BackupSubScreen extends ConsumerWidget {
   const _BackupSubScreen();
 
@@ -2538,6 +2547,9 @@ class _BackupSubScreen extends ConsumerWidget {
         error: (e, _) => Center(child: Text('오류: $e')),
         data: (backup) {
           final settings = settingsAsync.valueOrNull;
+          final scope = !backup.memoIncluded
+              ? _SyncScope.settings
+              : (backup.includeMedia ? _SyncScope.photo : _SyncScope.memo);
           return ListTileTheme(
             data: _subtitleTheme(context),
             child: ListView(
@@ -2572,25 +2584,32 @@ class _BackupSubScreen extends ConsumerWidget {
                     child: Text('동기화 범위',
                         style: Theme.of(context).textTheme.labelMedium),
                   ),
-                  RadioGroup<bool>(
-                    groupValue: backup.includeMedia,
+                  RadioGroup<_SyncScope>(
+                    groupValue: scope,
                     onChanged: (v) {
-                      if (v != null) {
-                        ref.read(backupProvider.notifier).setIncludeMedia(v);
-                      }
+                      if (v == null) return;
+                      ref.read(backupProvider.notifier).setScope(
+                            memoIncluded: v != _SyncScope.settings,
+                            includeMedia: v == _SyncScope.photo,
+                          );
                     },
                     child: const Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        RadioListTile<bool>(
-                          title: Text('메모 파일만'),
-                          subtitle: Text('.md 파일만 동기화 (빠름)'),
-                          value: false,
+                        RadioListTile<_SyncScope>(
+                          title: Text('설정만'),
+                          subtitle: Text('추임새·워터마크 등 앱 설정만 (가장 빠름)'),
+                          value: _SyncScope.settings,
                         ),
-                        RadioListTile<bool>(
-                          title: Text('이미지·동영상 포함'),
-                          subtitle: Text('사진과 동영상도 함께 동기화'),
-                          value: true,
+                        RadioListTile<_SyncScope>(
+                          title: Text('설정 + 메모'),
+                          subtitle: Text('설정과 메모(.md) 기록까지'),
+                          value: _SyncScope.memo,
+                        ),
+                        RadioListTile<_SyncScope>(
+                          title: Text('설정 + 메모 + 사진'),
+                          subtitle: Text('사진·동영상까지 전부 (가장 느림)'),
+                          value: _SyncScope.photo,
                         ),
                       ],
                     ),
@@ -2612,7 +2631,7 @@ class _BackupSubScreen extends ConsumerWidget {
                   ListTile(
                     leading: Icon(Icons.cloud_upload_outlined,
                         color: isBacking ? Theme.of(context).disabledColor : null),
-                    title: const Text('지금 전체 백업'),
+                    title: const Text('이 범위로 백업'),
                     subtitle: isBacking
                         ? Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2629,16 +2648,17 @@ class _BackupSubScreen extends ConsumerWidget {
                                   : '준비 중...'),
                             ],
                           )
-                        : const Text('모든 메모 파일을 드라이브에 올립니다'),
+                        : Text('${_scopeLabel(scope)}을(를) 드라이브에 올립니다'),
                     trailing: isBacking ? null : const Icon(Icons.chevron_right),
                     onTap: isBacking
                         ? null
-                        : () => _showBackupAllDialog(context, ref, settings?.savePath ?? ''),
+                        : () => _showBackupDialog(
+                            context, ref, scope, settings?.savePath ?? ''),
                   ),
                   ListTile(
                     leading: Icon(Icons.restore_outlined,
                         color: isRestoring ? Theme.of(context).disabledColor : null),
-                    title: const Text('지금 복원하기'),
+                    title: const Text('이 범위로 복원'),
                     subtitle: isRestoring
                         ? Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
@@ -2655,22 +2675,12 @@ class _BackupSubScreen extends ConsumerWidget {
                                   : '준비 중...'),
                             ],
                           )
-                        : const Text('드라이브 데이터를 로컬과 병합합니다'),
+                        : Text('드라이브에서 ${_scopeLabel(scope)}을(를) 가져옵니다'),
                     trailing: isRestoring ? null : const Icon(Icons.chevron_right),
                     onTap: isRestoring
                         ? null
-                        : () => _showRestoreDialog(context, ref, settings?.savePath ?? ''),
-                  ),
-                  ListTile(
-                    leading: Icon(Icons.tune_outlined,
-                        color: isRestoring ? Theme.of(context).disabledColor : null),
-                    title: const Text('설정만 복구'),
-                    subtitle: const Text(
-                        '메모·사진은 그대로 두고 출퇴근·카운터·워터마크 설정만 복구합니다'),
-                    trailing: isRestoring ? null : const Icon(Icons.chevron_right),
-                    onTap: isRestoring
-                        ? null
-                        : () => _showSettingsRestoreDialog(context, ref),
+                        : () => _showRestoreDialog(
+                            context, ref, scope, settings?.savePath ?? ''),
                   ),
                 ],
               ],
@@ -2681,8 +2691,9 @@ class _BackupSubScreen extends ConsumerWidget {
     );
   }
 
-  Future<void> _showBackupAllDialog(BuildContext context, WidgetRef ref, String savePath) async {
-    if (savePath.isEmpty) {
+  Future<void> _showBackupDialog(
+      BuildContext context, WidgetRef ref, _SyncScope scope, String savePath) async {
+    if (scope != _SyncScope.settings && savePath.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('먼저 메모 저장 위치를 설정해 주세요')),
       );
@@ -2691,8 +2702,10 @@ class _BackupSubScreen extends ConsumerWidget {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
-        title: const Text('전체 백업'),
-        content: const Text('모든 메모 파일을 구글 드라이브에 업로드합니다.\nWi-Fi 연결이 필요합니다.'),
+        title: const Text('백업'),
+        content: Text(
+          '${_scopeLabel(scope)}을(를) 구글 드라이브에 올립니다.\nWi-Fi 연결이 필요합니다.',
+        ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -2707,7 +2720,18 @@ class _BackupSubScreen extends ConsumerWidget {
     );
     if (confirmed != true || !context.mounted) return;
 
-    final result = await ref.read(backupProvider.notifier).backupAll(savePath);
+    final notifier = ref.read(backupProvider.notifier);
+    if (scope == _SyncScope.settings) {
+      final r = await notifier.backupSettingsOnly();
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(r.skippedNoWifi
+            ? 'Wi-Fi에 연결되지 않아 백업을 건너뜁니다'
+            : (r.ok ? '설정 백업 완료' : '백업 실패')),
+      ));
+      return;
+    }
+    final result = await notifier.backupAll(savePath);
     if (!context.mounted) return;
     if (result.skippedNoWifi) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -2724,24 +2748,22 @@ class _BackupSubScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _showRestoreDialog(BuildContext context, WidgetRef ref, String savePath) async {
-    if (savePath.isEmpty) {
+  Future<void> _showRestoreDialog(
+      BuildContext context, WidgetRef ref, _SyncScope scope, String savePath) async {
+    if (scope != _SyncScope.settings && savePath.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('먼저 메모 저장 위치를 설정해 주세요')),
       );
       return;
     }
-    final includeMedia =
-        ref.read(backupProvider).valueOrNull?.includeMedia ?? false;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (_) => AlertDialog(
         title: const Text('복원'),
-        content: Text(
-          '드라이브 데이터를 로컬과 날짜 기준으로 병합합니다.\n'
-          '로컬에만 있는 데이터는 유지됩니다.\n\n'
-          '${includeMedia ? "동기화 범위: 메모 + 이미지·동영상" : "동기화 범위: 메모 파일만 (이미지·동영상 제외)"}',
-        ),
+        content: Text(scope == _SyncScope.settings
+            ? '메모·사진은 그대로 두고\n설정(출퇴근·카운터·워터마크)만\n드라이브 백업에서 복원합니다.'
+            : '드라이브의 ${_scopeLabel(scope)}을(를) 로컬과 날짜 기준으로 병합합니다.\n'
+                '로컬에만 있는 데이터는 유지됩니다.'),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
@@ -2756,75 +2778,43 @@ class _BackupSubScreen extends ConsumerWidget {
     );
     if (confirmed != true || !context.mounted) return;
 
+    final notifier = ref.read(backupProvider.notifier);
     try {
-      final result = await ref.read(backupProvider.notifier).restore(savePath);
-      if (context.mounted) {
-        final mediaAlreadyLocal = result.mediaDriveTotal - result.mediaRestored;
+      if (scope == _SyncScope.settings) {
+        final r = await notifier.restoreSettingsOnly();
+        if (!context.mounted) return;
+        if (!r.any) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('복원할 설정 백업이 없습니다')),
+          );
+          return;
+        }
         final parts = <String>[];
-        if (result.mediaRestored > 0) parts.add('미디어 ${result.mediaRestored}개 복원');
-        if (mediaAlreadyLocal > 0) parts.add('$mediaAlreadyLocal개 이미 로컬');
-        if (result.commuteRestored) parts.add('출퇴근 지점 복원');
-        if (result.counterRestored) parts.add('카운터 설정 복원');
-        if (result.watermarkRestored) parts.add('워터마크 복원');
-        final mediaPart = parts.isNotEmpty ? ', ${parts.join(', ')}' : '';
+        if (r.commuteRestored) parts.add('출퇴근');
+        if (r.counterRestored) parts.add('카운터');
+        if (r.watermarkRestored) parts.add('워터마크');
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('메모 ${result.filesRestored}개 복원$mediaPart')),
-        );
-      }
-    } catch (e) {
-      if (context.mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('복원 실패: $e')),
-        );
-      }
-    }
-  }
-
-  /// 메모·미디어는 건드리지 않고 설정(출퇴근·카운터·워터마크)만 복구.
-  Future<void> _showSettingsRestoreDialog(BuildContext context, WidgetRef ref) async {
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (_) => AlertDialog(
-        title: const Text('설정만 복구'),
-        content: const Text(
-          '메모·사진·동영상은 건드리지 않고\n'
-          '출퇴근·카운터(추임새)·워터마크 설정만\n'
-          '드라이브 백업에서 복구합니다.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('취소'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('복구'),
-          ),
-        ],
-      ),
-    );
-    if (confirmed != true || !context.mounted) return;
-
-    try {
-      final r = await ref.read(backupProvider.notifier).restoreSettingsOnly();
-      if (!context.mounted) return;
-      if (!r.any) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('복구할 설정 백업이 없습니다')),
+          SnackBar(content: Text('${parts.join(', ')} 설정 복원 완료')),
         );
         return;
       }
+      final result = await notifier.restore(savePath);
+      if (!context.mounted) return;
+      final mediaAlreadyLocal = result.mediaDriveTotal - result.mediaRestored;
       final parts = <String>[];
-      if (r.commuteRestored) parts.add('출퇴근');
-      if (r.counterRestored) parts.add('카운터');
-      if (r.watermarkRestored) parts.add('워터마크');
+      if (result.mediaRestored > 0) parts.add('미디어 ${result.mediaRestored}개 복원');
+      if (mediaAlreadyLocal > 0) parts.add('$mediaAlreadyLocal개 이미 로컬');
+      if (result.commuteRestored) parts.add('출퇴근 지점 복원');
+      if (result.counterRestored) parts.add('카운터 설정 복원');
+      if (result.watermarkRestored) parts.add('워터마크 복원');
+      final extra = parts.isNotEmpty ? ', ${parts.join(', ')}' : '';
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('${parts.join(', ')} 설정 복구 완료')),
+        SnackBar(content: Text('메모 ${result.filesRestored}개 복원$extra')),
       );
     } catch (e) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('설정 복구 실패: $e')),
+          SnackBar(content: Text('복원 실패: $e')),
         );
       }
     }
