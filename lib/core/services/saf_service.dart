@@ -123,4 +123,15 @@ class SafService {
     });
     return bytes;
   }
+
+  /// 공개 저장소(DCIM 등) 이미지의 절대경로를 MediaStore로 읽는다.
+  /// 앱 재설치로 UID가 바뀌어 기존 공개 사진을 File로 못 읽을 때의 폴백. 없으면 null.
+  Future<Uint8List?> readImageViaMediaStore(String path) async {
+    try {
+      return await _channel
+          .invokeMethod<Uint8List>('readImageViaMediaStore', {'path': path});
+    } catch (_) {
+      return null;
+    }
+  }
 }
