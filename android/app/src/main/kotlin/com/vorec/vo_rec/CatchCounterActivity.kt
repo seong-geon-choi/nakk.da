@@ -215,6 +215,8 @@ class CatchCounterActivity : Activity() {
         }
         // 빈 배경(버튼·카운터가 아닌 영역) 탭 → 재생 중인 추임새/TTS 중지.
         val bgTap = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
+            // onDown에서 true를 반환해야 이후 UP 이벤트가 전달되어 onSingleTapUp이 호출된다.
+            override fun onDown(e: MotionEvent) = true
             override fun onSingleTapUp(e: MotionEvent): Boolean { stopSound(); return true }
         })
         @Suppress("ClickableViewAccessibility")
