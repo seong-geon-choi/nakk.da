@@ -167,41 +167,54 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
   }
 
   /// 메모·미디어는 건드리지 않고 설정(출퇴근·카운터·워터마크)만 복원.
+  /// 설정은 개수 집계가 없어 진행바는 무한(바쁨) 형태로 표시한다.
   Future<SettingsRestoreResult> restoreSettingsOnly() async {
-    final commute = await restoreCommuteSettings();
-    final counter = await restoreCounterSettings();
-    final watermark = await restoreWatermarkSettings();
-    return SettingsRestoreResult(
-      commuteRestored: commute,
-      counterRestored: counter,
-      watermarkRestored: watermark,
-    );
+    final progress = ref.read(restoreProgressProvider.notifier);
+    progress.state = (0, 0);
+    try {
+      final commute = await restoreCommuteSettings();
+      final counter = await restoreCounterSettings();
+      final watermark = await restoreWatermarkSettings();
+      return SettingsRestoreResult(
+        commuteRestored: commute,
+        counterRestored: counter,
+        watermarkRestored: watermark,
+      );
+    } finally {
+      progress.state = null;
+    }
   }
 
   /// 메모·사진은 올리지 않고 설정(출퇴근·카운터·워터마크)만 업로드.
   Future<({bool ok, bool skippedNoWifi})> backupSettingsOnly() async {
-    final settings = await ref.read(settingsProvider.future);
-    if (!settings.driveBackupEnabled) return (ok: false, skippedNoWifi: false);
-    final svc = ref.read(driveBackupServiceProvider);
-    if (!await svc.isWifi()) return (ok: false, skippedNoWifi: true);
+    final progress = ref.read(backupProgressProvider.notifier);
+    progress.state = (0, 0);
     try {
-      await svc.uploadCommuteSettings(
-          jsonEncode(ref.read(settingsProvider.notifier).commuteBackupJson()));
-      await svc.uploadCounterSettings(
-          jsonEncode(await BtRemoteService.exportSoundConfig()));
-      for (final name in await BtRemoteService.listSoundFiles()) {
-        final bytes = await BtRemoteService.readSoundBytes(name);
-        if (bytes != null && bytes.isNotEmpty) {
-          await svc.syncSoundBytes(name, bytes);
+      final settings = await ref.read(settingsProvider.future);
+      if (!settings.driveBackupEnabled) return (ok: false, skippedNoWifi: false);
+      final svc = ref.read(driveBackupServiceProvider);
+      if (!await svc.isWifi()) return (ok: false, skippedNoWifi: true);
+      try {
+        await svc.uploadCommuteSettings(
+            jsonEncode(ref.read(settingsProvider.notifier).commuteBackupJson()));
+        await svc.uploadCounterSettings(
+            jsonEncode(await BtRemoteService.exportSoundConfig()));
+        for (final name in await BtRemoteService.listSoundFiles()) {
+          final bytes = await BtRemoteService.readSoundBytes(name);
+          if (bytes != null && bytes.isNotEmpty) {
+            await svc.syncSoundBytes(name, bytes);
+          }
         }
+        await svc.uploadWatermarkSettings(
+            jsonEncode(ref.read(settingsProvider.notifier).watermarkBackupJson()));
+        await _updateSyncStatus(true);
+        return (ok: true, skippedNoWifi: false);
+      } catch (_) {
+        await _updateSyncStatus(false);
+        return (ok: false, skippedNoWifi: false);
       }
-      await svc.uploadWatermarkSettings(
-          jsonEncode(ref.read(settingsProvider.notifier).watermarkBackupJson()));
-      await _updateSyncStatus(true);
-      return (ok: true, skippedNoWifi: false);
-    } catch (_) {
-      await _updateSyncStatus(false);
-      return (ok: false, skippedNoWifi: false);
+    } finally {
+      progress.state = null;
     }
   }
 
