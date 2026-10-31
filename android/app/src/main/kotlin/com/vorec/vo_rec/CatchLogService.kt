@@ -15,6 +15,8 @@ import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.documentfile.provider.DocumentFile
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.wearable.PutDataMapRequest
+import com.google.android.gms.wearable.Wearable
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -98,6 +100,9 @@ class CatchLogService : Service() {
         const val ACTION_COUNTS_CHANGED = "com.sgchoisg.nakkda.COUNTS_CHANGED"
         // 설정에서 연동 on/off를 바꿨을 때 실행 중인 서비스가 세션을 즉시 재동기화하도록 하는 액션.
         const val ACTION_SYNC_BT = "com.sgchoisg.nakkda.SYNC_BT"
+
+        // 현재 총 조과 수를 워치로 내보내는 Data Layer 아이템 경로(워치 화면 실시간 표시용).
+        const val PATH_WATCH_COUNT = "/nakkda/count/state"
 
         /** 블루투스 버튼 연동이 사용자에 의해 켜져 있는지(기본 꺼짐). */
         fun isBtEnabled(context: Context): Boolean =
@@ -642,6 +647,20 @@ class CatchLogService : Service() {
         try {
             sendBroadcast(Intent(ACTION_COUNTS_CHANGED).setPackage(packageName))
         } catch (_: Exception) {}
+        pushCountToWatch()
+    }
+
+    /** 현재 총 조과 수를 Data Layer로 워치에 push(워치 화면 실시간 표시용). io 스레드에서 호출. */
+    private fun pushCountToWatch() {
+        try {
+            val total = loadCountsFromFile(this).values.sum()
+            val req = PutDataMapRequest.create(PATH_WATCH_COUNT).apply {
+                dataMap.putInt("total", total)
+                // 같은 값이어도 아이템이 갱신되도록 타임스탬프를 포함(동기화 트리거).
+                dataMap.putLong("ts", System.currentTimeMillis())
+            }.asPutDataRequest().setUrgent()
+            Wearable.getDataClient(this).putDataItem(req)
+        } catch (_: Exception) {}
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -679,7 +698,7 @@ class CatchLogService : Service() {
                     .putBoolean(PREFS_ACTIVE_KEY, true)
                     .apply()
                 syncMediaButton()
-                io.execute { updateNotification() }
+                io.execute { updateNotification(); pushCountToWatch() }
                 return START_STICKY
             }
         }

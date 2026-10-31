@@ -21,6 +21,8 @@ plugins {
     id("dev.flutter.flutter-plugin-loader") version "1.0.0"
     id("com.android.application") version "8.11.1" apply false
     id("org.jetbrains.kotlin.android") version "2.2.20" apply false
+    // Wear 모듈의 Jetpack Compose 컴파일러(Kotlin 2.0+는 별도 플러그인으로 제공).
+    id("org.jetbrains.kotlin.plugin.compose") version "2.2.20" apply false
 }
 
-include(":app")
+include(":app", ":wear")

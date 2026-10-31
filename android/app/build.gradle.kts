@@ -71,6 +71,8 @@ dependencies {
     implementation("com.google.ar:core:1.44.0")
     implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("com.google.android.gms:play-services-location:21.3.0")
+    // Wear OS 워치 연동(Data Layer: MessageClient/WearableListenerService).
+    implementation("com.google.android.gms:play-services-wearable:18.2.0")
 }
 
 flutter {
