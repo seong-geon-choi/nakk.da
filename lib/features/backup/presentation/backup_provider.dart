@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math' show min;
+import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../data/drive_backup_service.dart';
@@ -9,6 +10,7 @@ import '../../settings/presentation/settings_provider.dart';
 import '../../memo/data/md_serializer.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/services/tracking_service.dart';
+import '../../../core/services/bt_remote_service.dart';
 
 final driveBackupServiceProvider = Provider((_) => DriveBackupService());
 
@@ -26,6 +28,7 @@ final restoreProgressProvider = StateProvider<(int, int)?>((_) => null);
 class BackupState {
   final bool enabled;
   final bool includeMedia;
+  final bool memoIncluded;
   final String? accountEmail;
   final DateTime? lastSyncAt;
   final bool? lastSyncSuccess;
@@ -33,6 +36,7 @@ class BackupState {
   const BackupState({
     this.enabled = false,
     this.includeMedia = false,
+    this.memoIncluded = true,
     this.accountEmail,
     this.lastSyncAt,
     this.lastSyncSuccess,
@@ -54,6 +58,7 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     return BackupState(
       enabled: settings.driveBackupEnabled,
       includeMedia: settings.driveBackupIncludeMedia,
+      memoIncluded: settings.driveBackupMemoIncluded,
       accountEmail: isSignedIn ? svc.accountEmail : null,
       lastSyncAt: settings.lastSyncAt,
       lastSyncSuccess: settings.lastSyncSuccess,
@@ -81,8 +86,13 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     );
   }
 
-  Future<void> setIncludeMedia(bool value) async {
-    await ref.read(settingsProvider.notifier).updateDriveBackup(includeMedia: value);
+  /// 동기화 범위 설정: 설정만(memo=false,media=false) / 설정+메모(memo=true,media=false)
+  /// / 설정+메모+사진(memo=true,media=true).
+  Future<void> setScope({required bool memoIncluded, required bool includeMedia}) async {
+    await ref.read(settingsProvider.notifier).updateDriveBackup(
+          memoIncluded: memoIncluded,
+          includeMedia: includeMedia,
+        );
   }
 
   /// 출퇴근/프리셋 설정 백업을 예약 — 3초 디바운스로 마지막 호출 1회만 업로드.
@@ -121,10 +131,98 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     }
   }
 
-  /// 메모 저장/삭제 후 호출 — Wi-Fi 확인 후 md 파일 업로드
+  /// 드라이브의 카운터 효과음/추임새 설정(+오디오 파일)을 복원 — 적용되면 true.
+  Future<bool> restoreCounterSettings() async {
+    final svc = ref.read(driveBackupServiceProvider);
+    try {
+      // 오디오 파일을 먼저 내려받아 catch_sounds/에 복원(설정의 파일명 참조가 유효하도록).
+      for (final f in await svc.listSoundFiles()) {
+        final bytes = await svc.downloadSoundFile(f.id);
+        if (bytes != null && bytes.isNotEmpty) {
+          await BtRemoteService.writeSoundBytes(f.name, Uint8List.fromList(bytes));
+        }
+      }
+      final raw = await svc.downloadCounterSettings();
+      if (raw == null) return false;
+      await BtRemoteService.importSoundConfig(jsonDecode(raw) as Map<String, dynamic>);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 드라이브의 워터마크 템플릿(디자인) 설정을 복원 — 적용되면 true.
+  Future<bool> restoreWatermarkSettings() async {
+    final svc = ref.read(driveBackupServiceProvider);
+    try {
+      final raw = await svc.downloadWatermarkSettings();
+      if (raw == null) return false;
+      await ref
+          .read(settingsProvider.notifier)
+          .restoreWatermarkFromJson(jsonDecode(raw) as Map<String, dynamic>);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 메모·미디어는 건드리지 않고 설정(출퇴근·카운터·워터마크)만 복원.
+  /// 설정은 개수 집계가 없어 진행바는 무한(바쁨) 형태로 표시한다.
+  Future<SettingsRestoreResult> restoreSettingsOnly() async {
+    final progress = ref.read(restoreProgressProvider.notifier);
+    progress.state = (0, 0);
+    try {
+      final commute = await restoreCommuteSettings();
+      final counter = await restoreCounterSettings();
+      final watermark = await restoreWatermarkSettings();
+      return SettingsRestoreResult(
+        commuteRestored: commute,
+        counterRestored: counter,
+        watermarkRestored: watermark,
+      );
+    } finally {
+      progress.state = null;
+    }
+  }
+
+  /// 메모·사진은 올리지 않고 설정(출퇴근·카운터·워터마크)만 업로드.
+  Future<({bool ok, bool skippedNoWifi})> backupSettingsOnly() async {
+    final progress = ref.read(backupProgressProvider.notifier);
+    progress.state = (0, 0);
+    try {
+      final settings = await ref.read(settingsProvider.future);
+      if (!settings.driveBackupEnabled) return (ok: false, skippedNoWifi: false);
+      final svc = ref.read(driveBackupServiceProvider);
+      if (!await svc.isWifi()) return (ok: false, skippedNoWifi: true);
+      try {
+        await svc.uploadCommuteSettings(
+            jsonEncode(ref.read(settingsProvider.notifier).commuteBackupJson()));
+        await svc.uploadCounterSettings(
+            jsonEncode(await BtRemoteService.exportSoundConfig()));
+        for (final name in await BtRemoteService.listSoundFiles()) {
+          final bytes = await BtRemoteService.readSoundBytes(name);
+          if (bytes != null && bytes.isNotEmpty) {
+            await svc.syncSoundBytes(name, bytes);
+          }
+        }
+        await svc.uploadWatermarkSettings(
+            jsonEncode(ref.read(settingsProvider.notifier).watermarkBackupJson()));
+        await _updateSyncStatus(true);
+        return (ok: true, skippedNoWifi: false);
+      } catch (_) {
+        await _updateSyncStatus(false);
+        return (ok: false, skippedNoWifi: false);
+      }
+    } finally {
+      progress.state = null;
+    }
+  }
+
+  /// 메모 저장/삭제 후 호출 — Wi-Fi 확인 후 md 파일 업로드.
+  /// 동기화 범위가 "설정만"이면 메모는 자동 백업하지 않는다.
   Future<void> syncMdFile(DateTime date, String savePath) async {
     final settings = await ref.read(settingsProvider.future);
-    if (!settings.driveBackupEnabled) return;
+    if (!settings.driveBackupEnabled || !settings.driveBackupMemoIncluded) return;
     final svc = ref.read(driveBackupServiceProvider);
     if (!await svc.isWifi()) return;
     try {
@@ -286,6 +384,24 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
             jsonEncode(ref.read(settingsProvider.notifier).commuteBackupJson()));
       } catch (_) {}
 
+      // 카운터 효과음/추임새 설정 + 오디오 파일도 함께 업로드(용량 작아 항상 포함)
+      try {
+        await svc.uploadCounterSettings(
+            jsonEncode(await BtRemoteService.exportSoundConfig()));
+        for (final name in await BtRemoteService.listSoundFiles()) {
+          final bytes = await BtRemoteService.readSoundBytes(name);
+          if (bytes != null && bytes.isNotEmpty) {
+            await svc.syncSoundBytes(name, bytes);
+          }
+        }
+      } catch (_) {}
+
+      // 워터마크 템플릿(디자인) 설정도 함께 업로드
+      try {
+        await svc.uploadWatermarkSettings(
+            jsonEncode(ref.read(settingsProvider.notifier).watermarkBackupJson()));
+      } catch (_) {}
+
       await _saveManifest(manifest);
       await _updateSyncStatus(succeeded + skipped == total);
       return BackupAllResult(total: total, succeeded: succeeded, skipped: skipped);
@@ -352,6 +468,10 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
 
       // 출퇴근 설정(지점 포함) 먼저 복원
       final commuteRestored = await restoreCommuteSettings();
+      // 카운터 효과음/추임새 설정(+오디오 파일) 복원
+      final counterRestored = await restoreCounterSettings();
+      // 워터마크 템플릿(디자인) 복원
+      final watermarkRestored = await restoreWatermarkSettings();
 
       // 전체 복원 대상 파악 (total 확정)
       final mdFiles = await svc.listMdFiles();
@@ -439,6 +559,8 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
         mediaRestored: mediaRestored,
         mediaDriveTotal: driveMediaFiles.length,
         commuteRestored: commuteRestored,
+        counterRestored: counterRestored,
+        watermarkRestored: watermarkRestored,
       );
     } finally {
       progress.state = null;
@@ -555,12 +677,30 @@ class RestoreResult {
   final int mediaRestored;
   final int mediaDriveTotal;
   final bool commuteRestored;
+  final bool counterRestored;
+  final bool watermarkRestored;
   const RestoreResult({
     required this.filesRestored,
     this.mediaRestored = 0,
     this.mediaDriveTotal = 0,
     this.commuteRestored = false,
+    this.counterRestored = false,
+    this.watermarkRestored = false,
   });
+}
+
+/// 설정만 복원(메모·미디어 제외) 결과.
+class SettingsRestoreResult {
+  final bool commuteRestored;
+  final bool counterRestored;
+  final bool watermarkRestored;
+  const SettingsRestoreResult({
+    this.commuteRestored = false,
+    this.counterRestored = false,
+    this.watermarkRestored = false,
+  });
+
+  bool get any => commuteRestored || counterRestored || watermarkRestored;
 }
 
 class BackupAllResult {

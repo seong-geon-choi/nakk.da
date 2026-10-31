@@ -552,6 +552,10 @@ class AppSettings {
   final double shakeThresholdG; // 흔들기 감지 가속도 임계값(G), 2.5~5.0
   final bool driveBackupEnabled;
   final bool driveBackupIncludeMedia;
+  // 백업/복원 범위에 메모(.md)를 포함할지. false면 설정만 동기화.
+  // 설정만=memo false·media false / 설정+메모=memo true·media false /
+  // 설정+메모+사진=memo true·media true.
+  final bool driveBackupMemoIncluded;
   final DateTime? lastSyncAt;
   final bool? lastSyncSuccess;
   final List<String> fishSpecies; // 어종 입력 목록 (사용자 편집 가능)
@@ -648,6 +652,7 @@ class AppSettings {
     this.shakeThresholdG = 3.5,
     this.driveBackupEnabled = false,
     this.driveBackupIncludeMedia = false,
+    this.driveBackupMemoIncluded = true,
     this.lastSyncAt,
     this.lastSyncSuccess,
     List<String>? fishSpecies,
@@ -716,6 +721,7 @@ class AppSettings {
     double? shakeThresholdG,
     bool? driveBackupEnabled,
     bool? driveBackupIncludeMedia,
+    bool? driveBackupMemoIncluded,
     DateTime? lastSyncAt,
     bool? lastSyncSuccess,
     bool clearLastSync = false,
@@ -775,6 +781,7 @@ class AppSettings {
       shakeThresholdG: shakeThresholdG ?? this.shakeThresholdG,
       driveBackupEnabled: driveBackupEnabled ?? this.driveBackupEnabled,
       driveBackupIncludeMedia: driveBackupIncludeMedia ?? this.driveBackupIncludeMedia,
+      driveBackupMemoIncluded: driveBackupMemoIncluded ?? this.driveBackupMemoIncluded,
       lastSyncAt: clearLastSync ? null : (lastSyncAt ?? this.lastSyncAt),
       lastSyncSuccess: clearLastSync ? null : (lastSyncSuccess ?? this.lastSyncSuccess),
       fishSpecies: fishSpecies ?? this.fishSpecies,

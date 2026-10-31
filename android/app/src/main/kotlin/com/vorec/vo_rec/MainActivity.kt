@@ -845,6 +845,19 @@ class MainActivity : FlutterActivity() {
                     if (name != null) CatchLogService.deleteSoundFile(this, name)
                     result.success(null)
                 }
+                "listSoundFiles" -> {
+                    result.success(CatchLogService.listSoundFiles(this))
+                }
+                "readSoundBytes" -> {
+                    val name = call.argument<String>("name")
+                    result.success(if (name != null) CatchLogService.readSoundBytes(this, name) else null)
+                }
+                "writeSoundBytes" -> {
+                    val name = call.argument<String>("name")
+                    val bytes = call.argument<ByteArray>("bytes")
+                    if (name != null && bytes != null) CatchLogService.writeSoundBytes(this, name, bytes)
+                    result.success(null)
+                }
                 "getSoundTone" -> {
                     result.success(mapOf(
                         "pitch" to CatchLogService.soundPitch(this).toDouble(),
