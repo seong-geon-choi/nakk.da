@@ -230,6 +230,22 @@ class CatchLogService : Service() {
 
         fun soundFile(context: Context, name: String): File = File(soundsDir(context), name)
 
+        /** 백업용: 저장된 오디오 추임새 파일명 목록. */
+        fun listSoundFiles(context: Context): List<String> =
+            soundsDir(context).listFiles()?.filter { it.isFile }?.map { it.name } ?: emptyList()
+
+        /** 백업용: 저장 오디오 파일 바이트(없으면 null). */
+        fun readSoundBytes(context: Context, name: String): ByteArray? =
+            try { soundFile(context, name).takeIf { it.exists() }?.readBytes() } catch (_: Exception) { null }
+
+        /** 복원용: 오디오 바이트를 저장 파일명으로 기록(이미 있으면 유지). */
+        fun writeSoundBytes(context: Context, name: String, bytes: ByteArray) {
+            try {
+                val f = soundFile(context, name)
+                if (!f.exists()) f.writeBytes(bytes)
+            } catch (_: Exception) {}
+        }
+
         /** [srcPath]의 오디오를 내부 저장소로 복사하고 저장 파일명을 돌려준다(실패 시 null). */
         fun importSoundFile(context: Context, srcPath: String, origName: String?): String? =
             try {

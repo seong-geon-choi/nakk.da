@@ -2661,6 +2661,17 @@ class _BackupSubScreen extends ConsumerWidget {
                         ? null
                         : () => _showRestoreDialog(context, ref, settings?.savePath ?? ''),
                   ),
+                  ListTile(
+                    leading: Icon(Icons.tune_outlined,
+                        color: isRestoring ? Theme.of(context).disabledColor : null),
+                    title: const Text('설정만 복구'),
+                    subtitle: const Text(
+                        '메모·사진은 그대로 두고 출퇴근·카운터·워터마크 설정만 복구합니다'),
+                    trailing: isRestoring ? null : const Icon(Icons.chevron_right),
+                    onTap: isRestoring
+                        ? null
+                        : () => _showSettingsRestoreDialog(context, ref),
+                  ),
                 ],
               ],
             ),
@@ -2753,6 +2764,8 @@ class _BackupSubScreen extends ConsumerWidget {
         if (result.mediaRestored > 0) parts.add('미디어 ${result.mediaRestored}개 복원');
         if (mediaAlreadyLocal > 0) parts.add('$mediaAlreadyLocal개 이미 로컬');
         if (result.commuteRestored) parts.add('출퇴근 지점 복원');
+        if (result.counterRestored) parts.add('카운터 설정 복원');
+        if (result.watermarkRestored) parts.add('워터마크 복원');
         final mediaPart = parts.isNotEmpty ? ', ${parts.join(', ')}' : '';
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('메모 ${result.filesRestored}개 복원$mediaPart')),
@@ -2762,6 +2775,56 @@ class _BackupSubScreen extends ConsumerWidget {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('복원 실패: $e')),
+        );
+      }
+    }
+  }
+
+  /// 메모·미디어는 건드리지 않고 설정(출퇴근·카운터·워터마크)만 복구.
+  Future<void> _showSettingsRestoreDialog(BuildContext context, WidgetRef ref) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('설정만 복구'),
+        content: const Text(
+          '메모·사진·동영상은 건드리지 않고\n'
+          '출퇴근·카운터(추임새)·워터마크 설정만\n'
+          '드라이브 백업에서 복구합니다.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('취소'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: const Text('복구'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true || !context.mounted) return;
+
+    try {
+      final r = await ref.read(backupProvider.notifier).restoreSettingsOnly();
+      if (!context.mounted) return;
+      if (!r.any) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('복구할 설정 백업이 없습니다')),
+        );
+        return;
+      }
+      final parts = <String>[];
+      if (r.commuteRestored) parts.add('출퇴근');
+      if (r.counterRestored) parts.add('카운터');
+      if (r.watermarkRestored) parts.add('워터마크');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${parts.join(', ')} 설정 복구 완료')),
+      );
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('설정 복구 실패: $e')),
         );
       }
     }

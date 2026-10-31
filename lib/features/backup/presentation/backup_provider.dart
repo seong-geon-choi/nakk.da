@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:convert';
 import 'dart:math' show min;
+import 'dart:typed_data';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../data/drive_backup_service.dart';
@@ -9,6 +10,7 @@ import '../../settings/presentation/settings_provider.dart';
 import '../../memo/data/md_serializer.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/services/tracking_service.dart';
+import '../../../core/services/bt_remote_service.dart';
 
 final driveBackupServiceProvider = Provider((_) => DriveBackupService());
 
@@ -119,6 +121,53 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     } catch (_) {
       return false;
     }
+  }
+
+  /// 드라이브의 카운터 효과음/추임새 설정(+오디오 파일)을 복원 — 적용되면 true.
+  Future<bool> restoreCounterSettings() async {
+    final svc = ref.read(driveBackupServiceProvider);
+    try {
+      // 오디오 파일을 먼저 내려받아 catch_sounds/에 복원(설정의 파일명 참조가 유효하도록).
+      for (final f in await svc.listSoundFiles()) {
+        final bytes = await svc.downloadSoundFile(f.id);
+        if (bytes != null && bytes.isNotEmpty) {
+          await BtRemoteService.writeSoundBytes(f.name, Uint8List.fromList(bytes));
+        }
+      }
+      final raw = await svc.downloadCounterSettings();
+      if (raw == null) return false;
+      await BtRemoteService.importSoundConfig(jsonDecode(raw) as Map<String, dynamic>);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 드라이브의 워터마크 템플릿(디자인) 설정을 복원 — 적용되면 true.
+  Future<bool> restoreWatermarkSettings() async {
+    final svc = ref.read(driveBackupServiceProvider);
+    try {
+      final raw = await svc.downloadWatermarkSettings();
+      if (raw == null) return false;
+      await ref
+          .read(settingsProvider.notifier)
+          .restoreWatermarkFromJson(jsonDecode(raw) as Map<String, dynamic>);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 메모·미디어는 건드리지 않고 설정(출퇴근·카운터·워터마크)만 복원.
+  Future<SettingsRestoreResult> restoreSettingsOnly() async {
+    final commute = await restoreCommuteSettings();
+    final counter = await restoreCounterSettings();
+    final watermark = await restoreWatermarkSettings();
+    return SettingsRestoreResult(
+      commuteRestored: commute,
+      counterRestored: counter,
+      watermarkRestored: watermark,
+    );
   }
 
   /// 메모 저장/삭제 후 호출 — Wi-Fi 확인 후 md 파일 업로드
@@ -286,6 +335,24 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
             jsonEncode(ref.read(settingsProvider.notifier).commuteBackupJson()));
       } catch (_) {}
 
+      // 카운터 효과음/추임새 설정 + 오디오 파일도 함께 업로드(용량 작아 항상 포함)
+      try {
+        await svc.uploadCounterSettings(
+            jsonEncode(await BtRemoteService.exportSoundConfig()));
+        for (final name in await BtRemoteService.listSoundFiles()) {
+          final bytes = await BtRemoteService.readSoundBytes(name);
+          if (bytes != null && bytes.isNotEmpty) {
+            await svc.syncSoundBytes(name, bytes);
+          }
+        }
+      } catch (_) {}
+
+      // 워터마크 템플릿(디자인) 설정도 함께 업로드
+      try {
+        await svc.uploadWatermarkSettings(
+            jsonEncode(ref.read(settingsProvider.notifier).watermarkBackupJson()));
+      } catch (_) {}
+
       await _saveManifest(manifest);
       await _updateSyncStatus(succeeded + skipped == total);
       return BackupAllResult(total: total, succeeded: succeeded, skipped: skipped);
@@ -352,6 +419,10 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
 
       // 출퇴근 설정(지점 포함) 먼저 복원
       final commuteRestored = await restoreCommuteSettings();
+      // 카운터 효과음/추임새 설정(+오디오 파일) 복원
+      final counterRestored = await restoreCounterSettings();
+      // 워터마크 템플릿(디자인) 복원
+      final watermarkRestored = await restoreWatermarkSettings();
 
       // 전체 복원 대상 파악 (total 확정)
       final mdFiles = await svc.listMdFiles();
@@ -439,6 +510,8 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
         mediaRestored: mediaRestored,
         mediaDriveTotal: driveMediaFiles.length,
         commuteRestored: commuteRestored,
+        counterRestored: counterRestored,
+        watermarkRestored: watermarkRestored,
       );
     } finally {
       progress.state = null;
@@ -555,12 +628,30 @@ class RestoreResult {
   final int mediaRestored;
   final int mediaDriveTotal;
   final bool commuteRestored;
+  final bool counterRestored;
+  final bool watermarkRestored;
   const RestoreResult({
     required this.filesRestored,
     this.mediaRestored = 0,
     this.mediaDriveTotal = 0,
     this.commuteRestored = false,
+    this.counterRestored = false,
+    this.watermarkRestored = false,
   });
+}
+
+/// 설정만 복원(메모·미디어 제외) 결과.
+class SettingsRestoreResult {
+  final bool commuteRestored;
+  final bool counterRestored;
+  final bool watermarkRestored;
+  const SettingsRestoreResult({
+    this.commuteRestored = false,
+    this.counterRestored = false,
+    this.watermarkRestored = false,
+  });
+
+  bool get any => commuteRestored || counterRestored || watermarkRestored;
 }
 
 class BackupAllResult {

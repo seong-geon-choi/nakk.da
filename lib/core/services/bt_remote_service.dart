@@ -305,4 +305,70 @@ class BtRemoteService {
       await _channel.invokeMethod('captureStop');
     } catch (_) {}
   }
+
+  // ── 백업/복원: 효과음 설정 + 오디오 추임새 파일 ──
+
+  /// 백업용: 효과음/추임새 설정 전체를 JSON 직렬화 가능한 맵으로 추출.
+  static Future<Map<String, dynamic>> exportSoundConfig() async {
+    final tone = await getSoundTone();
+    return {
+      'soundEnabled': await getSoundEnabled(),
+      'phrases': (await getSoundPhrases()).map((e) => e.toMap()).toList(),
+      'delPhrases': (await getSoundDelPhrases()).map((e) => e.toMap()).toList(),
+      'pitch': tone.pitch,
+      'rate': tone.rate,
+      'voice': await getSoundVoice(),
+      'mode': await getSoundMode(),
+      'order': await getSoundOrder(),
+      'vibrate': await getVibrateEnabled(),
+    };
+  }
+
+  /// 복원용: [exportSoundConfig]로 만든 맵을 네이티브 설정에 반영.
+  static Future<void> importSoundConfig(Map<String, dynamic> m) async {
+    if (m['soundEnabled'] is bool) {
+      await setSoundEnabled(m['soundEnabled'] as bool);
+    }
+    if (m['phrases'] is List) {
+      await setSoundPhrases(
+          [for (final e in (m['phrases'] as List)) SoundItem.fromMap(e as Map)]);
+    }
+    if (m['delPhrases'] is List) {
+      await setSoundDelPhrases(
+          [for (final e in (m['delPhrases'] as List)) SoundItem.fromMap(e as Map)]);
+    }
+    final pitch = (m['pitch'] as num?)?.toDouble();
+    final rate = (m['rate'] as num?)?.toDouble();
+    if (pitch != null && rate != null) await setSoundTone(pitch, rate);
+    if (m['voice'] is String) await setSoundVoice(m['voice'] as String);
+    if (m['mode'] is String) await setSoundMode(m['mode'] as String);
+    if (m['order'] is String) await setSoundOrder(m['order'] as String);
+    if (m['vibrate'] is bool) await setVibrateEnabled(m['vibrate'] as bool);
+  }
+
+  /// 백업용: 저장된 오디오 추임새 파일명 목록.
+  static Future<List<String>> listSoundFiles() async {
+    try {
+      return await _channel.invokeListMethod<String>('listSoundFiles') ?? const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
+  /// 백업용: 저장 오디오 파일 바이트(없으면 null).
+  static Future<Uint8List?> readSoundBytes(String name) async {
+    try {
+      return await _channel
+          .invokeMethod<Uint8List>('readSoundBytes', {'name': name});
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// 복원용: 오디오 바이트를 저장 파일명으로 기록(이미 있으면 유지).
+  static Future<void> writeSoundBytes(String name, Uint8List bytes) async {
+    try {
+      await _channel.invokeMethod('writeSoundBytes', {'name': name, 'bytes': bytes});
+    } catch (_) {}
+  }
 }

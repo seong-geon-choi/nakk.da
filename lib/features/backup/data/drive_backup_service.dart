@@ -12,6 +12,7 @@ class DriveBackupService {
 
   String? _folderId;
   String? _photosFolderId;
+  String? _soundsFolderId;
   drive.DriveApi? _api;
 
   Future<bool> isSignedIn() => _signIn.isSignedIn();
@@ -26,6 +27,7 @@ class DriveBackupService {
     _api = null;
     _folderId = null;
     _photosFolderId = null;
+    _soundsFolderId = null;
     await _signIn.signOut();
   }
 
@@ -165,6 +167,90 @@ class DriveBackupService {
     return utf8.decode(chunks);
   }
 
+  static const _counterFile = 'counter_settings.json';
+
+  /// 카운터 효과음/추임새 설정(JSON)을 백업 폴더에 업로드(있으면 갱신).
+  Future<void> uploadCounterSettings(String json) async {
+    final api = await _getApi();
+    if (api == null) return;
+    final folderId = await _getOrCreateFolder(api);
+    final fileId = await _findFile(api, _counterFile, folderId);
+    final bytes = utf8.encode(json);
+    final media = drive.Media(Stream.value(bytes), bytes.length,
+        contentType: 'application/json');
+    if (fileId != null) {
+      await api.files.update(drive.File(), fileId, uploadMedia: media);
+    } else {
+      await api.files.create(
+        drive.File()
+          ..name = _counterFile
+          ..parents = [folderId],
+        uploadMedia: media,
+        $fields: 'id',
+      );
+    }
+  }
+
+  /// 백업 폴더의 카운터 설정(JSON) 다운로드. 없으면 null.
+  Future<String?> downloadCounterSettings() async {
+    final api = await _getApi();
+    if (api == null) return null;
+    final folderId = await _getOrCreateFolder(api);
+    final fileId = await _findFile(api, _counterFile, folderId);
+    if (fileId == null) return null;
+    final media = await api.files.get(
+      fileId,
+      downloadOptions: drive.DownloadOptions.fullMedia,
+    ) as drive.Media;
+    final chunks = <int>[];
+    await for (final chunk in media.stream) {
+      chunks.addAll(chunk);
+    }
+    return utf8.decode(chunks);
+  }
+
+  static const _watermarkFile = 'watermark_settings.json';
+
+  /// 워터마크 템플릿(디자인) 설정(JSON)을 백업 폴더에 업로드(있으면 갱신).
+  Future<void> uploadWatermarkSettings(String json) async {
+    final api = await _getApi();
+    if (api == null) return;
+    final folderId = await _getOrCreateFolder(api);
+    final fileId = await _findFile(api, _watermarkFile, folderId);
+    final bytes = utf8.encode(json);
+    final media = drive.Media(Stream.value(bytes), bytes.length,
+        contentType: 'application/json');
+    if (fileId != null) {
+      await api.files.update(drive.File(), fileId, uploadMedia: media);
+    } else {
+      await api.files.create(
+        drive.File()
+          ..name = _watermarkFile
+          ..parents = [folderId],
+        uploadMedia: media,
+        $fields: 'id',
+      );
+    }
+  }
+
+  /// 백업 폴더의 워터마크 설정(JSON) 다운로드. 없으면 null.
+  Future<String?> downloadWatermarkSettings() async {
+    final api = await _getApi();
+    if (api == null) return null;
+    final folderId = await _getOrCreateFolder(api);
+    final fileId = await _findFile(api, _watermarkFile, folderId);
+    if (fileId == null) return null;
+    final media = await api.files.get(
+      fileId,
+      downloadOptions: drive.DownloadOptions.fullMedia,
+    ) as drive.Media;
+    final chunks = <int>[];
+    await for (final chunk in media.stream) {
+      chunks.addAll(chunk);
+    }
+    return utf8.decode(chunks);
+  }
+
   Future<void> syncMediaFile(String localPath) async {
     final file = File(localPath);
     if (!await file.exists()) return;
@@ -250,6 +336,76 @@ class DriveBackupService {
   }
 
   Future<List<int>?> downloadMediaFile(String fileId) async {
+    final api = await _getApi();
+    if (api == null) return null;
+    final media = await api.files.get(
+      fileId,
+      downloadOptions: drive.DownloadOptions.fullMedia,
+    ) as drive.Media;
+    final chunks = <int>[];
+    await for (final chunk in media.stream) {
+      chunks.addAll(chunk);
+    }
+    return chunks;
+  }
+
+  // ── 오디오 추임새 파일 백업(백업 폴더 내 sounds/) ──
+
+  Future<String> _getOrCreateSoundsFolder(drive.DriveApi api, String parentId) async {
+    if (_soundsFolderId != null) return _soundsFolderId!;
+    final list = await api.files.list(
+      q: "name='sounds' and mimeType='application/vnd.google-apps.folder' and '$parentId' in parents and trashed=false",
+      spaces: 'drive',
+      $fields: 'files(id)',
+    );
+    if (list.files?.isNotEmpty == true) {
+      _soundsFolderId = list.files!.first.id!;
+      return _soundsFolderId!;
+    }
+    final created = await api.files.create(
+      drive.File()
+        ..name = 'sounds'
+        ..parents = [parentId]
+        ..mimeType = 'application/vnd.google-apps.folder',
+      $fields: 'id',
+    );
+    _soundsFolderId = created.id!;
+    return _soundsFolderId!;
+  }
+
+  /// 오디오 추임새 파일 업로드(이미 있으면 skip).
+  Future<void> syncSoundBytes(String filename, List<int> bytes) async {
+    final api = await _getApi();
+    if (api == null) return;
+    final folderId = await _getOrCreateFolder(api);
+    final soundsFolderId = await _getOrCreateSoundsFolder(api, folderId);
+    if (await _findFile(api, filename, soundsFolderId) != null) return;
+    await api.files.create(
+      drive.File()
+        ..name = filename
+        ..parents = [soundsFolderId],
+      uploadMedia: drive.Media(Stream.value(bytes), bytes.length,
+          contentType: 'application/octet-stream'),
+      $fields: 'id',
+    );
+  }
+
+  Future<List<DriveFileInfo>> listSoundFiles() async {
+    final api = await _getApi();
+    if (api == null) return [];
+    final folderId = await _getOrCreateFolder(api);
+    final soundsFolderId = await _getOrCreateSoundsFolder(api, folderId);
+    final list = await api.files.list(
+      q: "'$soundsFolderId' in parents and trashed=false",
+      spaces: 'drive',
+      $fields: 'files(id,name)',
+    );
+    return (list.files ?? [])
+        .map((f) => DriveFileInfo(id: f.id!, name: f.name!))
+        .toList();
+  }
+
+  Future<List<int>?> downloadSoundFile(String fileId) async {
     final api = await _getApi();
     if (api == null) return null;
     final media = await api.files.get(

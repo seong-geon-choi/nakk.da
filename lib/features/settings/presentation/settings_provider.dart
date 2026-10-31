@@ -179,6 +179,34 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
       ? null
       : (v as List<dynamic>).map((e) => e.toString()).toList();
 
+  /// 워터마크 템플릿(디자인) 백업 JSON.
+  Map<String, dynamic> watermarkBackupJson() {
+    final s = state.valueOrNull;
+    if (s == null) return {};
+    return {
+      'templates': s.watermarkTemplates.map((t) => t.toJson()).toList(),
+      'index': s.watermarkTemplateIndex,
+    };
+  }
+
+  /// 백업 JSON에서 워터마크 템플릿(디자인) 복원(저장 + 상태 반영).
+  Future<void> restoreWatermarkFromJson(Map<String, dynamic> j) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final raw = j['templates'];
+    if (raw is! List || raw.isEmpty) return;
+    final templates = raw
+        .map((e) => WatermarkSettings.fromJson(e as Map<String, dynamic>))
+        .toList();
+    final idx = (j['index'] as num?)?.toInt() ?? current.watermarkTemplateIndex;
+    final updated = current.copyWith(
+      watermarkTemplates: templates,
+      watermarkTemplateIndex: idx.clamp(0, templates.length - 1),
+    );
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
   Future<void> updateCommuteEnabled(bool value) async {
     final c = state.valueOrNull;
     if (c == null) return;
