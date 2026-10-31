@@ -438,6 +438,12 @@ class MainActivity : FlutterActivity() {
                             result.success(bytes)
                         } catch (e: Exception) { result.error("READ_ERROR", e.message, null) }
                     }
+                    "readImageViaMediaStore" -> {
+                        val path = call.argument<String>("path") ?: return@setMethodCallHandler result.error("ARG", "path missing", null)
+                        try {
+                            result.success(readImageBytesViaMediaStore(path))
+                        } catch (e: Exception) { result.error("READ_ERROR", e.message, null) }
+                    }
                     "listPhotosFolder" -> {
                         val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
                         val photosFolder = safFolder(uri)?.findFile("photos")
@@ -1279,6 +1285,30 @@ class MainActivity : FlutterActivity() {
 
     private fun safFolder(uriString: String): DocumentFile? =
         DocumentFile.fromTreeUri(this, Uri.parse(uriString))
+
+    /**
+     * 공개 저장소(DCIM 등)의 이미지를 MediaStore(READ_MEDIA_IMAGES)로 읽는다.
+     * 앱 재설치로 UID가 바뀌면 기존에 저장한 공개 사진을 직접 경로(File)로 못 읽는데,
+     * MediaStore는 소유자와 무관하게 읽히므로 그 경우의 폴백으로 쓴다. 없으면 null.
+     */
+    private fun readImageBytesViaMediaStore(path: String): ByteArray? {
+        val collection = android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+        val idCol = android.provider.MediaStore.Images.Media._ID
+        fun queryId(selection: String, args: Array<String>): Long? =
+            contentResolver.query(collection, arrayOf(idCol), selection, args, null)?.use { c ->
+                if (c.moveToFirst()) c.getLong(c.getColumnIndexOrThrow(idCol)) else null
+            }
+        // 1) 전체 경로(DATA)로 조회 → 2) 실패 시 파일명(DISPLAY_NAME)으로 조회
+        @Suppress("DEPRECATION")
+        val id = queryId("${android.provider.MediaStore.MediaColumns.DATA}=?", arrayOf(path))
+            ?: queryId(
+                "${android.provider.MediaStore.MediaColumns.DISPLAY_NAME}=?",
+                arrayOf(path.substringAfterLast('/')),
+            )
+            ?: return null
+        val uri = android.content.ContentUris.withAppendedId(collection, id)
+        return contentResolver.openInputStream(uri)?.use { it.readBytes() }
+    }
 
     /// 공용 저장소에 폴더(예: Documents/nakkda)가 없으면 생성한다.
     /// SAF 픽커가 해당 폴더에서 열려 사용자가 권한 부여만 하면 되도록 하기 위함.

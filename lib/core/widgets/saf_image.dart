@@ -36,48 +36,78 @@ class SafImage extends StatefulWidget {
 }
 
 class _SafImageState extends State<SafImage> {
-  Uint8List? _bytes;
+  Uint8List? _bytes;      // 바이트로 그리는 경우(SAF/MediaStore/폴백)
+  String? _directFile;    // File 로 직접 그리는 경우의 경로(로컬 전용)
   bool _loading = false;
-
-  // 절대경로 원본이 사라진 경우(예: 다른 기기로 백업 복원 — 원본 갤러리 파일 없음)
-  // 백업이 photos/로 받아둔 사본을 가리키도록 폴백
-  String get _effectivePath {
-    final p = widget.photoPath;
-    if (SafImage.isAbsolute(p) && !File(p).existsSync()) {
-      return 'photos/${p.split('/').last}';
-    }
-    return p;
-  }
-
-  bool get _needsSaf =>
-      !SafImage.isAbsolute(_effectivePath) &&
-      SafService.isSafUri(widget.savePath);
 
   @override
   void initState() {
     super.initState();
-    if (_needsSaf) _loadBytes();
+    _resolve();
   }
 
   @override
   void didUpdateWidget(SafImage old) {
     super.didUpdateWidget(old);
     if (old.photoPath != widget.photoPath || old.savePath != widget.savePath) {
-      if (_needsSaf) {
-        setState(() { _bytes = null; });
-        _loadBytes();
-      }
+      setState(() { _bytes = null; _directFile = null; });
+      _resolve();
     }
   }
 
-  Future<void> _loadBytes() async {
+  void _resolve() {
+    final p = widget.photoPath;
+    if (SafImage.isAbsolute(p)) {
+      // 절대경로(예: DCIM 워터마크 사진)는 항상 바이트로 로드한다.
+      // 직접 File → (재설치 UID 변경 등으로 실패 시) MediaStore → 백업 photos/ 사본 순.
+      _loadAbsolute(p);
+    } else if (SafService.isSafUri(widget.savePath)) {
+      _loadSaf(p);
+    } else {
+      // 로컬 savePath 기반 상대경로: 앱 소유 폴더라 File 직접 렌더.
+      final local = '${widget.savePath}/$p';
+      setState(() => _directFile = File(local).existsSync() ? local : null);
+    }
+  }
+
+  Future<void> _loadSaf(String subpath) async {
     setState(() => _loading = true);
     try {
-      final b = await SafService().readSafImage(widget.savePath, _effectivePath);
+      final b = await SafService().readSafImage(widget.savePath, subpath);
       if (mounted) setState(() { _bytes = b; _loading = false; });
     } catch (_) {
-      if (mounted) setState(() { _loading = false; });
+      if (mounted) setState(() => _loading = false);
     }
+  }
+
+  Future<void> _loadAbsolute(String absPath) async {
+    setState(() => _loading = true);
+    Uint8List? b;
+    // 1) 직접 File 읽기(같은 기기·같은 UID면 성공)
+    try {
+      final f = File(absPath);
+      if (f.existsSync()) b = await f.readAsBytes();
+    } catch (_) {}
+    // 2) MediaStore(소유자와 무관하게 읽힘 — 재설치 UID 변경 폴백)
+    if (b == null || b.isEmpty) {
+      b = await SafService().readImageViaMediaStore(absPath);
+    }
+    // 3) 백업이 받아둔 SAF/로컬 photos/ 사본(다른 기기 복원 시)
+    if (b == null || b.isEmpty) {
+      final sub = 'photos/${absPath.split('/').last}';
+      try {
+        if (SafService.isSafUri(widget.savePath)) {
+          b = await SafService().readSafImage(widget.savePath, sub);
+        } else {
+          final f = File('${widget.savePath}/$sub');
+          if (f.existsSync()) b = await f.readAsBytes();
+        }
+      } catch (_) {}
+    }
+    if (!mounted) return;
+    setState(() { _bytes = b; _loading = false; });
+    // 전부 실패 + 미디어 권한 부재면 설정 안내 1회.
+    if (b == null || b.isEmpty) _maybePromptPhotoPermission(context);
   }
 
   @override
@@ -85,35 +115,25 @@ class _SafImageState extends State<SafImage> {
     final h = widget.height;
 
     Widget img;
-    if (_needsSaf) {
-      if (_loading) {
-        img = SizedBox(height: h ?? 120, child: const Center(child: CircularProgressIndicator(strokeWidth: 2)));
-      } else if (_bytes != null) {
-        img = Image.memory(_bytes!, height: h, width: double.infinity, fit: widget.fit);
-      } else {
-        img = _broken(h);
-      }
+    if (_loading) {
+      img = SizedBox(
+          height: h ?? 120,
+          child: const Center(child: CircularProgressIndicator(strokeWidth: 2)));
+    } else if (_directFile != null) {
+      img = Image.file(
+        File(_directFile!),
+        height: h,
+        width: double.infinity,
+        fit: widget.fit,
+        errorBuilder: (context, error, stack) {
+          _maybePromptPhotoPermission(context);
+          return _broken(h);
+        },
+      );
+    } else if (_bytes != null) {
+      img = Image.memory(_bytes!, height: h, width: double.infinity, fit: widget.fit);
     } else {
-      // 로컬 경로: 절대 경로거나 로컬 savePath 기반 상대 경로
-      final resolved = SafImage.isAbsolute(_effectivePath)
-          ? _effectivePath
-          : '${widget.savePath}/$_effectivePath';
-      final file = File(resolved);
-      img = file.existsSync()
-          ? Image.file(
-              file,
-              height: h,
-              width: double.infinity,
-              fit: widget.fit,
-              // 파일이 존재해도 미디어 권한이 없으면 열기에서 PathAccessException이
-              // 난다. 기본 빨간 에러 박스 대신 플레이스홀더를 그리고, 원인이
-              // 권한 부재면 설정 안내 팝업을 1회 띄운다.
-              errorBuilder: (context, error, stack) {
-                _maybePromptPhotoPermission(context);
-                return _broken(h);
-              },
-            )
-          : _broken(h);
+      img = _broken(h);
     }
 
     if (widget.fullScreen) return img;
