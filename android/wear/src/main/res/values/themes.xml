@@ -3,5 +3,7 @@
     <style name="WearAppTheme" parent="@android:style/Theme.DeviceDefault">
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
+        <!-- 실행 시 나타나는 런치 이미지(아이콘과 동일 디자인, 전체화면). Compose가 그려지면 가려짐. -->
+        <item name="android:windowBackground">@drawable/splash</item>
     </style>
 </resources>
