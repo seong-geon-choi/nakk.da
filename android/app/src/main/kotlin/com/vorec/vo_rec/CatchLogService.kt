@@ -15,6 +15,8 @@ import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.documentfile.provider.DocumentFile
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.wearable.PutDataMapRequest
+import com.google.android.gms.wearable.Wearable
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -99,6 +101,9 @@ class CatchLogService : Service() {
         // 설정에서 연동 on/off를 바꿨을 때 실행 중인 서비스가 세션을 즉시 재동기화하도록 하는 액션.
         const val ACTION_SYNC_BT = "com.sgchoisg.nakkda.SYNC_BT"
 
+        // 현재 총 조과 수를 워치로 내보내는 Data Layer 아이템 경로(워치 화면 실시간 표시용).
+        const val PATH_WATCH_COUNT = "/nakkda/count/state"
+
         /** 블루투스 버튼 연동이 사용자에 의해 켜져 있는지(기본 꺼짐). */
         fun isBtEnabled(context: Context): Boolean =
             prefsOf(context).getBoolean(PREFS_BTMAP_ENABLED_KEY, false)
@@ -177,6 +182,25 @@ class CatchLogService : Service() {
         fun loadSpecies(context: Context): List<String> =
             strArray(prefsOf(context).getString(PREFS_SPECIES_KEY, "[]"))
                 .map { it.trim() }.filter { it.isNotEmpty() }
+
+        /** 현재 어종별 조과 수를 Data Layer로 워치에 push(워치 화면 실시간 표시용).
+         *  세션 실행 여부와 무관하게 호출 가능(워치 진입 시 최신 설정 요청 응답 등).
+         *  names[i]=어종명, counts[i]=해당 어종 오늘 조과 수(어종 순서 일치). */
+        fun pushStateToWatch(context: Context) {
+            try {
+                val names = loadSpecies(context)
+                val counts = loadCountsFromFile(context)
+                val countList = ArrayList<Int>(names.size)
+                for (n in names) countList.add(counts[n] ?: 0)
+                val req = PutDataMapRequest.create(PATH_WATCH_COUNT).apply {
+                    dataMap.putStringArrayList("names", ArrayList(names))
+                    dataMap.putIntegerArrayList("counts", countList)
+                    // 같은 값이어도 아이템이 갱신되도록 타임스탬프를 포함(동기화 트리거).
+                    dataMap.putLong("ts", System.currentTimeMillis())
+                }.asPutDataRequest().setUrgent()
+                Wearable.getDataClient(context).putDataItem(req)
+            } catch (_: Exception) {}
+        }
 
         /** 조과 효과음(TTS) 사용 여부. 기본 켜짐. */
         fun isSoundEnabled(context: Context): Boolean =
@@ -452,6 +476,14 @@ class CatchLogService : Service() {
     private var tts: TextToSpeech? = null
     @Volatile private var ttsReady = false
     @Volatile private var player: MediaPlayer? = null
+    // 미디어 즉시 건너뛰기: 연타 시 중간 효과음은 건너뛰고 마지막 것만 재생(디바운스).
+    private val feedbackHandler = Handler(Looper.getMainLooper())
+    @Volatile private var pendingSoundItem: SoundItem? = null
+    private val playPendingRunnable = Runnable {
+        val item = pendingSoundItem ?: return@Runnable
+        pendingSoundItem = null
+        io.execute { playItem(item) }
+    }
     // 순차 재생용 커서(+1·삭제 각각). 랜덤 순서면 쓰이지 않는다.
     private var addSeq = 0
     private var delSeq = 0
@@ -520,7 +552,14 @@ class CatchLogService : Service() {
         val mediaVol = am?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0
         if (isSoundEnabled(this) && mediaVol > 0) {
             val item = itemIfSound()
-            if (item != null) playItem(item)
+            if (item != null) {
+                // 재생 중인 효과음은 즉시 중단(건너뛰기 느낌). 실제 재생은 짧게 디바운스 →
+                // 연타 시 중간 미디어는 건너뛰고 마지막 것만 재생된다.
+                stopPlayback()
+                pendingSoundItem = item
+                feedbackHandler.removeCallbacks(playPendingRunnable)
+                feedbackHandler.postDelayed(playPendingRunnable, 140L)
+            }
         }
         if (isVibrateEnabled(this)) vibrateShort()
     }
@@ -658,7 +697,11 @@ class CatchLogService : Service() {
         try {
             sendBroadcast(Intent(ACTION_COUNTS_CHANGED).setPackage(packageName))
         } catch (_: Exception) {}
+        pushCountToWatch()
     }
+
+    /** 현재 어종별 조과 수를 Data Layer로 워치에 push(워치 화면 실시간 표시용). io 스레드에서 호출. */
+    private fun pushCountToWatch() = pushStateToWatch(this)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -695,7 +738,7 @@ class CatchLogService : Service() {
                     .putBoolean(PREFS_ACTIVE_KEY, true)
                     .apply()
                 syncMediaButton()
-                io.execute { updateNotification() }
+                io.execute { updateNotification(); pushCountToWatch() }
                 return START_STICKY
             }
         }
@@ -710,6 +753,7 @@ class CatchLogService : Service() {
         tts = null
         try { player?.release() } catch (_: Exception) {}
         player = null
+        feedbackHandler.removeCallbacks(playPendingRunnable)
         io.shutdown()
         super.onDestroy()
     }
@@ -722,10 +766,11 @@ class CatchLogService : Service() {
         val species = speciesList().getOrNull(index) ?: return
         fun commit(lat: Double?, lng: Double?) = io.execute {
             appendCatchToFile(this, species, lat, lng)
+            // 조과 수를 먼저 반영(워치·알림 즉시 갱신) → 미디어는 그 다음에 재생.
+            sendCountsChanged()
+            updateNotification()
             // 음성 문구는 안내 모드에 따름(진동은 countFeedback 내부에서 별도 처리).
             countFeedback { catchAnnounce(species) }
-            updateNotification()
-            sendCountsChanged()
         }
         try {
             LocationServices.getFusedLocationProviderClient(this).lastLocation
@@ -742,10 +787,11 @@ class CatchLogService : Service() {
         io.execute {
             val had = loadCount(this, species) > 0
             removeLastCatchFromFile(this, species)
+            // 조과 수를 먼저 반영 → 미디어는 그 다음.
+            sendCountsChanged()
+            updateNotification()
             // 실제로 지워진 경우에만 삭제 피드백(멘트/오디오 / 진동).
             if (had) countFeedback { nextItem(loadDelItems(this), true) }
-            updateNotification()
-            sendCountsChanged()
         }
     }
 
@@ -754,9 +800,10 @@ class CatchLogService : Service() {
         io.execute {
             val had = loadCountsFromFile(this).values.any { it > 0 }
             removeLastAnyCatchFromFile(this)
-            if (had) countFeedback { nextItem(loadDelItems(this), true) }
-            updateNotification()
+            // 조과 수를 먼저 반영 → 미디어는 그 다음.
             sendCountsChanged()
+            updateNotification()
+            if (had) countFeedback { nextItem(loadDelItems(this), true) }
         }
     }
 
