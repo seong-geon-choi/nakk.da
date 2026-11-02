@@ -650,12 +650,17 @@ class CatchLogService : Service() {
         pushCountToWatch()
     }
 
-    /** 현재 총 조과 수를 Data Layer로 워치에 push(워치 화면 실시간 표시용). io 스레드에서 호출. */
+    /** 현재 어종별 조과 수를 Data Layer로 워치에 push(워치 화면 실시간 표시용). io 스레드에서 호출.
+     *  names[i]=어종명, counts[i]=해당 어종 오늘 조과 수(어종 순서 일치). */
     private fun pushCountToWatch() {
         try {
-            val total = loadCountsFromFile(this).values.sum()
+            val names = speciesList()
+            val counts = loadCountsFromFile(this)
+            val countList = ArrayList<Int>(names.size)
+            for (n in names) countList.add(counts[n] ?: 0)
             val req = PutDataMapRequest.create(PATH_WATCH_COUNT).apply {
-                dataMap.putInt("total", total)
+                dataMap.putStringArrayList("names", ArrayList(names))
+                dataMap.putIntegerArrayList("counts", countList)
                 // 같은 값이어도 아이템이 갱신되도록 타임스탬프를 포함(동기화 트리거).
                 dataMap.putLong("ts", System.currentTimeMillis())
             }.asPutDataRequest().setUrgent()
