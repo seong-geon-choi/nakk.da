@@ -6,7 +6,6 @@
     <application
         android:label="@string/app_name"
         android:icon="@mipmap/ic_launcher"
-        android:roundIcon="@mipmap/ic_launcher_round"
         android:theme="@style/WearAppTheme">
 
         <uses-library android:name="com.google.android.wearable" android:required="true"/>
