@@ -730,10 +730,11 @@ class CatchLogService : Service() {
         val species = speciesList().getOrNull(index) ?: return
         fun commit(lat: Double?, lng: Double?) = io.execute {
             appendCatchToFile(this, species, lat, lng)
+            // 조과 수를 먼저 반영(워치·알림 즉시 갱신) → 미디어는 그 다음에 재생.
+            sendCountsChanged()
+            updateNotification()
             // 음성 문구는 안내 모드에 따름(진동은 countFeedback 내부에서 별도 처리).
             countFeedback { catchAnnounce(species) }
-            updateNotification()
-            sendCountsChanged()
         }
         try {
             LocationServices.getFusedLocationProviderClient(this).lastLocation
@@ -750,10 +751,11 @@ class CatchLogService : Service() {
         io.execute {
             val had = loadCount(this, species) > 0
             removeLastCatchFromFile(this, species)
+            // 조과 수를 먼저 반영 → 미디어는 그 다음.
+            sendCountsChanged()
+            updateNotification()
             // 실제로 지워진 경우에만 삭제 피드백(멘트/오디오 / 진동).
             if (had) countFeedback { nextItem(loadDelItems(this), true) }
-            updateNotification()
-            sendCountsChanged()
         }
     }
 
@@ -762,9 +764,10 @@ class CatchLogService : Service() {
         io.execute {
             val had = loadCountsFromFile(this).values.any { it > 0 }
             removeLastAnyCatchFromFile(this)
-            if (had) countFeedback { nextItem(loadDelItems(this), true) }
-            updateNotification()
+            // 조과 수를 먼저 반영 → 미디어는 그 다음.
             sendCountsChanged()
+            updateNotification()
+            if (had) countFeedback { nextItem(loadDelItems(this), true) }
         }
     }
 
