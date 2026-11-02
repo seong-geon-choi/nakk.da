@@ -858,8 +858,10 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
   }
 }
 
-/// 흔들면 실행할 동작(음성 메모 / 카메라) 선택.
-/// 카메라 선택 시, 잠금화면 위 카메라 실행에 필요한 알림 권한을 요청한다.
+/// 흔들면 실행할 동작(음성 메모 / 카메라 / 조과 카운터) 선택.
+/// 카메라·카운터에 필요한 "다른 앱 위에 표시" 권한 안내는 아래 _OverlayPermWarning
+/// 타일이 단독으로 담당한다(선택 시 다이얼로그를 띄우지 않음). 알림 권한은 앱 초기
+/// 권한 온보딩에서 이미 요청하므로 여기서 중복 요청하지 않는다.
 class _ShakeActionSelector extends ConsumerWidget {
   final ShakeAction action;
   const _ShakeActionSelector({required this.action});
@@ -868,40 +870,9 @@ class _ShakeActionSelector extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     return RadioGroup<ShakeAction>(
       groupValue: action,
-      onChanged: (v) async {
+      onChanged: (v) {
         if (v == null) return;
-        await ref.read(settingsProvider.notifier).updateShakeAction(v);
-        // 카메라·카운터는 잠금화면 위에 화면을 띄우므로 동일한 권한 흐름이 필요.
-        if (v != ShakeAction.camera && v != ShakeAction.counter) return;
-        if (!await Permission.notification.isGranted) {
-          await Permission.notification.request();
-        }
-        // 잠금/해제 상태 모두에서 흔들면 화면이 바로 뜨게 하려면 오버레이 권한 필요.
-        // 없으면 알림으로만 표시되어 탭해야 열린다.
-        final tracking = TrackingService();
-        if (await tracking.canDrawOverlays() || !context.mounted) return;
-        final go = await showDialog<bool>(
-          context: context,
-          builder: (_) => AlertDialog(
-            title: const Text('권한 필요: 다른 앱 위에 표시'),
-            content: const Text(
-              '흔들면 잠금화면에서도 카메라가 바로 뜨게 하려면 '
-              '"다른 앱 위에 표시" 권한이 필요합니다.\n\n'
-              '허용하지 않으면 알림으로만 표시되어 탭해야 열립니다.',
-            ),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context, false),
-                child: const Text('나중에'),
-              ),
-              FilledButton(
-                onPressed: () => Navigator.pop(context, true),
-                child: const Text('설정 열기'),
-              ),
-            ],
-          ),
-        );
-        if (go == true) await tracking.requestOverlayPermission();
+        ref.read(settingsProvider.notifier).updateShakeAction(v);
       },
       child: const Column(
         children: [
