@@ -194,11 +194,22 @@ class WearMainActivity : ComponentActivity() {
     }
 
     private fun tryReconcile() {
-        if (SystemClock.elapsedRealtime() - lastBumpAt < RECONCILE_MS) {
-            reconcileHandler.postDelayed(reconcileRunnable, 200) // 아직 조작 직후 — 더 대기
+        val pending = pendingCounts ?: return
+        val idle = SystemClock.elapsedRealtime() - lastBumpAt
+        // 조작 직후면 반영 보류.
+        if (idle < RECONCILE_MS) {
+            reconcileHandler.postDelayed(reconcileRunnable, 200)
             return
         }
-        pendingCounts?.let { counts = it }
+        // 이미 일치 → 할 일 없음(오르내림 없음).
+        if (pending == counts) return
+        // 낙관적 값과 다름: 폰이 아직 따라오는 중일 수 있어 더 기다린다.
+        // 단, 오래 지속되면(명령 유실 등) 그때만 한 번 보정.
+        if (idle < MAX_RECONCILE_MS) {
+            reconcileHandler.postDelayed(reconcileRunnable, 300)
+            return
+        }
+        counts = pending
     }
 
     /** 낙관적 즉시 반영: 워치 숫자를 먼저 올리고(폰 왕복 대기 없음) 명령을 전송한다.
@@ -260,8 +271,10 @@ class WearMainActivity : ComponentActivity() {
         private const val PATH_ADD = "/nakkda/count/add"
         private const val PATH_REMOVE = "/nakkda/count/remove"
         private const val PATH_STOP = "/nakkda/count/stop"
-        // 조작·push가 멈춘 뒤 이 시간이 지나야 최종 권위값을 반영(디바운스).
+        // 조작·push가 멈춘 뒤 이 시간이 지나야 권위값 반영을 시도(디바운스).
         private const val RECONCILE_MS = 700L
+        // 낙관적 값과 불일치가 이 시간 이상 지속되면(명령 유실 등) 한 번 강제 보정.
+        private const val MAX_RECONCILE_MS = 2500L
     }
 }
 
