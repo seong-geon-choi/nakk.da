@@ -14,6 +14,7 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
@@ -50,11 +51,24 @@ import com.google.android.gms.wearable.DataMap
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.Wearable
 
-/** 좌/우 영역 배경색 팔레트(길게 눌러 순환). */
+/** 좌/우 영역 배경색 팔레트(16색). 영역을 길게 누르면 그리드 피커에서 선택. */
 private val PALETTE = listOf(
-    Color(0xFF1565C0), Color(0xFF2E7D32), Color(0xFFC62828),
-    Color(0xFF6A1B9A), Color(0xFFEF6C00), Color(0xFF00838F),
-    Color(0xFF37474F),
+    Color(0xFF1565C0), // 0 파랑
+    Color(0xFF1E88E5), // 1 하늘
+    Color(0xFF00838F), // 2 청록
+    Color(0xFF00897B), // 3 틸
+    Color(0xFF2E7D32), // 4 초록
+    Color(0xFF7CB342), // 5 연두
+    Color(0xFFF9A825), // 6 노랑
+    Color(0xFFEF6C00), // 7 주황
+    Color(0xFFD84315), // 8 진주황
+    Color(0xFFC62828), // 9 빨강
+    Color(0xFFAD1457), // 10 분홍
+    Color(0xFF6A1B9A), // 11 보라
+    Color(0xFF4527A0), // 12 진보라
+    Color(0xFF455A64), // 13 청회색
+    Color(0xFF37474F), // 14 진회색
+    Color(0xFF263238), // 15 먹색
 )
 
 /**
@@ -72,7 +86,9 @@ class WearMainActivity : ComponentActivity() {
 
     private var names by mutableStateOf<List<String>>(emptyList())
     private var counts by mutableStateOf<List<Int>>(emptyList())
-    private var colorIdx by mutableStateOf(intArrayOf(0, 1))
+    private var colorIdx by mutableStateOf(intArrayOf(0, 4))
+    // 색상 그리드 피커가 열린 영역(null=닫힘, 0=좌, 1=우).
+    private var pickerSide by mutableStateOf<Int?>(null)
     // 즉시 전송용 연결 노드 캐시(매 탭마다 조회하지 않도록).
     private var cachedNodes: List<String> = emptyList()
     // 마지막 로컬 조작 시각 — 직후엔 폰 push로 숫자를 덮지 않아 깜빡임을 막는다.
@@ -91,18 +107,28 @@ class WearMainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = getSharedPreferences("wear_counter", Context.MODE_PRIVATE)
-        colorIdx = intArrayOf(prefs.getInt("color_0", 0), prefs.getInt("color_1", 1))
+        colorIdx = intArrayOf(prefs.getInt("color_0", 0), prefs.getInt("color_1", 4))
         setContent {
             MaterialTheme {
-                CounterScreen(
-                    names = names,
-                    counts = counts,
-                    colorIdx = colorIdx,
-                    onPlus = { i -> bump(i, 1, PATH_ADD) },
-                    onMinus = { i -> bump(i, -1, PATH_REMOVE) },
-                    onStop = { sendStop() },
-                    onCycleColor = { side -> cycleColor(side) },
-                )
+                Box(Modifier.fillMaxSize()) {
+                    CounterScreen(
+                        names = names,
+                        counts = counts,
+                        colorIdx = colorIdx,
+                        onPlus = { i -> bump(i, 1, PATH_ADD) },
+                        onMinus = { i -> bump(i, -1, PATH_REMOVE) },
+                        onStop = { sendStop() },
+                        onPickColor = { side -> pickerSide = side },
+                    )
+                    val side = pickerSide
+                    if (side != null) {
+                        ColorPicker(
+                            current = colorIdx.getOrElse(side) { 0 },
+                            onPick = { idx -> setColor(side, idx); pickerSide = null },
+                            onDismiss = { pickerSide = null },
+                        )
+                    }
+                }
             }
         }
     }
@@ -175,11 +201,13 @@ class WearMainActivity : ComponentActivity() {
         }
     }
 
-    private fun cycleColor(side: Int) {
+    private fun setColor(side: Int, idx: Int) {
         val arr = colorIdx.copyOf()
-        arr[side] = (arr[side] + 1) % PALETTE.size
-        colorIdx = arr
-        prefs.edit().putInt("color_$side", arr[side]).apply()
+        if (side in arr.indices) {
+            arr[side] = idx.coerceIn(0, PALETTE.size - 1)
+            colorIdx = arr
+            prefs.edit().putInt("color_$side", arr[side]).apply()
+        }
     }
 
     companion object {
@@ -200,7 +228,7 @@ private fun CounterScreen(
     onPlus: (Int) -> Unit,
     onMinus: (Int) -> Unit,
     onStop: () -> Unit,
-    onCycleColor: (Int) -> Unit,
+    onPickColor: (Int) -> Unit,
 ) {
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         if (names.isEmpty()) {
@@ -222,7 +250,7 @@ private fun CounterScreen(
                 single = sides == 1,
                 onPlus = { onPlus(0) },
                 onMinus = { onMinus(0) },
-                onCycleColor = { onCycleColor(0) },
+                onPickColor = { onPickColor(0) },
             )
             if (sides >= 2) {
                 CounterSide(
@@ -233,7 +261,7 @@ private fun CounterScreen(
                     single = false,
                     onPlus = { onPlus(1) },
                     onMinus = { onMinus(1) },
-                    onCycleColor = { onCycleColor(1) },
+                    onPickColor = { onPickColor(1) },
                 )
             }
         }
@@ -256,7 +284,7 @@ private fun CounterSide(
     single: Boolean,
     onPlus: () -> Unit,
     onMinus: () -> Unit,
-    onCycleColor: () -> Unit,
+    onPickColor: () -> Unit,
 ) {
     Box(
         modifier
@@ -264,7 +292,7 @@ private fun CounterSide(
             // 탭: 위 절반=+1 / 아래 절반=−1, 길게누름=색상 순환.
             .pointerInput(Unit) {
                 detectTapGestures(
-                    onLongPress = { onCycleColor() },
+                    onLongPress = { onPickColor() },
                     onTap = { pos -> if (pos.y < size.height / 2f) onPlus() else onMinus() },
                 )
             }
@@ -334,5 +362,47 @@ private fun FlipCount(count: Int, fontSizeSp: Float) {
             fontSize = fontSizeSp.sp,
             fontWeight = FontWeight.Black,
         )
+    }
+}
+
+/** 16색 스와치 그리드 피커(4×4). 색칩 탭=적용+닫힘, 바깥 탭=취소. */
+@Composable
+private fun ColorPicker(current: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.86f))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) { onDismiss() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+            for (row in 0 until 4) {
+                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    for (col in 0 until 4) {
+                        val idx = row * 4 + col
+                        Box(
+                            Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(PALETTE[idx])
+                                .then(
+                                    if (idx == current) {
+                                        Modifier.border(3.dp, Color.White, CircleShape)
+                                    } else {
+                                        Modifier
+                                    },
+                                )
+                                .clickable(
+                                    interactionSource = remember { MutableInteractionSource() },
+                                    indication = null,
+                                ) { onPick(idx) },
+                        )
+                    }
+                }
+            }
+        }
     }
 }
