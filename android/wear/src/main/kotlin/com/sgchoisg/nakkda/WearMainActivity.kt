@@ -3,6 +3,7 @@ package com.sgchoisg.nakkda
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
+import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
@@ -72,6 +73,10 @@ class WearMainActivity : ComponentActivity() {
     private var names by mutableStateOf<List<String>>(emptyList())
     private var counts by mutableStateOf<List<Int>>(emptyList())
     private var colorIdx by mutableStateOf(intArrayOf(0, 1))
+    // 즉시 전송용 연결 노드 캐시(매 탭마다 조회하지 않도록).
+    private var cachedNodes: List<String> = emptyList()
+    // 마지막 로컬 조작 시각 — 직후엔 폰 push로 숫자를 덮지 않아 깜빡임을 막는다.
+    private var lastBumpAt = 0L
 
     private val dataListener = DataClient.OnDataChangedListener { buffer ->
         for (event in buffer) {
@@ -93,8 +98,8 @@ class WearMainActivity : ComponentActivity() {
                     names = names,
                     counts = counts,
                     colorIdx = colorIdx,
-                    onPlus = { i -> send(PATH_ADD, i) },
-                    onMinus = { i -> send(PATH_REMOVE, i) },
+                    onPlus = { i -> bump(i, 1, PATH_ADD) },
+                    onMinus = { i -> bump(i, -1, PATH_REMOVE) },
                     onStop = { sendStop() },
                     onCycleColor = { side -> cycleColor(side) },
                 )
@@ -105,6 +110,10 @@ class WearMainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         dataClient.addListener(dataListener)
+        // 연결 노드 캐시 갱신(전송 지연 축소).
+        Wearable.getNodeClient(this).connectedNodes.addOnSuccessListener { ns ->
+            cachedNodes = ns.map { it.id }
+        }
         // 진입 시 최신값 즉시 반영.
         dataClient.dataItems.addOnSuccessListener { items ->
             for (item in items) {
@@ -126,15 +135,34 @@ class WearMainActivity : ComponentActivity() {
         val c = map.getIntegerArrayList("counts") ?: arrayListOf()
         runOnUiThread {
             names = n.toList()
-            counts = c.toList()
+            // 최근 로컬 조작 직후엔 낙관적 값을 유지(왕복 중 옛 push로 인한 깜빡임 방지).
+            if (SystemClock.elapsedRealtime() - lastBumpAt > RECONCILE_MS) {
+                counts = c.toList()
+            }
         }
     }
 
-    /** 어종 인덱스를 payload로 담아 폰에 카운트 명령 전송. */
+    /** 낙관적 즉시 반영: 워치 숫자를 먼저 올리고(폰 왕복 대기 없음) 명령을 전송한다.
+     *  폰의 권위값 push(applyData)가 오면 그 값으로 보정된다. */
+    private fun bump(index: Int, delta: Int, path: String) {
+        lastBumpAt = SystemClock.elapsedRealtime()
+        val c = counts.toMutableList()
+        while (c.size <= index) c.add(0)
+        c[index] = (c[index] + delta).coerceAtLeast(0)
+        counts = c
+        send(path, index)
+    }
+
+    /** 어종 인덱스를 payload로 담아 폰에 카운트 명령 전송(캐시 노드로 즉시). */
     private fun send(path: String, speciesIndex: Int) {
-        Wearable.getNodeClient(this).connectedNodes.addOnSuccessListener { nodes ->
-            for (node in nodes) {
-                messageClient.sendMessage(node.id, path, speciesIndex.toString().toByteArray())
+        val payload = speciesIndex.toString().toByteArray()
+        val nodes = cachedNodes
+        if (nodes.isNotEmpty()) {
+            for (id in nodes) messageClient.sendMessage(id, path, payload)
+        } else {
+            Wearable.getNodeClient(this).connectedNodes.addOnSuccessListener { ns ->
+                cachedNodes = ns.map { it.id }
+                for (n in ns) messageClient.sendMessage(n.id, path, payload)
             }
         }
     }
@@ -159,6 +187,8 @@ class WearMainActivity : ComponentActivity() {
         private const val PATH_ADD = "/nakkda/count/add"
         private const val PATH_REMOVE = "/nakkda/count/remove"
         private const val PATH_STOP = "/nakkda/count/stop"
+        // 로컬 조작 후 이 시간 동안은 폰 push로 숫자를 덮지 않는다(보정 지연).
+        private const val RECONCILE_MS = 1000L
     }
 }
 
