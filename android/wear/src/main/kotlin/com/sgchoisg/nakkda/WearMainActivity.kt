@@ -3,6 +3,8 @@ package com.sgchoisg.nakkda
 import android.content.Context
 import android.content.SharedPreferences
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -98,6 +100,10 @@ class WearMainActivity : ComponentActivity() {
     private var cachedNodes: List<String> = emptyList()
     // 마지막 로컬 조작 시각 — 직후엔 폰 push로 숫자를 덮지 않아 깜빡임을 막는다.
     private var lastBumpAt = 0L
+    // 권위값 적용 디바운스: 밀려오는 중간 push들을 흘리고 조용해진 뒤 최종값만 1회 반영.
+    private val reconcileHandler = Handler(Looper.getMainLooper())
+    private var pendingCounts: List<Int>? = null
+    private val reconcileRunnable = Runnable { tryReconcile() }
 
     private val dataListener = DataClient.OnDataChangedListener { buffer ->
         for (event in buffer) {
@@ -167,6 +173,7 @@ class WearMainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         dataClient.removeListener(dataListener)
+        reconcileHandler.removeCallbacks(reconcileRunnable)
     }
 
     private fun applyData(map: DataMap) {
@@ -174,11 +181,24 @@ class WearMainActivity : ComponentActivity() {
         val c = map.getIntegerArrayList("counts") ?: arrayListOf()
         runOnUiThread {
             names = n.toList()
-            // 최근 로컬 조작 직후엔 낙관적 값을 유지(왕복 중 옛 push로 인한 깜빡임 방지).
-            if (SystemClock.elapsedRealtime() - lastBumpAt > RECONCILE_MS) {
-                counts = c.toList()
-            }
+            // 권위값은 바로 덮지 않고 보류 → 조용해지면(디바운스) 최종값만 반영.
+            pendingCounts = c.toList()
+            scheduleReconcile()
         }
+    }
+
+    /** 조작·push가 멈춘 뒤 RECONCILE_MS 후에 최종 권위값을 반영(연타 중 중간값은 무시). */
+    private fun scheduleReconcile() {
+        reconcileHandler.removeCallbacks(reconcileRunnable)
+        reconcileHandler.postDelayed(reconcileRunnable, RECONCILE_MS)
+    }
+
+    private fun tryReconcile() {
+        if (SystemClock.elapsedRealtime() - lastBumpAt < RECONCILE_MS) {
+            reconcileHandler.postDelayed(reconcileRunnable, 200) // 아직 조작 직후 — 더 대기
+            return
+        }
+        pendingCounts?.let { counts = it }
     }
 
     /** 낙관적 즉시 반영: 워치 숫자를 먼저 올리고(폰 왕복 대기 없음) 명령을 전송한다.
@@ -190,6 +210,7 @@ class WearMainActivity : ComponentActivity() {
         c[index] = (c[index] + delta).coerceAtLeast(0)
         counts = c
         send(path, index)
+        scheduleReconcile() // 조작 중엔 권위값 반영을 계속 뒤로 미룬다.
     }
 
     /** 어종 인덱스를 payload로 담아 폰에 카운트 명령 전송(캐시 노드로 즉시). */
@@ -239,8 +260,8 @@ class WearMainActivity : ComponentActivity() {
         private const val PATH_ADD = "/nakkda/count/add"
         private const val PATH_REMOVE = "/nakkda/count/remove"
         private const val PATH_STOP = "/nakkda/count/stop"
-        // 로컬 조작 후 이 시간 동안은 폰 push로 숫자를 덮지 않는다(보정 지연).
-        private const val RECONCILE_MS = 1000L
+        // 조작·push가 멈춘 뒤 이 시간이 지나야 최종 권위값을 반영(디바운스).
+        private const val RECONCILE_MS = 700L
     }
 }
 
