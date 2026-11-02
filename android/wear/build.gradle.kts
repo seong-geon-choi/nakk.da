@@ -30,7 +30,8 @@ android {
         applicationId = "com.sgchoisg.nakkda"
         // Galaxy Watch 4 하드웨어(Wear OS 3=API30)부터 설치되도록. 테스트는 Wear OS 4 에뮬레이터.
         minSdk = 30
-        targetSdk = 34
+        // Play 타깃 API 요구치(API 35). compileSdk와 일치.
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
     }
