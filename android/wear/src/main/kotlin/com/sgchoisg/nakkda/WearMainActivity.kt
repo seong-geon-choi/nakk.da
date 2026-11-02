@@ -48,6 +48,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
+import androidx.compose.ui.layout.boundsInParent
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -361,14 +363,20 @@ private fun CounterSide(
     onMinus: () -> Unit,
     onPickColor: () -> Unit,
 ) {
+    // 숫자(이름+카운트) 블록의 하단 y(px). 이 지점까지는 +1, 그 아래만 −1.
+    // 측정 전(NaN)에는 높이 절반을 임시 경계로 사용.
+    var plusMaxY by remember { mutableStateOf(Float.NaN) }
     Box(
         modifier
             .background(color)
-            // 탭: 위 절반=+1 / 아래 절반=−1, 길게누름=색상 순환.
+            // 탭: 위~숫자영역 하단=+1 / 숫자영역 아래=−1, 길게누름=색상 순환.
             .pointerInput(Unit) {
                 detectTapGestures(
                     onLongPress = { onPickColor() },
-                    onTap = { pos -> if (pos.y < size.height / 2f) onPlus() else onMinus() },
+                    onTap = { pos ->
+                        val boundary = if (plusMaxY.isNaN()) size.height / 2f else plusMaxY
+                        if (pos.y < boundary) onPlus() else onMinus()
+                    },
                 )
             }
             // 스와이프: 위로=+1 / 아래로=−1 (한 번에 1회).
@@ -399,7 +407,10 @@ private fun CounterSide(
             modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = if (single) 10.dp else 22.dp),
         )
         Column(
-            modifier = Modifier.align(Alignment.Center),
+            modifier = Modifier
+                .align(Alignment.Center)
+                // 숫자 블록의 실제 하단을 탭 경계로 전달(+ / − 분할점).
+                .onGloballyPositioned { plusMaxY = it.boundsInParent().bottom },
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center,
         ) {
