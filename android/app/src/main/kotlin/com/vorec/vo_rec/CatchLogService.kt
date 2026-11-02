@@ -183,6 +183,25 @@ class CatchLogService : Service() {
             strArray(prefsOf(context).getString(PREFS_SPECIES_KEY, "[]"))
                 .map { it.trim() }.filter { it.isNotEmpty() }
 
+        /** 현재 어종별 조과 수를 Data Layer로 워치에 push(워치 화면 실시간 표시용).
+         *  세션 실행 여부와 무관하게 호출 가능(워치 진입 시 최신 설정 요청 응답 등).
+         *  names[i]=어종명, counts[i]=해당 어종 오늘 조과 수(어종 순서 일치). */
+        fun pushStateToWatch(context: Context) {
+            try {
+                val names = loadSpecies(context)
+                val counts = loadCountsFromFile(context)
+                val countList = ArrayList<Int>(names.size)
+                for (n in names) countList.add(counts[n] ?: 0)
+                val req = PutDataMapRequest.create(PATH_WATCH_COUNT).apply {
+                    dataMap.putStringArrayList("names", ArrayList(names))
+                    dataMap.putIntegerArrayList("counts", countList)
+                    // 같은 값이어도 아이템이 갱신되도록 타임스탬프를 포함(동기화 트리거).
+                    dataMap.putLong("ts", System.currentTimeMillis())
+                }.asPutDataRequest().setUrgent()
+                Wearable.getDataClient(context).putDataItem(req)
+            } catch (_: Exception) {}
+        }
+
         /** 조과 효과음(TTS) 사용 여부. 기본 켜짐. */
         fun isSoundEnabled(context: Context): Boolean =
             prefsOf(context).getBoolean(PREFS_SOUND_ENABLED_KEY, true)
@@ -665,23 +684,8 @@ class CatchLogService : Service() {
         pushCountToWatch()
     }
 
-    /** 현재 어종별 조과 수를 Data Layer로 워치에 push(워치 화면 실시간 표시용). io 스레드에서 호출.
-     *  names[i]=어종명, counts[i]=해당 어종 오늘 조과 수(어종 순서 일치). */
-    private fun pushCountToWatch() {
-        try {
-            val names = speciesList()
-            val counts = loadCountsFromFile(this)
-            val countList = ArrayList<Int>(names.size)
-            for (n in names) countList.add(counts[n] ?: 0)
-            val req = PutDataMapRequest.create(PATH_WATCH_COUNT).apply {
-                dataMap.putStringArrayList("names", ArrayList(names))
-                dataMap.putIntegerArrayList("counts", countList)
-                // 같은 값이어도 아이템이 갱신되도록 타임스탬프를 포함(동기화 트리거).
-                dataMap.putLong("ts", System.currentTimeMillis())
-            }.asPutDataRequest().setUrgent()
-            Wearable.getDataClient(this).putDataItem(req)
-        } catch (_: Exception) {}
-    }
+    /** 현재 어종별 조과 수를 Data Layer로 워치에 push(워치 화면 실시간 표시용). io 스레드에서 호출. */
+    private fun pushCountToWatch() = pushStateToWatch(this)
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {

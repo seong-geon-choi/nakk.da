@@ -160,9 +160,11 @@ class WearMainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         dataClient.addListener(dataListener)
-        // 연결 노드 캐시 갱신(전송 지연 축소).
+        // 연결 노드 캐시 갱신(전송 지연 축소) + 진입 시 폰에 최신 어종·조과 상태 요청.
+        // (폰에서 어종을 바꾼 뒤 앱을 안 열어 캐시된 state가 낡았을 수 있으므로 한 번 당겨온다.)
         Wearable.getNodeClient(this).connectedNodes.addOnSuccessListener { ns ->
             cachedNodes = ns.map { it.id }
+            for (id in cachedNodes) messageClient.sendMessage(id, PATH_REQUEST, ByteArray(0))
         }
         // 진입 시 최신값 즉시 반영.
         dataClient.dataItems.addOnSuccessListener { items ->
@@ -279,6 +281,7 @@ class WearMainActivity : ComponentActivity() {
         private const val PATH_ADD = "/nakkda/count/add"
         private const val PATH_REMOVE = "/nakkda/count/remove"
         private const val PATH_STOP = "/nakkda/count/stop"
+        private const val PATH_REQUEST = "/nakkda/count/request"
         // 조작·push가 멈춘 뒤 이 시간이 지나야 권위값 반영을 시도(디바운스).
         private const val RECONCILE_MS = 700L
         // 낙관적 값과 불일치가 이 시간 이상 지속되면(명령 유실 등) 한 번 강제 보정.

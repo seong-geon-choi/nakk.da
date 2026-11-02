@@ -12,6 +12,8 @@ import com.google.android.gms.wearable.WearableListenerService
  * - /nakkda/count/add,   payload=어종 인덱스 → 해당 어종 +1
  * - /nakkda/count/remove, payload=어종 인덱스 → 해당 어종 −1
  * - /nakkda/count/stop                        → 재생 중인 추임새/TTS 중지
+ * - /nakkda/count/request                      → 현재 어종·조과 상태를 워치로 즉시 push
+ *   (워치 진입 시 최신 설정을 폰에서 한 번 당겨오기 위함. 세션 미실행이어도 응답).
  */
 class WearListenerService : WearableListenerService() {
 
@@ -20,6 +22,7 @@ class WearListenerService : WearableListenerService() {
             PATH_COUNT_ADD -> forward(CatchLogService.ACTION_ADD, parseIndex(event.data))
             PATH_COUNT_REMOVE -> forward(CatchLogService.ACTION_REMOVE, parseIndex(event.data))
             PATH_STOP_SOUND -> forward(CatchLogService.ACTION_STOP_SOUND, -1)
+            PATH_STATE_REQUEST -> CatchLogService.pushStateToWatch(this)
         }
     }
 
@@ -53,5 +56,6 @@ class WearListenerService : WearableListenerService() {
         private const val PATH_COUNT_ADD = "/nakkda/count/add"
         private const val PATH_COUNT_REMOVE = "/nakkda/count/remove"
         private const val PATH_STOP_SOUND = "/nakkda/count/stop"
+        private const val PATH_STATE_REQUEST = "/nakkda/count/request"
     }
 }
