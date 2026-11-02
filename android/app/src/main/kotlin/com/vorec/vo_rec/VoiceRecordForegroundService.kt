@@ -4,6 +4,7 @@ import android.app.*
 import android.content.*
 import android.content.pm.ServiceInfo
 import android.hardware.*
+import android.net.Uri
 import android.os.*
 import android.provider.Settings
 import android.speech.*
@@ -190,6 +191,13 @@ class VoiceRecordForegroundService : Service() {
         lastCameraLaunchTime = now
         vibrate(longArrayOf(0, 80))
 
+        // 흔들기로 열 때도 메모화면 '카운터' 버튼·홈 바로가기와 동일하게 세션을 먼저 시작한다
+        // (저장된 어종 로드 + active=true + 포그라운드 서비스). 이게 없으면 카운터 화면에
+        // 어종이 안 뜨고(폰), active=false라 워치 탭도 무시된다.
+        val speciesJson = CatchLogService.prefsOf(this)
+            .getString(CatchLogService.PREFS_SPECIES_KEY, "[]") ?: "[]"
+        try { CatchLogService.start(this, speciesJson) } catch (_: Exception) {}
+
         val fullScreen = Intent(this, CatchCounterActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
         if (Settings.canDrawOverlays(this)) {
@@ -198,19 +206,35 @@ class VoiceRecordForegroundService : Service() {
                 return
             } catch (_: Exception) { /* 폴백 */ }
         }
+        // 잠금화면에선 전면 인텐트로 카운터가 바로 뜨므로 그 경로는 유지한다.
         val fullScreenPi = PendingIntent.getActivity(
             this, 0, fullScreen,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
+        // 해제 상태에서 탭하면 '다른 앱 위에 표시' 권한 설정으로 바로 이동시켜 안내한다.
+        val overlaySettingsPi = PendingIntent.getActivity(
+            this, 8,
+            Intent(
+                Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                Uri.parse("package:$packageName")
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val notif = NotificationCompat.Builder(this, CAMERA_CHANNEL_ID)
-            .setContentTitle("조과 카운터")
-            .setContentText("흔들기로 카운터를 엽니다")
+            .setContentTitle("권한 필요: 조과 카운터")
+            .setContentText("흔들어서 바로 열려면 '다른 앱 위에 표시' 권한이 필요합니다. 눌러서 설정으로 이동하세요.")
+            .setStyle(
+                NotificationCompat.BigTextStyle().bigText(
+                    "흔들어서 카운터를 바로 열려면 '다른 앱 위에 표시' 권한이 필요합니다. " +
+                        "이 알림을 눌러 권한 설정으로 이동한 뒤 허용해 주세요."
+                )
+            )
             .setSmallIcon(android.R.drawable.ic_menu_edit)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setCategory(NotificationCompat.CATEGORY_EVENT)
             .setAutoCancel(true)
             .setFullScreenIntent(fullScreenPi, true)
-            .setContentIntent(fullScreenPi)
+            .setContentIntent(overlaySettingsPi)
             .build()
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
             .notify(CAMERA_NOTIFICATION_ID, notif)
