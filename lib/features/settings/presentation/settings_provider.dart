@@ -344,6 +344,10 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
       saveDisplayPath: picked.displayPath,
     );
     await ref.read(settingsRepositoryProvider).save(updated);
+    // 네이티브(카운터·알림)가 MD를 직접 쓰므로 새 저장 경로를 즉시 재동기화한다.
+    // (이게 없으면 폴더 지정 후 앱 재시작 전까지 조과가 파일에 안 쌓여 카운트가 0으로 남는다.)
+    await CatchLogService()
+        .syncConfig(updated.catchQuickSpecies, updated.savePath);
     state = AsyncData(updated);
     return true;
   }
@@ -353,6 +357,9 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     if (current == null) return;
     final updated = current.copyWith(savePath: path);
     await ref.read(settingsRepositoryProvider).save(updated);
+    // 위와 동일 — 네이티브 저장 경로 즉시 재동기화.
+    await CatchLogService()
+        .syncConfig(updated.catchQuickSpecies, updated.savePath);
     state = AsyncData(updated);
   }
 
