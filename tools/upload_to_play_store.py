@@ -54,11 +54,19 @@ def latest_release_notes(edits, package, edit_id, track):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Upload .aab to Google Play")
-    ap.add_argument("--aab", help=".aab 파일 경로 (--promote-version-code와 함께 쓰면 불필요)")
+    ap.add_argument(
+        "--aab",
+        action="append",
+        default=None,
+        help=".aab 파일 경로. 여러 번 지정 가능(폰+워치 결합 릴리스: --aab 폰.aab --aab 워치.aab). "
+             "업로드된 모든 번들의 versionCode가 같은 릴리스에 함께 배정된다.",
+    )
     ap.add_argument(
         "--promote-version-code",
+        action="append",
         type=int,
-        help="새로 업로드하지 않고, 이미 다른 트랙에 올라간 이 versionCode를 --track에 배정",
+        default=None,
+        help="새로 업로드하지 않고, 이미 올라간 이 versionCode를 --track에 배정(여러 번 지정 가능)",
     )
     ap.add_argument("--key", required=True, help="서비스 계정 JSON 키 경로")
     ap.add_argument("--package", default="com.sgchoisg.nakkda", help="패키지명")
@@ -114,14 +122,18 @@ def main() -> int:
         edit_id = edits.insert(body={}, packageName=args.package).execute()["id"]
         print(f"[1/4] edit 생성: {edit_id}")
 
-        if args.promote_version_code:
-            version_code = args.promote_version_code
-            print(f"[2/4] 번들 업로드 생략, 기존 versionCode={version_code} 승격")
-        else:
-            if not args.aab:
-                sys.exit("[오류] --aab 또는 --promote-version-code 중 하나는 필요합니다")
+        aabs = args.aab or []
+        promotes = args.promote_version_code or []
+        if not aabs and not promotes:
+            sys.exit("[오류] --aab 또는 --promote-version-code 중 하나는 필요합니다")
+
+        version_codes = []
+        for vc in promotes:
+            version_codes.append(vc)
+            print(f"[2/4] 번들 업로드 생략, 기존 versionCode={vc} 승격")
+        for idx, aab in enumerate(aabs, 1):
             media = MediaFileUpload(
-                args.aab,
+                aab,
                 mimetype="application/octet-stream",
                 resumable=True,
                 chunksize=5 * 1024 * 1024,
@@ -133,11 +145,14 @@ def main() -> int:
             while response is None:
                 status, response = request.next_chunk()
                 if status:
-                    print(f"      업로드 {int(status.progress() * 100)}%")
-            version_code = response["versionCode"]
-            print(f"[2/4] 번들 업로드 완료: versionCode={version_code}")
+                    print(f"      [{idx}/{len(aabs)}] 업로드 {int(status.progress() * 100)}%")
+            version_codes.append(response["versionCode"])
+            print(f"[2/4] 번들 업로드 완료: {aab} → versionCode={response['versionCode']}")
 
-        release = {"status": args.status, "versionCodes": [str(version_code)]}
+        release = {
+            "status": args.status,
+            "versionCodes": [str(vc) for vc in version_codes],
+        }
         if args.notes_file:
             with open(args.notes_file, encoding="utf-8") as f:
                 text = f.read().strip()
