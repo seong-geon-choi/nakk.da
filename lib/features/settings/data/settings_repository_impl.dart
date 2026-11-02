@@ -130,10 +130,10 @@ class SettingsRepositoryImpl implements SettingsRepository {
       (e) => e.name == quickLaunchModeStr,
       orElse: () => QuickLaunchMode.shake,
     );
-    final shakeActionStr = prefs.getString(_shakeActionKey) ?? 'voice';
+    final shakeActionStr = prefs.getString(_shakeActionKey) ?? 'counter';
     final shakeAction = ShakeAction.values.firstWhere(
       (e) => e.name == shakeActionStr,
-      orElse: () => ShakeAction.voice,
+      orElse: () => ShakeAction.counter,
     );
     final shakeThresholdG = prefs.getDouble(_shakeThresholdGKey) ?? 3.5;
     final driveBackupEnabled = prefs.getBool(_driveBackupEnabledKey) ?? false;

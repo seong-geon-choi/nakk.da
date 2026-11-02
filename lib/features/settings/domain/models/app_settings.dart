@@ -644,7 +644,7 @@ class AppSettings {
     this.locationTrackingEnabled = false,
     this.trackingIntervalMeters = 100,
     this.quickLaunchMode = QuickLaunchMode.shake,
-    this.shakeAction = ShakeAction.voice,
+    this.shakeAction = ShakeAction.counter,
     this.shakeThresholdG = 3.5,
     this.driveBackupEnabled = false,
     this.driveBackupIncludeMedia = false,

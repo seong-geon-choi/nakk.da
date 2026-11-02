@@ -657,11 +657,13 @@ class _ActionBar extends StatelessWidget {
   final VoidCallback onVoiceTap;
   final VoidCallback onPhotoTap;
   final VoidCallback onMapTap;
+  final VoidCallback onSettingsTap;
 
   const _ActionBar({
     required this.onVoiceTap,
     required this.onPhotoTap,
     required this.onMapTap,
+    required this.onSettingsTap,
   });
 
   @override
@@ -669,7 +671,7 @@ class _ActionBar extends StatelessWidget {
     final bottomPadding = MediaQuery.of(context).padding.bottom;
     return Container(
       height: 80 + bottomPadding,
-      padding: EdgeInsets.fromLTRB(24, 0, 24, bottomPadding),
+      padding: EdgeInsets.fromLTRB(12, 0, 12, bottomPadding),
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         border: Border(
@@ -684,6 +686,8 @@ class _ActionBar extends StatelessWidget {
           ActionButton(icon: Icons.edit_note, label: '메모', onTap: onVoiceTap),
           ActionButton(icon: Icons.camera_alt, label: '사진', onTap: onPhotoTap),
           ActionButton(icon: Icons.map_outlined, label: '지도', onTap: onMapTap),
+          ActionButton(
+              icon: Icons.settings_outlined, label: '설정', onTap: onSettingsTap),
         ],
       ),
     );
@@ -1819,13 +1823,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
             tooltip: '사진 일괄 추가',
             onPressed: _importPickDayPhotos,
           ),
-          if (_isToday)
-            IconButton(
-              icon: const Icon(Icons.settings_outlined),
-              tooltip: '설정',
-              onPressed: () => context.push(AppRoutes.settings),
-            )
-          else
+          if (!_isToday)
             TextButton(
               // 진입점(홈)에서 스와이프로 과거를 보는 중이면 화면 안에서 오늘로 복귀,
               // 목록에서 진입한 화면이면 홈으로 이동
@@ -1873,6 +1871,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
         },
         onPhotoTap: _onPhotoTap,
         onMapTap: _onMapTap,
+        onSettingsTap: () => context.push(AppRoutes.settings),
       ),
     );
   }

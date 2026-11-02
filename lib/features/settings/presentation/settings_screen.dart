@@ -838,6 +838,9 @@ class _QuickLaunchSubScreen extends ConsumerWidget {
                     ),
                   ),
                   _ShakeActionSelector(action: settings.shakeAction),
+                  if (settings.shakeAction == ShakeAction.camera ||
+                      settings.shakeAction == ShakeAction.counter)
+                    const _OverlayPermWarning(),
                 ],
                 RadioListTile<QuickLaunchMode>(
                   secondary: const Icon(Icons.block),
@@ -921,6 +924,69 @@ class _ShakeActionSelector extends ConsumerWidget {
             value: ShakeAction.counter,
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// 카메라·카운터 동작 선택 시, "다른 앱 위에 표시" 권한이 없으면 안내 타일을 띄운다.
+/// (기본값이 카운터라 라디오 onChanged를 거치지 않아 권한 요청이 생략되는 경우를 보완.)
+/// 권한이 없으면 흔들어도 화면이 바로 뜨지 않고 알림으로만 표시된다.
+class _OverlayPermWarning extends ConsumerStatefulWidget {
+  const _OverlayPermWarning();
+
+  @override
+  ConsumerState<_OverlayPermWarning> createState() =>
+      _OverlayPermWarningState();
+}
+
+class _OverlayPermWarningState extends ConsumerState<_OverlayPermWarning>
+    with WidgetsBindingObserver {
+  bool _granted = true; // 확인 전에는 숨김(깜빡임 방지)
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _check();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    // 시스템 설정에서 권한을 켜고 돌아오면 즉시 반영.
+    if (state == AppLifecycleState.resumed) _check();
+  }
+
+  Future<void> _check() async {
+    final granted = await TrackingService().canDrawOverlays();
+    if (mounted && granted != _granted) setState(() => _granted = granted);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (_granted) return const SizedBox.shrink();
+    final scheme = Theme.of(context).colorScheme;
+    return Card(
+      margin: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+      color: scheme.errorContainer,
+      child: ListTile(
+        leading: Icon(Icons.warning_amber_rounded, color: scheme.onErrorContainer),
+        title: Text('"다른 앱 위에 표시" 권한 필요',
+            style: TextStyle(color: scheme.onErrorContainer)),
+        subtitle: Text(
+          '권한이 없으면 흔들어도 화면이 바로 뜨지 않고 알림으로만 표시됩니다.',
+          style: TextStyle(color: scheme.onErrorContainer),
+        ),
+        trailing: TextButton(
+          onPressed: () => TrackingService().requestOverlayPermission(),
+          child: const Text('권한 허용'),
+        ),
       ),
     );
   }
