@@ -16,6 +16,7 @@ import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,8 +39,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -124,8 +129,16 @@ class WearMainActivity : ComponentActivity() {
                     if (side != null) {
                         ColorPicker(
                             current = colorIdx.getOrElse(side) { 0 },
-                            onPick = { idx -> setColor(side, idx); pickerSide = null },
-                            onDismiss = { pickerSide = null },
+                            onRotary = { dir -> moveCursor(dir) },
+                            onPick = { idx ->
+                                previewColor(side, idx)
+                                persistColor(side)
+                                pickerSide = null
+                            },
+                            onDismiss = {
+                                persistColor(side)
+                                pickerSide = null
+                            },
                         )
                     }
                 }
@@ -201,13 +214,24 @@ class WearMainActivity : ComponentActivity() {
         }
     }
 
-    private fun setColor(side: Int, idx: Int) {
+    /** 미리보기(상태만): 영역 색을 즉시 바꿔 배경·피커 커서에 반영. 저장은 닫을 때. */
+    private fun previewColor(side: Int, idx: Int) {
         val arr = colorIdx.copyOf()
         if (side in arr.indices) {
             arr[side] = idx.coerceIn(0, PALETTE.size - 1)
             colorIdx = arr
-            prefs.edit().putInt("color_$side", arr[side]).apply()
         }
+    }
+
+    /** 베젤 회전: 피커가 열린 영역의 색 커서를 delta만큼 이동. */
+    private fun moveCursor(delta: Int) {
+        val side = pickerSide ?: return
+        previewColor(side, colorIdx.getOrElse(side) { 0 } + delta)
+    }
+
+    /** 현재 영역 색을 prefs에 저장(피커 닫을 때 확정). */
+    private fun persistColor(side: Int) {
+        prefs.edit().putInt("color_$side", colorIdx.getOrElse(side) { 0 }).apply()
     }
 
     companion object {
@@ -365,13 +389,30 @@ private fun FlipCount(count: Int, fontSizeSp: Float) {
     }
 }
 
-/** 16색 스와치 그리드 피커(4×4). 색칩 탭=적용+닫힘, 바깥 탭=취소. */
+/** 16색 스와치 그리드 피커(4×4).
+ *  - 손가락: 색칩 탭=적용+닫힘 / 바깥 탭=현재 커서색으로 확정+닫힘.
+ *  - 베젤: 회전으로 커서(흰 테두리) 이동 + 배경 실시간 미리보기. */
 @Composable
-private fun ColorPicker(current: Int, onPick: (Int) -> Unit, onDismiss: () -> Unit) {
+private fun ColorPicker(
+    current: Int,
+    onRotary: (Int) -> Unit,
+    onPick: (Int) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val focusRequester = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focusRequester.requestFocus() }
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color.Black.copy(alpha = 0.86f))
+            .onRotaryScrollEvent { e ->
+                if (e.verticalScrollPixels != 0f) {
+                    onRotary(if (e.verticalScrollPixels > 0) 1 else -1)
+                }
+                true
+            }
+            .focusRequester(focusRequester)
+            .focusable()
+            .background(Color.Black.copy(alpha = 0.78f))
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
