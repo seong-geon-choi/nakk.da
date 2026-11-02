@@ -73,8 +73,10 @@ def main() -> int:
     ap.add_argument(
         "--track",
         default="internal",
-        choices=["internal", "alpha", "beta", "production"],
-        help="출시 트랙 (기본: internal)",
+        help="출시 트랙 (기본: internal). 폰: internal/alpha/beta/production. "
+             "Wear OS는 별도 폼팩터 트랙 wear:internal/wear:alpha/wear:beta/wear:production. "
+             "폰+워치 결합 릴리스는 각 폼팩터 트랙에 따로 올려야 한다(워치 번들을 폰 트랙에 "
+             "넣으면 'requires watch feature' 오류).",
     )
     ap.add_argument(
         "--status",
@@ -101,7 +103,6 @@ def main() -> int:
     ap.add_argument(
         "--notes-track",
         default=None,
-        choices=["internal", "alpha", "beta", "production"],
         help="출시노트를 가져올 트랙 (기본: --track 과 동일)",
     )
     ap.add_argument(
@@ -109,6 +110,23 @@ def main() -> int:
         action="store_true",
         help="검토 자동 제출 없이 커밋(대기 중 변경사항이 있어 자동 제출이 막힐 때). "
              "커밋 후 Play Console에서 수동으로 검토 제출",
+    )
+    ap.add_argument(
+        "--screenshot",
+        action="append",
+        default=None,
+        help="스토어 등록정보에 추가할 스크린샷(24비트 PNG/JPEG). 여러 번 지정 가능. "
+             "--screenshot-type/--screenshot-lang 적용. 같은 edit에 함께 커밋된다.",
+    )
+    ap.add_argument(
+        "--screenshot-type",
+        default="wearScreenshots",
+        help="스크린샷 종류(기본 wearScreenshots): phoneScreenshots/wearScreenshots 등",
+    )
+    ap.add_argument(
+        "--screenshot-lang",
+        default="ko-KR",
+        help="스크린샷 언어 코드(기본 ko-KR)",
     )
     args = ap.parse_args()
 
@@ -177,6 +195,17 @@ def main() -> int:
             body={"track": args.track, "releases": [release]},
         ).execute()
         print(f"[3/4] 트랙 할당: {args.track} (status={args.status})")
+
+        for shot in (args.screenshot or []):
+            mime = "image/jpeg" if shot.lower().endswith((".jpg", ".jpeg")) else "image/png"
+            edits.images().upload(
+                packageName=args.package,
+                editId=edit_id,
+                language=args.screenshot_lang,
+                imageType=args.screenshot_type,
+                media_body=MediaFileUpload(shot, mimetype=mime, resumable=False),
+            ).execute()
+            print(f"      스크린샷 등록({args.screenshot_type}/{args.screenshot_lang}): {shot}")
 
         edits.commit(
             packageName=args.package,
