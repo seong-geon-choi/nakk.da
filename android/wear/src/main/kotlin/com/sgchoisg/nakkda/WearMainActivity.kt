@@ -9,6 +9,8 @@ import android.os.SystemClock
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -94,6 +96,8 @@ class WearMainActivity : ComponentActivity() {
     private var names by mutableStateOf<List<String>>(emptyList())
     private var counts by mutableStateOf<List<Int>>(emptyList())
     private var colorIdx by mutableStateOf(intArrayOf(0, 4))
+    // 플립 애니메이션 여부 — 연타(짧은 간격)면 스냅(false), 단독 조작이면 플립(true).
+    private var animateFlip by mutableStateOf(false)
     // 색상 그리드 피커가 열린 영역(null=닫힘, 0=좌, 1=우).
     private var pickerSide by mutableStateOf<Int?>(null)
     // 즉시 전송용 연결 노드 캐시(매 탭마다 조회하지 않도록).
@@ -126,6 +130,7 @@ class WearMainActivity : ComponentActivity() {
                         names = names,
                         counts = counts,
                         colorIdx = colorIdx,
+                        animate = animateFlip,
                         onPlus = { i -> bump(i, 1, PATH_ADD) },
                         onMinus = { i -> bump(i, -1, PATH_REMOVE) },
                         onStop = { sendStop() },
@@ -215,7 +220,10 @@ class WearMainActivity : ComponentActivity() {
     /** 낙관적 즉시 반영: 워치 숫자를 먼저 올리고(폰 왕복 대기 없음) 명령을 전송한다.
      *  폰의 권위값 push(applyData)가 오면 그 값으로 보정된다. */
     private fun bump(index: Int, delta: Int, path: String) {
-        lastBumpAt = SystemClock.elapsedRealtime()
+        val now = SystemClock.elapsedRealtime()
+        // 직전 조작과 간격이 짧으면(연타) 스냅, 넉넉하면 플립.
+        animateFlip = (now - lastBumpAt) >= FLIP_GAP_MS
+        lastBumpAt = now
         val c = counts.toMutableList()
         while (c.size <= index) c.add(0)
         c[index] = (c[index] + delta).coerceAtLeast(0)
@@ -275,6 +283,8 @@ class WearMainActivity : ComponentActivity() {
         private const val RECONCILE_MS = 700L
         // 낙관적 값과 불일치가 이 시간 이상 지속되면(명령 유실 등) 한 번 강제 보정.
         private const val MAX_RECONCILE_MS = 2500L
+        // 직전 조작과 간격이 이보다 짧으면 연타로 보고 플립을 생략(스냅).
+        private const val FLIP_GAP_MS = 320L
     }
 }
 
@@ -283,6 +293,7 @@ private fun CounterScreen(
     names: List<String>,
     counts: List<Int>,
     colorIdx: IntArray,
+    animate: Boolean,
     onPlus: (Int) -> Unit,
     onMinus: (Int) -> Unit,
     onStop: () -> Unit,
@@ -306,6 +317,7 @@ private fun CounterScreen(
                 count = counts.getOrElse(0) { 0 },
                 color = PALETTE[colorIdx.getOrElse(0) { 0 } % PALETTE.size],
                 single = sides == 1,
+                animate = animate,
                 onPlus = { onPlus(0) },
                 onMinus = { onMinus(0) },
                 onPickColor = { onPickColor(0) },
@@ -317,6 +329,7 @@ private fun CounterScreen(
                     count = counts.getOrElse(1) { 0 },
                     color = PALETTE[colorIdx.getOrElse(1) { 1 } % PALETTE.size],
                     single = false,
+                    animate = animate,
                     onPlus = { onPlus(1) },
                     onMinus = { onMinus(1) },
                     onPickColor = { onPickColor(1) },
@@ -340,6 +353,7 @@ private fun CounterSide(
     count: Int,
     color: Color,
     single: Boolean,
+    animate: Boolean,
     onPlus: () -> Unit,
     onMinus: () -> Unit,
     onPickColor: () -> Unit,
@@ -393,23 +407,26 @@ private fun CounterSide(
                 textAlign = TextAlign.Center,
                 maxLines = 1,
             )
-            FlipCount(count, if (single) 56.sp.value else 42.sp.value)
+            FlipCount(count, if (single) 56.sp.value else 42.sp.value, animate)
         }
     }
 }
 
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
-private fun FlipCount(count: Int, fontSizeSp: Float) {
+private fun FlipCount(count: Int, fontSizeSp: Float, animate: Boolean) {
     AnimatedContent(
         targetState = count,
         transitionSpec = {
-            if (targetState > initialState) {
-                (slideInVertically { h -> h } + fadeIn()) togetherWith
-                    (slideOutVertically { h -> -h } + fadeOut())
-            } else {
-                (slideInVertically { h -> -h } + fadeIn()) togetherWith
-                    (slideOutVertically { h -> h } + fadeOut())
+            when {
+                // 연타 중엔 애니메이션 없이 즉시 전환(스냅).
+                !animate -> EnterTransition.None togetherWith ExitTransition.None
+                targetState > initialState ->
+                    (slideInVertically { h -> h } + fadeIn()) togetherWith
+                        (slideOutVertically { h -> -h } + fadeOut())
+                else ->
+                    (slideInVertically { h -> -h } + fadeIn()) togetherWith
+                        (slideOutVertically { h -> h } + fadeOut())
             }
         },
         label = "flip",

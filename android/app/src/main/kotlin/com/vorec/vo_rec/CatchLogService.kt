@@ -441,6 +441,14 @@ class CatchLogService : Service() {
     private var tts: TextToSpeech? = null
     @Volatile private var ttsReady = false
     @Volatile private var player: MediaPlayer? = null
+    // 미디어 즉시 건너뛰기: 연타 시 중간 효과음은 건너뛰고 마지막 것만 재생(디바운스).
+    private val feedbackHandler = Handler(Looper.getMainLooper())
+    @Volatile private var pendingSoundItem: SoundItem? = null
+    private val playPendingRunnable = Runnable {
+        val item = pendingSoundItem ?: return@Runnable
+        pendingSoundItem = null
+        io.execute { playItem(item) }
+    }
     // 순차 재생용 커서(+1·삭제 각각). 랜덤 순서면 쓰이지 않는다.
     private var addSeq = 0
     private var delSeq = 0
@@ -509,7 +517,14 @@ class CatchLogService : Service() {
         val mediaVol = am?.getStreamVolume(AudioManager.STREAM_MUSIC) ?: 0
         if (isSoundEnabled(this) && mediaVol > 0) {
             val item = itemIfSound()
-            if (item != null) playItem(item)
+            if (item != null) {
+                // 재생 중인 효과음은 즉시 중단(건너뛰기 느낌). 실제 재생은 짧게 디바운스 →
+                // 연타 시 중간 미디어는 건너뛰고 마지막 것만 재생된다.
+                stopPlayback()
+                pendingSoundItem = item
+                feedbackHandler.removeCallbacks(playPendingRunnable)
+                feedbackHandler.postDelayed(playPendingRunnable, 140L)
+            }
         }
         if (isVibrateEnabled(this)) vibrateShort()
     }
@@ -718,6 +733,7 @@ class CatchLogService : Service() {
         tts = null
         try { player?.release() } catch (_: Exception) {}
         player = null
+        feedbackHandler.removeCallbacks(playPendingRunnable)
         io.shutdown()
         super.onDestroy()
     }
