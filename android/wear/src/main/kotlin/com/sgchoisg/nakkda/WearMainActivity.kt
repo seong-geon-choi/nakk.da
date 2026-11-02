@@ -12,10 +12,10 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -36,6 +36,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -216,7 +217,6 @@ private fun CounterScreen(
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CounterSide(
     modifier: Modifier,
@@ -228,27 +228,34 @@ private fun CounterSide(
     onMinus: () -> Unit,
     onCycleColor: () -> Unit,
 ) {
-    Box(modifier.background(color)) {
-        // 탭 영역: 위=+1 / 아래=−1, 길게누름=색상 순환.
-        Column(Modifier.fillMaxSize()) {
-            Box(
-                Modifier.weight(1f).fillMaxWidth().combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onPlus,
-                    onLongClick = onCycleColor,
-                ),
-            )
-            Box(
-                Modifier.weight(1f).fillMaxWidth().combinedClickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = null,
-                    onClick = onMinus,
-                    onLongClick = onCycleColor,
-                ),
-            )
-        }
-        // 표시 오버레이(클릭 비소유 → 탭이 아래 영역으로 통과).
+    Box(
+        modifier
+            .background(color)
+            // 탭: 위 절반=+1 / 아래 절반=−1, 길게누름=색상 순환.
+            .pointerInput(Unit) {
+                detectTapGestures(
+                    onLongPress = { onCycleColor() },
+                    onTap = { pos -> if (pos.y < size.height / 2f) onPlus() else onMinus() },
+                )
+            }
+            // 스와이프: 위로=+1 / 아래로=−1 (한 번에 1회).
+            .pointerInput(Unit) {
+                var dy = 0f
+                val threshold = 24.dp.toPx()
+                detectVerticalDragGestures(
+                    onDragStart = { dy = 0f },
+                    onVerticalDrag = { change, delta ->
+                        dy += delta
+                        change.consume()
+                    },
+                    onDragEnd = {
+                        if (dy <= -threshold) onPlus()
+                        else if (dy >= threshold) onMinus()
+                    },
+                )
+            },
+    ) {
+        // 표시 오버레이(제스처 비소유 → 이벤트가 영역 Box로 전달됨).
         val hint = Color.White.copy(alpha = 0.55f)
         Text(
             "＋", color = hint, fontSize = 15.sp,
