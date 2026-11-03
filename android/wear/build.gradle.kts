@@ -32,9 +32,10 @@ android {
         minSdk = 30
         // Play 타깃 API 요구치(API 35). compileSdk와 일치.
         targetSdk = 35
-        // vc1이 wear:production에서 superseded 상태로 고착 → 새 versionCode로 재게시.
-        versionCode = 2
-        versionName = "1.0.1"
+        // Wear 번들 versionCode는 폰(2072)보다 크고 고유해야 함(Play 규칙: 폼팩터 무관
+        // 패키지 내 versionCode 고유 + 워치 ≥ 폰). 폰 2072 → 워치 2073.
+        versionCode = 2073
+        versionName = "3.14.1"
     }
 
     buildFeatures {
