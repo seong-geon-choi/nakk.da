@@ -32,8 +32,9 @@ android {
         minSdk = 30
         // Play 타깃 API 요구치(API 35). compileSdk와 일치.
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // vc1이 wear:production에서 superseded 상태로 고착 → 새 versionCode로 재게시.
+        versionCode = 2
+        versionName = "1.0.1"
     }
 
     buildFeatures {
