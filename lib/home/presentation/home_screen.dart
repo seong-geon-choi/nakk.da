@@ -1733,8 +1733,12 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
         settingsAsync.valueOrNull?.showLocationButton ?? true;
     final notifier = ref.read(dayFileProvider(path).notifier);
     ref.watch(fileListProvider); // 날짜 스와이프 이동용 목록 미리 로드
-    final needsSetup =
-        _isToday && (settingsAsync.valueOrNull?.needsFolderSetup ?? false);
+    // 폴더 미설정(경로 비어있음) 또는 SAF 권한 유실(경로는 있으나 쓰기 불가) 모두 감지.
+    final folderMissing = settingsAsync.valueOrNull?.needsFolderSetup ?? false;
+    final savePathValid =
+        ref.watch(savePathPermissionValidProvider).valueOrNull ?? true;
+    final permissionLost = !folderMissing && !savePathValid;
+    final needsSetup = _isToday && (folderMissing || permissionLost);
 
     final content = asyncFile.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -1842,13 +1846,17 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
         children: [
           if (needsSetup)
             MaterialBanner(
-              content: const Text('메모 저장 폴더가 설정되지 않았습니다'),
+              content: Text(permissionLost
+                  ? '저장 폴더 권한이 없습니다. 폴더를 다시 선택해 주세요 '
+                      '(권한이 없으면 카운트·메모가 저장되지 않습니다)'
+                  : '저장 폴더가 설정되지 않았습니다. 폴더를 선택해 주세요 '
+                      '(설정하지 않으면 카운트·메모가 저장되지 않습니다)'),
               actions: [
                 TextButton(
                   onPressed: () async {
                     await ref.read(settingsProvider.notifier).pickSaveFolder();
                   },
-                  child: const Text('폴더 선택'),
+                  child: Text(permissionLost ? '폴더 다시 선택' : '폴더 선택'),
                 ),
               ],
             ),

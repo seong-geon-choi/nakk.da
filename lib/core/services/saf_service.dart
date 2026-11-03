@@ -70,6 +70,17 @@ class SafService {
   Future<String> getDisplayPath(String folderUri) async =>
       await _channel.invokeMethod<String>('getDisplayPath', {'uri': folderUri}) ?? folderUri;
 
+  /// 저장 폴더(SAF) 쓰기 권한이 아직 유효한지 확인. 재설치·권한 회수 시 false.
+  Future<bool> hasPermission(String folderUri) async {
+    try {
+      return await _channel
+              .invokeMethod<bool>('hasPermission', {'uri': folderUri}) ??
+          false;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// 로컬 캐시 파일을 SAF 폴더의 photos/ 서브폴더로 복사
   Future<void> copyFileToSafFolder(String sourcePath, String folderUri, String filename) =>
       _channel.invokeMethod('copyFileToSafFolder', {

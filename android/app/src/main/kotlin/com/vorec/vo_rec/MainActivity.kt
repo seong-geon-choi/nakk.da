@@ -415,6 +415,16 @@ class MainActivity : FlutterActivity() {
                         val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
                         result.success(safGetDisplayPath(uri))
                     }
+                    "hasPermission" -> {
+                        // 저장 폴더(SAF tree URI)에 쓰기 권한이 아직 유효한지 실시간 확인.
+                        // 재설치·권한 회수로 영속 권한이 유실되면 false → 앱이 재설정을 안내.
+                        val uri = call.argument<String>("uri") ?: return@setMethodCallHandler result.error("ARG", "uri missing", null)
+                        val ok = try {
+                            val tree = DocumentFile.fromTreeUri(this, Uri.parse(uri))
+                            tree != null && tree.canWrite()
+                        } catch (_: Exception) { false }
+                        result.success(ok)
+                    }
                     "copyFileToSafFolder" -> {
                         val sourcePath = call.argument<String>("sourcePath") ?: return@setMethodCallHandler result.error("ARG", "sourcePath missing", null)
                         val folderUri  = call.argument<String>("folderUri")  ?: return@setMethodCallHandler result.error("ARG", "folderUri missing", null)

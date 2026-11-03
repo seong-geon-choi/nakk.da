@@ -50,6 +50,30 @@ class _PermissionCenterScreenState extends State<PermissionCenterScreen>
     if (mounted) setState(() {});
   }
 
+  /// 모든 시스템 권한을 다시 요청한다.
+  /// - 아직 결정되지 않은 런타임 권한: 시스템 팝업이 뜬다.
+  /// - 특수 접근(오버레이): 해당 설정 화면으로 이동.
+  /// - 영구 거부된 권한은 팝업이 안 뜨므로(안드로이드 정책) "앱 설정 열기"로 안내.
+  Future<void> _requestAll() async {
+    final runtime = <Permission>{
+      for (final it in kRequiredPermissionItems) ...it.permissions,
+    }.toList();
+    final results = await runtime.request();
+    for (final it in kSpecialAccessItems) {
+      for (final p in it.permissions) {
+        if (!(await p.isGranted)) await p.request();
+      }
+    }
+    await _refresh();
+    if (!mounted) return;
+    final someDenied = results.values.any((s) => !s.isGranted);
+    if (someDenied) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('일부 권한은 "앱 설정 열기"에서 직접 켜야 합니다.'),
+      ));
+    }
+  }
+
   /// 위치 권한의 현재 범위. 항상 허용 ⊃ 사용 중만 ⊃ 꺼짐.
   String _locationScope() {
     if (_granted[Permission.locationAlways] == true) return '항상 허용';
@@ -79,6 +103,14 @@ class _PermissionCenterScreenState extends State<PermissionCenterScreen>
               textAlign: TextAlign.center,
             ),
             const SizedBox(height: 12),
+            FilledButton.icon(
+              style:
+                  FilledButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+              onPressed: _requestAll,
+              icon: const Icon(Icons.refresh),
+              label: const Text('모든 권한 다시 요청'),
+            ),
+            const SizedBox(height: 8),
             OutlinedButton.icon(
               style: OutlinedButton.styleFrom(
                   minimumSize: const Size.fromHeight(52)),

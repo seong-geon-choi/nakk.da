@@ -35,6 +35,16 @@ final settingsProvider = AsyncNotifierProvider<SettingsNotifier, AppSettings>(
   SettingsNotifier.new,
 );
 
+/// 저장 폴더(SAF) 쓰기 권한이 아직 유효한지. 재설치·권한 회수로 유실되면 false.
+/// 경로가 비었거나 비SAF 경로면 true(그 경우는 needsFolderSetup이 따로 처리).
+/// 홈 배너가 "폴더 미설정"뿐 아니라 "권한 유실"도 감지해 재설정을 안내하도록 쓴다.
+final savePathPermissionValidProvider = FutureProvider<bool>((ref) async {
+  final settings = await ref.watch(settingsProvider.future);
+  final path = settings.savePath;
+  if (path.isEmpty || !SafService.isSafUri(path)) return true;
+  return SafService().hasPermission(path);
+});
+
 class SettingsNotifier extends AsyncNotifier<AppSettings> {
   @override
   Future<AppSettings> build() async {
