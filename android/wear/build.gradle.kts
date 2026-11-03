@@ -33,8 +33,8 @@ android {
         // Play 타깃 API 요구치(API 35). compileSdk와 일치.
         targetSdk = 35
         // Wear 번들 versionCode는 폰(2072)보다 크고 고유해야 함(Play 규칙: 폼팩터 무관
-        // 패키지 내 versionCode 고유 + 워치 ≥ 폰). 폰 2072 → 워치 2073.
-        versionCode = 2073
+        // 패키지 내 versionCode 고유 + 워치 ≥ 폰). 2073→2074: fragment 1.8.6 반영 재게시.
+        versionCode = 2074
         versionName = "3.14.1"
     }
 
@@ -68,4 +68,6 @@ dependencies {
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
     implementation("com.google.android.gms:play-services-wearable:18.2.0")
+    // 전이 의존성으로 딸려오는 오래된 fragment(1.1.0)를 최신으로 강제(Play SDK 경고 해소).
+    implementation("androidx.fragment:fragment:1.8.6")
 }
