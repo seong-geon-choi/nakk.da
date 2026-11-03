@@ -3,7 +3,9 @@ package com.sgchoisg.nakkda
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
 import android.media.VolumeProvider
 import android.media.session.MediaSession
@@ -30,10 +32,16 @@ class MediaButtonSession(
     private val context: Context,
     private val tag: String,
     private val hookVolume: Boolean = false,
+    // true면 오디오 포커스를 '덕킹' 모드로 요청해, 다른 미디어 앱이 재생 중(포커스 보유)이어도
+    // 미디어 버튼을 이쪽으로 가져온다(다른 앱은 멈추지 않고 볼륨만 낮춤 — 단, 영상 앱 등은
+    // 자체 정책상 일시정지할 수 있음). false면 포커스를 요청하지 않아 음악이 안 끊기는 대신
+    // 다른 앱이 포커스를 쥐고 있으면 버튼을 못 가져온다.
+    private val requestFocus: Boolean = false,
     private val onKey: (Int) -> Unit,
 ) {
     private var session: MediaSession? = null
     @Volatile private var track: AudioTrack? = null
+    private var focusRequest: AudioFocusRequest? = null
 
     fun start() {
         if (session != null) return
@@ -80,7 +88,32 @@ class MediaButtonSession(
         }
         s.isActive = true
         session = s
+        if (requestFocus) acquireDuckFocus()
         startSilentAudio()
+    }
+
+    /**
+     * 오디오 포커스를 '덕킹'(AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)으로 요청한다.
+     * 포커스를 쥐면 미디어 버튼이 이쪽 세션으로 라우팅되고, 다른 앱엔 "볼륨만 낮추라"고
+     * 요청한다(음악은 작아진 채 계속 재생; 영상 앱 등은 자체 정책상 일시정지할 수 있음).
+     * 우리는 무음이므로 포커스 변화에 반응하지 않는다. 세션 종료 시 abandon한다.
+     */
+    private fun acquireDuckFocus() {
+        try {
+            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            val req = AudioFocusRequest.Builder(
+                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(
+                    AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_MEDIA)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                        .build())
+                .setWillPauseWhenDucked(false)
+                .setOnAudioFocusChangeListener { /* 무음이라 반응 없음 */ }
+                .build()
+            am.requestAudioFocus(req)
+            focusRequest = req
+        } catch (_: Exception) {}
     }
 
     /** 포커스 없이 무음 PCM을 흘려 세션을 활성으로 유지(소리 없음). */
@@ -123,6 +156,14 @@ class MediaButtonSession(
         val t = track
         track = null
         try { t?.stop(); t?.release() } catch (_: Exception) {}
+        val fr = focusRequest
+        focusRequest = null
+        if (fr != null) {
+            try {
+                (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
+                    .abandonAudioFocusRequest(fr)
+            } catch (_: Exception) {}
+        }
         try { session?.isActive = false; session?.release() } catch (_: Exception) {}
         session = null
     }

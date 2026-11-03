@@ -1781,6 +1781,7 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
   Map<String, int> _map = {};
   bool _enabled = false;
   bool _volHook = false;
+  bool _focusDuck = true; // 기본 켜짐(네이티브와 일치, 로드 전 깜빡임 방지)
 
   @override
   void initState() {
@@ -1792,7 +1793,15 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
     final m = await BtRemoteService.getKeyMap();
     final en = await BtRemoteService.getEnabled();
     final vh = await BtRemoteService.getVolHook();
-    if (mounted) setState(() { _map = m; _enabled = en; _volHook = vh; });
+    final fd = await BtRemoteService.getFocusDuck();
+    if (mounted) {
+      setState(() {
+        _map = m;
+        _enabled = en;
+        _volHook = vh;
+        _focusDuck = fd;
+      });
+    }
   }
 
   Future<void> _setEnabled(bool v) async {
@@ -1803,6 +1812,11 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
   Future<void> _setVolHook(bool v) async {
     setState(() => _volHook = v);
     await BtRemoteService.setVolHook(v);
+  }
+
+  Future<void> _setFocusDuck(bool v) async {
+    setState(() => _focusDuck = v);
+    await BtRemoteService.setFocusDuck(v);
   }
 
   static const _mediaCodes = {85, 126, 127, 87, 88, 86, 90, 89, 79};
@@ -1979,15 +1993,23 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
                       ? '볼륨 +/− 버튼이 화면 꺼짐에서도 동작합니다 · 이 동안 음악 볼륨 조절은 안 됩니다'
                       : '켜면 볼륨 버튼 리모컨을 백그라운드에서 쓸 수 있습니다'),
                 ),
+                SwitchListTile(
+                  value: _focusDuck,
+                  onChanged: _setFocusDuck,
+                  secondary: const Icon(Icons.music_note_outlined),
+                  title: const Text('다른 미디어보다 리모컨 우선'),
+                  subtitle: Text(_focusDuck
+                      ? 'YouTube·음악이 재생 중이어도 버튼을 가져옵니다 · 그동안 다른 앱 볼륨이 낮아집니다 · 음악이나 영상이 끊기면 이 옵션을 꺼주세요'
+                      : '꺼져 있으면 다른 앱이 재생 중일 때 그 앱을 종료하기 전까지 버튼을 못 받을 수 있습니다'),
+                ),
                 const Padding(
                   padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
                   child: Text(
                     '블루투스 이어폰·리모컨 버튼으로 조과를 세어보세요.\n'
                     '• 재생/정지·다음곡 같은 "미디어 키"는 화면이 꺼진 주머니 속에서도 동작합니다.\n'
-                    '• 볼륨 +/− 버튼은 "볼륨 버튼 연동 사용"을 켜야 화면 꺼짐에서도 동작합니다 '
-                    '(켜는 동안 음악 볼륨 조절은 불가).\n'
-                    '• 조과 기록 중에는 그 버튼이 카운트 전용이 됩니다(음악 소리는 계속 나지만 '
-                    '버튼으로 곡 변경은 안 됩니다).',
+                    '• 볼륨 +/− 버튼은 "볼륨 버튼 연동 사용"을 켜야 화면 꺼짐에서도 동작합니다.\n'
+                    '• 유튜브나 음악 재생 중에는 블루투스키 연동이 원활하지 않을 수 있습니다. '
+                    '이럴 땐 빠른 실행(흔들기) 모드를 사용하거나 워치 앱을 이용해 주세요.',
                     style: TextStyle(fontSize: 13, height: 1.5),
                   ),
                 ),

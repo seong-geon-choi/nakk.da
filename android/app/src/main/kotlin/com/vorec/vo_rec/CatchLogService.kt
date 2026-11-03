@@ -91,11 +91,16 @@ class CatchLogService : Service() {
         const val PREFS_BTMAP_KEY = "catch_btmap"
         // 어종 무관 '최근 1개 삭제' 매핑 액션 키.
         const val ACTION_REM_LAST = "rem:last"
-        // 블루투스 버튼 연동 사용 여부(사용자가 켠 경우만 작동). 기본 꺼짐.
+        // 블루투스 버튼 연동 사용 여부. 최초 설치 시 기본값은 seedBtDefaults로 ON 시드.
         const val PREFS_BTMAP_ENABLED_KEY = "catch_btmap_enabled"
+        // 블루투스 기본 매핑을 최초 1회만 시드했는지 표시(재시드/기존설정 덮어쓰기 방지).
+        const val PREFS_BTMAP_SEEDED_KEY = "catch_btmap_seeded"
         // 볼륨 버튼으로 카운트(원격 볼륨 후킹). 켜면 볼륨 키가 백그라운드에서도 들어오나
         // 그동안 하드웨어 볼륨으로 음악 볼륨 조절은 안 된다. 기본 꺼짐.
         const val PREFS_BTVOL_ENABLED_KEY = "catch_btvol_enabled"
+        // 다른 미디어보다 리모컨 우선(덕킹 포커스 요청). 켜면 YouTube 등 재생 중에도 버튼을
+        // 가져오나 그동안 다른 앱 볼륨이 낮아짐(영상 앱은 일시정지될 수 있음). 기본 켜짐.
+        const val PREFS_BTFOCUS_ENABLED_KEY = "catch_btfocus_enabled"
         // 집계 변동(리모컨으로 ±) 시 카운터 화면이 즉시 다시 그리도록 알리는 로컬 브로드캐스트.
         const val ACTION_COUNTS_CHANGED = "com.sgchoisg.nakkda.COUNTS_CHANGED"
         // 설정에서 연동 on/off를 바꿨을 때 실행 중인 서비스가 세션을 즉시 재동기화하도록 하는 액션.
@@ -111,6 +116,33 @@ class CatchLogService : Service() {
         /** 볼륨 버튼 후킹(원격 볼륨)이 켜져 있는지(기본 꺼짐). */
         fun isBtVolEnabled(context: Context): Boolean =
             prefsOf(context).getBoolean(PREFS_BTVOL_ENABLED_KEY, false)
+
+        /** 다른 미디어보다 리모컨 우선(덕킹 포커스 요청)이 켜져 있는지(기본 켜짐). */
+        fun isBtFocusEnabled(context: Context): Boolean =
+            prefsOf(context).getBoolean(PREFS_BTFOCUS_ENABLED_KEY, true)
+
+        /**
+         * 블루투스 리모컨 카운트 기본값을 최초 1회만 시드한다(앱 시작 시 호출).
+         * 기본: 연동 ON + 매핑 { 어종0 +1 = 이전곡, 어종1 +1 = 다음곡, 공통(최근1삭제) = 재생/정지 }.
+         * 기존 사용자가 이미 연동을 설정(enabled 키 존재 또는 매핑 비어있지 않음)했으면
+         * 건드리지 않고 시드 완료 표시만 하여, 업데이트 시 사용자 설정을 덮어쓰지 않는다.
+         */
+        fun seedBtDefaults(context: Context) {
+            val p = prefsOf(context)
+            if (p.getBoolean(PREFS_BTMAP_SEEDED_KEY, false)) return
+            val configured = p.contains(PREFS_BTMAP_ENABLED_KEY) ||
+                (p.getString(PREFS_BTMAP_KEY, "{}") ?: "{}") != "{}"
+            val e = p.edit().putBoolean(PREFS_BTMAP_SEEDED_KEY, true)
+            if (!configured) {
+                val map = org.json.JSONObject()
+                    .put("add:0", android.view.KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+                    .put("add:1", android.view.KeyEvent.KEYCODE_MEDIA_NEXT)
+                    .put(ACTION_REM_LAST, android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+                e.putBoolean(PREFS_BTMAP_ENABLED_KEY, true)
+                    .putString(PREFS_BTMAP_KEY, map.toString())
+            }
+            e.apply()
+        }
 
         /** 매핑(action→keyCode)을 읽는다. 값이 없거나 깨지면 빈 맵. */
         fun loadKeyMap(context: Context): Map<String, Int> {
@@ -471,6 +503,8 @@ class CatchLogService : Service() {
     private var mediaButton: MediaButtonSession? = null
     // 현재 세션이 볼륨 후킹 상태로 떠 있는지(토글 변경 시 재생성 판단용).
     private var mediaButtonVol = false
+    // 현재 세션이 덕킹 포커스 요청 상태로 떠 있는지(토글 변경 시 재생성 판단용).
+    private var mediaButtonFocus = false
 
     // 조과 효과음용 TTS(한국어). onCreate에서 초기화, onDestroy에서 종료.
     private var tts: TextToSpeech? = null
@@ -668,17 +702,21 @@ class CatchLogService : Service() {
     private fun syncMediaButton() {
         val has = isBtEnabled(this) && loadKeyMap(this).isNotEmpty()
         val wantVol = has && isBtVolEnabled(this)
-        if (has && (mediaButton == null || mediaButtonVol != wantVol)) {
-            // 볼륨 후킹 on/off가 바뀌면 세션을 재생성해야 원격 볼륨 선언이 반영된다.
+        val wantFocus = has && isBtFocusEnabled(this)
+        if (has && (mediaButton == null || mediaButtonVol != wantVol ||
+                mediaButtonFocus != wantFocus)) {
+            // 볼륨 후킹·포커스 on/off가 바뀌면 세션을 재생성해야 선언이 반영된다.
             mediaButton?.stop()
             mediaButtonVol = wantVol
-            mediaButton = MediaButtonSession(this, "nakkda_catch", hookVolume = wantVol) { keyCode ->
-                onRemoteKey(keyCode)
-            }.also { it.start() }
+            mediaButtonFocus = wantFocus
+            mediaButton = MediaButtonSession(
+                this, "nakkda_catch", hookVolume = wantVol, requestFocus = wantFocus
+            ) { keyCode -> onRemoteKey(keyCode) }.also { it.start() }
         } else if (!has && mediaButton != null) {
             mediaButton?.stop()
             mediaButton = null
             mediaButtonVol = false
+            mediaButtonFocus = false
         }
     }
 

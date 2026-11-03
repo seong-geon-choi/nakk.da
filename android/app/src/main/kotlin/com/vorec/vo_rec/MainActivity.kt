@@ -87,6 +87,8 @@ class MainActivity : FlutterActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         super.onCreate(savedInstanceState)
+        // 블루투스 리모컨 카운트 기본값(연동 ON + 이전곡/다음곡/재생정지 매핑) 최초 1회 시드.
+        CatchLogService.seedBtDefaults(this)
     }
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -793,6 +795,14 @@ class MainActivity : FlutterActivity() {
                     setBtVolHook(enabled)
                     result.success(null)
                 }
+                "getFocusDuck" -> {
+                    result.success(CatchLogService.isBtFocusEnabled(this))
+                }
+                "setFocusDuck" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    setBtFocusDuck(enabled)
+                    result.success(null)
+                }
                 "getSoundEnabled" -> {
                     result.success(CatchLogService.isSoundEnabled(this))
                 }
@@ -978,6 +988,13 @@ class MainActivity : FlutterActivity() {
     private fun setBtVolHook(enabled: Boolean) {
         CatchLogService.prefsOf(this).edit()
             .putBoolean(CatchLogService.PREFS_BTVOL_ENABLED_KEY, enabled).apply()
+        resyncBtSession()
+    }
+
+    /** 리모컨 우선(덕킹 포커스) on/off 저장 + 세션 즉시 재동기화(포커스 요청 반영). */
+    private fun setBtFocusDuck(enabled: Boolean) {
+        CatchLogService.prefsOf(this).edit()
+            .putBoolean(CatchLogService.PREFS_BTFOCUS_ENABLED_KEY, enabled).apply()
         resyncBtSession()
     }
 
