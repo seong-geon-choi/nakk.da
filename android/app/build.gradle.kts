@@ -52,6 +52,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 디버그도 릴리즈 키로 서명 — 디버그/릴리즈가 같은 인증서라
+            // 서로 덮어 설치되고(데이터·SAF 권한 보존) 워치 Data Layer도 연동된다(개발 편의).
+            signingConfig = signingConfigs.getByName("release")
+        }
         release {
             signingConfig = signingConfigs.getByName("release")
             // R8 코드 축소·난독화 활성(Play 앱 최적화 '난독화' 기준 충족).

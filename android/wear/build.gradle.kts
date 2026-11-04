@@ -52,6 +52,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            // 폰 앱과 동일하게 디버그도 릴리즈 키로 서명 — 같은 인증서라야
+            // 디버그/릴리즈 아무 조합이나 Wear Data Layer가 연동된다(개발 편의).
+            signingConfig = signingConfigs.getByName("release")
+        }
         release {
             signingConfig = signingConfigs.getByName("release")
             isMinifyEnabled = false
