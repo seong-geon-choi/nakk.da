@@ -7,6 +7,7 @@ import '../../weather/data/weather_service.dart';
 import '../../tide/data/tide_service.dart';
 import '../../tide/domain/models/tide_station.dart';
 import '../../settings/presentation/settings_provider.dart';
+import '../../../core/services/catch_log_service.dart';
 
 final locationServiceProvider = Provider<LocationService>(
   (ref) => LocationServiceImpl(),
@@ -138,6 +139,27 @@ class LocationNotifier extends AsyncNotifier<LocationStatus?> {
       weatherCode: existing.weatherCode,
       tides: tideResult.tides,
     );
+  }
+
+  /// 오늘 조위 극값(만조/간조)을 네이티브로 push한다(워치 그래프 배경용). best-effort.
+  /// 조과 카운터 세션 시작 시 1회 호출 — 현재(또는 캐시) 좌표 기준 당일 만조/간조를 전달한다.
+  Future<void> pushTodayTideToWatch() async {
+    try {
+      final gps = cached ??
+          await ref.read(locationServiceProvider).getCurrentLocation();
+      final lat = gps?.latitude;
+      final lng = gps?.longitude;
+      if (lat == null || lng == null) return;
+      final settings = await ref.read(settingsProvider.future);
+      final tide = await ref
+          .read(_tideServiceProvider)
+          .getTideResult(lat, lng, settings.effectiveKhoaApiKey);
+      final points = [
+        for (final t in tide?.tides ?? const <TideEvent>[])
+          if (t.level != null) {'t': t.time, 'l': t.level},
+      ];
+      await CatchLogService().pushTideToday(points);
+    } catch (_) {/* best-effort: 실패해도 카운터는 계속 */}
   }
 
   /// GPS + 역지오코딩 + 기온 + 물때/수온을 병합한 풍부한 LocationStatus 반환

@@ -108,6 +108,11 @@ class CatchLogService : Service() {
 
         // 현재 총 조과 수를 워치로 내보내는 Data Layer 아이템 경로(워치 화면 실시간 표시용).
         const val PATH_WATCH_COUNT = "/nakkda/count/state"
+        // 워치 그래프(시간당 조과 + 조위) 데이터 경로. 워치가 요청하면 push한다.
+        const val PATH_WATCH_CHART = "/nakkda/chart/state"
+        // 오늘 조위 극값(만조/간조) 저장 키: {"date":"yyyy-MM-dd","points":[{"t":"HH:mm","l":cm}]}.
+        // Flutter가 세션 시작 시 push(catchPushTide) → 워치 그래프 배경용으로 보관.
+        const val PREFS_TIDE_TODAY = "catch_tide_today"
 
         /** 블루투스 버튼 연동이 사용자에 의해 켜져 있는지(기본 꺼짐). */
         fun isBtEnabled(context: Context): Boolean =
@@ -228,6 +233,83 @@ class CatchLogService : Service() {
                     dataMap.putStringArrayList("names", ArrayList(names))
                     dataMap.putIntegerArrayList("counts", countList)
                     // 같은 값이어도 아이템이 갱신되도록 타임스탬프를 포함(동기화 트리거).
+                    dataMap.putLong("ts", System.currentTimeMillis())
+                }.asPutDataRequest().setUrgent()
+                Wearable.getDataClient(context).putDataItem(req)
+            } catch (_: Exception) {}
+        }
+
+        /** 오늘 날짜 문자열(yyyy-MM-dd). 조위 저장/검증·그래프 집계 공용. */
+        fun todayDateStr(): String = todayStr()
+
+        /**
+         * 그날 MD 파일에서 어종별 24시간 조과 히스토그램을 만든다.
+         * 각 조과 블록의 "### yyyy-MM-dd HH:mm:ss" 헤더 시각(시)을 기준으로,
+         * 같은 블록의 "- 🎣 어종" 1건을 해당 시(hour) 버킷에 +1 집계한다.
+         * 반환: 어종명 → IntArray(24)(인덱스=시).
+         */
+        fun loadHourlyBySpecies(context: Context): Map<String, IntArray> {
+            val txt = readMd(context) ?: return emptyMap()
+            val out = HashMap<String, IntArray>()
+            val headerTime = Regex("""^###\s+\d{4}-\d{2}-\d{2}\s+(\d{2}):\d{2}:\d{2}""")
+            for (seg in txt.split("\n---\n")) {
+                var hour = -1
+                for (line in seg.lineSequence()) {
+                    val t = line.trim()
+                    val m = headerTime.find(t)
+                    if (m != null) {
+                        hour = m.groupValues[1].toIntOrNull() ?: -1
+                    } else if (t.startsWith("- 🎣 ") && hour in 0..23) {
+                        val sp = t.removePrefix("- 🎣 ").trim()
+                        if (sp.isNotEmpty()) out.getOrPut(sp) { IntArray(24) }[hour]++
+                    }
+                }
+            }
+            return out
+        }
+
+        /** 저장된 오늘 조위 극값(날짜 일치 시에만). 없거나 다른 날짜면 null. */
+        private fun readTideToday(context: Context): JSONObject? = try {
+            val raw = prefsOf(context).getString(PREFS_TIDE_TODAY, null)
+            val obj = if (raw != null) JSONObject(raw) else null
+            if (obj?.optString("date") == todayStr()) obj else null
+        } catch (_: Exception) { null }
+
+        private fun parseHHmm(s: String?): Int? {
+            val p = (s ?: return null).split(":")
+            if (p.size != 2) return null
+            val h = p[0].toIntOrNull() ?: return null
+            val m = p[1].toIntOrNull() ?: return null
+            return h * 60 + m
+        }
+
+        /**
+         * 워치 그래프 데이터를 Data Layer로 push.
+         *  - names[i]=어종명(카운터 좌/우 순서와 동일)
+         *  - hours_i=IntArray(24): 어종 i의 시간당 조과
+         *  - tide_min[]/tide_level[]: 오늘 만조/간조의 (분, cm) 쌍(오늘 것만, 없으면 빈 배열)
+         */
+        fun pushChartStateToWatch(context: Context) {
+            try {
+                val names = loadSpecies(context)
+                val hourly = loadHourlyBySpecies(context)
+                val tideMin = ArrayList<Int>()
+                val tideLevel = ArrayList<Int>()
+                readTideToday(context)?.optJSONArray("points")?.let { pts ->
+                    for (j in 0 until pts.length()) {
+                        val p = pts.optJSONObject(j) ?: continue
+                        val mm = parseHHmm(p.optString("t")) ?: continue
+                        tideMin.add(mm); tideLevel.add(p.optInt("l"))
+                    }
+                }
+                val req = PutDataMapRequest.create(PATH_WATCH_CHART).apply {
+                    dataMap.putStringArrayList("names", ArrayList(names))
+                    for (i in names.indices) {
+                        val arr = hourly[names[i]] ?: IntArray(24)
+                        dataMap.putIntegerArrayList("hours_$i", ArrayList(arr.toList()))
+                    }
+                    dataMap.putIntegerArrayList("tide_min", tideMin)
+                    dataMap.putIntegerArrayList("tide_level", tideLevel)
                     dataMap.putLong("ts", System.currentTimeMillis())
                 }.asPutDataRequest().setUrgent()
                 Wearable.getDataClient(context).putDataItem(req)

@@ -691,6 +691,24 @@ class MainActivity : FlutterActivity() {
                             .apply()
                         result.success(null)
                     }
+                    "catchPushTide" -> {
+                        // 워치 그래프 배경용 오늘 조위 극값 저장(날짜와 함께).
+                        @Suppress("UNCHECKED_CAST")
+                        val points =
+                            call.argument<List<Map<String, Any?>>>("points") ?: emptyList()
+                        val arr = JSONArray()
+                        for (p in points) {
+                            val t = p["t"] as? String ?: continue
+                            val l = (p["l"] as? Number)?.toInt() ?: continue
+                            arr.put(JSONObject().put("t", t).put("l", l))
+                        }
+                        val obj = JSONObject()
+                            .put("date", CatchLogService.todayDateStr())
+                            .put("points", arr)
+                        CatchLogService.prefsOf(this).edit()
+                            .putString(CatchLogService.PREFS_TIDE_TODAY, obj.toString()).apply()
+                        result.success(null)
+                    }
                     "isCatchSession" -> {
                         result.success(CatchLogService.prefsOf(this)
                             .getBoolean(CatchLogService.PREFS_ACTIVE_KEY, false))

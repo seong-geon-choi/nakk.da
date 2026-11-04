@@ -1219,6 +1219,8 @@ class _CatchLogButtonState extends ConsumerState<_CatchLogButton>
     }
     // 카운터가 쓸 어종·저장경로를 네이티브에 동기화.
     await CatchLogService().syncConfig(species, settings!.savePath);
+    // 워치 그래프 배경용 오늘 조위를 네이티브로 push(best-effort, 블로킹하지 않음).
+    unawaited(ref.read(locationProvider.notifier).pushTodayTideToWatch());
     await _maybeAutoAddLocation(); // 첫 진입 시 현장 정보 자동 추가(옵션)
     // 알림창 카운터(포그라운드 세션)를 띄운 뒤 잠금화면 카운터 화면을 연다.
     // 세션은 스와이프로 닫거나 자정(날짜 변경)에 자동 종료된다.

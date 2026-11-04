@@ -35,6 +35,15 @@ class CatchLogService {
     }
   }
 
+  /// 오늘 조위 극값(만조/간조)을 네이티브에 저장(워치 그래프 배경용).
+  /// [points] = [{'t': 'HH:mm', 'l': 조위cm(int)}]. 네이티브가 그날 날짜와 함께 보관하고
+  /// 워치가 그래프를 요청할 때 시간당 조과와 함께 push한다. best-effort(실패는 무시).
+  Future<void> pushTideToday(List<Map<String, dynamic>> points) async {
+    try {
+      await _channel.invokeMethod('catchPushTide', {'points': points});
+    } catch (_) {}
+  }
+
   /// 잠금화면 카운터 화면(CatchCounterActivity)을 직접 띄운다.
   Future<void> openCounter() async {
     try {

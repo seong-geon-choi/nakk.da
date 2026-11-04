@@ -23,6 +23,7 @@ class WearListenerService : WearableListenerService() {
             PATH_COUNT_REMOVE -> forward(CatchLogService.ACTION_REMOVE, parseIndex(event.data))
             PATH_STOP_SOUND -> forward(CatchLogService.ACTION_STOP_SOUND, -1)
             PATH_STATE_REQUEST -> CatchLogService.pushStateToWatch(this)
+            PATH_CHART_REQUEST -> CatchLogService.pushChartStateToWatch(this)
         }
     }
 
@@ -57,5 +58,6 @@ class WearListenerService : WearableListenerService() {
         private const val PATH_COUNT_REMOVE = "/nakkda/count/remove"
         private const val PATH_STOP_SOUND = "/nakkda/count/stop"
         private const val PATH_STATE_REQUEST = "/nakkda/count/request"
+        private const val PATH_CHART_REQUEST = "/nakkda/chart/request"
     }
 }
