@@ -103,7 +103,18 @@ class _PermissionScreenState extends ConsumerState<PermissionScreen> {
         .every((p) => statusAsync.valueOrNull?[p]?.isGranted ?? false);
     return Padding(
       padding: const EdgeInsets.only(bottom: 16),
-      child: Row(
+      child: InkWell(
+        borderRadius: BorderRadius.circular(12),
+        onTap: () async {
+          // 위치는 요청 전에 명시적 공개·동의(정책 요건).
+          if (item.permissions.contains(Permission.locationWhenInUse)) {
+            final ok = await ensureLocationDisclosure(context);
+            if (!context.mounted || !ok) return;
+          }
+          await requestPermissionItem(item);
+          ref.invalidate(permissionStatusProvider);
+        },
+        child: Row(
         children: [
           Container(
             width: 48,
@@ -131,6 +142,7 @@ class _PermissionScreenState extends ConsumerState<PermissionScreen> {
             size: 22,
           ),
         ],
+        ),
       ),
     );
   }

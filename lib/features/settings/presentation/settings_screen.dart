@@ -263,27 +263,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ),
 
             // ── 고급 섹션 ─────────────────────────────
+            // (저장 위치 변경은 '권한 점검' 화면으로 이동)
             const _SectionHeader(label: '고급'),
-            ListTile(
-              leading: const Icon(Icons.folder_outlined),
-              title: const Text('저장 위치 변경'),
-              subtitle: Text(
-                settings.needsFolderSetup
-                    ? '폴더를 선택해 주세요'
-                    : '메모 저장 경로와 사진 저장 경로를 변경합니다',
-                style: settings.needsFolderSetup
-                    ? TextStyle(color: Theme.of(context).colorScheme.error)
-                    : null,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: settings.needsFolderSetup
-                  ? const Icon(Icons.warning_amber, color: Colors.orange)
-                  : const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(
-                MaterialPageRoute(builder: (_) => const _SaveLocationSubScreen()),
-              ),
-            ),
             SwitchListTile(
               secondary: const Icon(Icons.add_location_alt_outlined),
               title: const Text('현장 정보 추가 버튼 표시'),
@@ -448,63 +429,6 @@ Future<void> _showApiKeyDialog(
         .updateKhoaApiKey(controller.text.trim());
   }
   controller.dispose();
-}
-
-// ── 저장 위치 변경 하위 화면 ──────────────────────────────────────
-
-class _SaveLocationSubScreen extends ConsumerWidget {
-  const _SaveLocationSubScreen();
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final settingsAsync = ref.watch(settingsProvider);
-    return Scaffold(
-      appBar: AppBar(title: const Text('저장 위치 변경')),
-      body: settingsAsync.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('오류: $e')),
-        data: (settings) => ListTileTheme(
-          data: _subtitleTheme(context),
-          child: ListView(
-          padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
-          children: [
-            ListTile(
-              leading: const Icon(Icons.folder_outlined),
-              title: const Text('메모 저장 위치'),
-              subtitle: Text(
-                settings.saveDisplayPath.isNotEmpty
-                    ? settings.saveDisplayPath
-                    : settings.needsFolderSetup
-                        ? '폴더를 선택해 주세요'
-                        : settings.savePath,
-                style: settings.needsFolderSetup
-                    ? TextStyle(color: Theme.of(context).colorScheme.error)
-                    : null,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              trailing: settings.needsFolderSetup
-                  ? const Icon(Icons.warning_amber, color: Colors.orange)
-                  : null,
-              onTap: () => ref.read(settingsProvider.notifier).pickSaveFolder(),
-            ),
-            ListTile(
-              leading: const Icon(Icons.photo_library_outlined),
-              title: const Text('카메라 사진 저장 위치'),
-              subtitle: Text(
-                settings.photoSavePath,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-              ),
-              onTap: () =>
-                  ref.read(settingsProvider.notifier).pickPhotoSaveFolder(),
-            ),
-          ],
-          ),
-        ),
-      ),
-    );
-  }
 }
 
 // ── 어종 목록 관리 하위 화면 ──────────────────────────────────────
