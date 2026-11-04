@@ -32,10 +32,10 @@ android {
         minSdk = 30
         // Play 타깃 API 요구치(API 35). compileSdk와 일치.
         targetSdk = 35
-        // Wear 번들 versionCode는 폰(2072)보다 크고 고유해야 함(Play 규칙: 폼팩터 무관
-        // 패키지 내 versionCode 고유 + 워치 ≥ 폰). 2073→2074: fragment 1.8.6 반영 재게시.
-        versionCode = 2074
-        versionName = "3.14.1"
+        // Wear 번들 versionCode는 폰(2075)보다 크고 고유해야 함(Play 규칙: 폼팩터 무관
+        // 패키지 내 versionCode 고유 + 워치 ≥ 폰). 2074→2076: 폰 2075 게시에 맞춰 상향(내용 동일).
+        versionCode = 2076
+        versionName = "3.14.2"
     }
 
     buildFeatures {

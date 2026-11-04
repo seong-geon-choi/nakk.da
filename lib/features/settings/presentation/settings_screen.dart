@@ -1205,11 +1205,19 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
   double _rate = 1.0;
   List<String> _voices = const [];
   String _voice = ''; // 빈 문자열 = 엔진 기본
+  // 내부 저장소에 실제 존재하는 오디오 파일명(재설치·복원으로 유실된 항목 표시용).
+  Set<String> _existingSoundFiles = const {};
 
   @override
   void initState() {
     super.initState();
     _load();
+  }
+
+  /// 유실 표시용 존재 파일 집합을 새로고침한다(가져오기·재가져오기 후 호출).
+  Future<void> _refreshExistingFiles() async {
+    final files = await BtRemoteService.listSoundFiles();
+    if (mounted) setState(() => _existingSoundFiles = files.toSet());
   }
 
   Future<void> _load() async {
@@ -1222,8 +1230,10 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     final tone = await BtRemoteService.getSoundTone();
     final voices = await BtRemoteService.getSoundVoices();
     final voice = await BtRemoteService.getSoundVoice();
+    final existing = await BtRemoteService.listSoundFiles();
     if (!mounted) return;
     setState(() {
+      _existingSoundFiles = existing.toSet();
       _enabled = en;
       _vibrate = vib;
       _mode = mode;
@@ -1457,6 +1467,32 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     }
     setState(() => list.add(_EditSound.audio(stored, file.name)));
     await persist();
+    await _refreshExistingFiles();
+  }
+
+  /// 유실된 오디오 항목의 파일을 다시 골라 교체한다(파일명·표시명 갱신).
+  Future<void> _reimportAudio(
+      List<_EditSound> list, int index, Future<void> Function() persist) async {
+    final picked = await FilePicker.platform.pickFiles(type: FileType.audio);
+    final file = (picked != null && picked.files.isNotEmpty)
+        ? picked.files.first
+        : null;
+    if (file == null || file.path == null) return;
+    final stored = await BtRemoteService.importSoundFile(file.path!, file.name);
+    if (!mounted) return;
+    if (stored == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('미디어 파일을 불러오지 못했어요.')),
+      );
+      return;
+    }
+    if (index < list.length) {
+      list[index].dispose();
+      list[index] = _EditSound.audio(stored, file.name);
+    }
+    setState(() {});
+    await persist();
+    await _refreshExistingFiles();
   }
 
   @override
@@ -1572,10 +1608,13 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     required String intro,
     Widget? header,
   }) {
-    return Column(
+    // 헤더(모드선택·도움말)와 하단 추가버튼을 리스트의 header/footer로 넣어
+    // 가로(짧은 높이)에서도 전체가 스크롤되게 한다(bottom overflow 방지).
+    final headerArea = Column(
+      mainAxisSize: MainAxisSize.min,
       children: [
         ?header,
-        // 도움말은 접을 수 있게(기본 접힘) 두어 목록 공간을 넓게 확보한다.
+        // 도움말은 접을 수 있게(기본 접힘) 둔다.
         Theme(
           data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
           child: ExpansionTile(
@@ -1594,44 +1633,44 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
             ],
           ),
         ),
-        Expanded(
-          child: ReorderableListView.builder(
-            buildDefaultDragHandles: false,
-            padding: const EdgeInsets.only(top: 4, bottom: 8),
-            itemCount: items.length,
-            onReorder: (o, n) => _reorder(items, o, n, onPersist),
-            itemBuilder: (ctx, i) => Padding(
-              key: ObjectKey(items[i]),
-              padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
-              child: _soundRow(items, i, hint, onRemove, onPersist),
+      ],
+    );
+    final footerArea = Padding(
+      // 하단 추가 버튼이 시스템 내비게이션 바(홈버튼)에 가리지 않도록 여백 확보.
+      padding: EdgeInsets.fromLTRB(
+          16, 8, 16, 16 + MediaQuery.of(context).padding.bottom),
+      child: Row(
+        children: [
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: onAdd,
+              icon: const Icon(Icons.add),
+              label: Text(addLabel),
             ),
           ),
-        ),
-        Padding(
-          // 하단 추가 버튼이 시스템 내비게이션 바(홈버튼)에 가리지 않도록 여백 확보.
-          padding: EdgeInsets.fromLTRB(
-              16, 8, 16, 16 + MediaQuery.of(context).padding.bottom),
-          child: Row(
-            children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onAdd,
-                  icon: const Icon(Icons.add),
-                  label: Text(addLabel),
-                ),
-              ),
-              const SizedBox(width: 8),
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: onAddAudio,
-                  icon: const Icon(Icons.library_music_outlined),
-                  label: const Text('미디어 추가'),
-                ),
-              ),
-            ],
+          const SizedBox(width: 8),
+          Expanded(
+            child: OutlinedButton.icon(
+              onPressed: onAddAudio,
+              icon: const Icon(Icons.library_music_outlined),
+              label: const Text('미디어 추가'),
+            ),
           ),
-        ),
-      ],
+        ],
+      ),
+    );
+    return ReorderableListView.builder(
+      buildDefaultDragHandles: false,
+      padding: const EdgeInsets.only(top: 4, bottom: 8),
+      header: headerArea,
+      footer: footerArea,
+      itemCount: items.length,
+      onReorder: (o, n) => _reorder(items, o, n, onPersist),
+      itemBuilder: (ctx, i) => Padding(
+        key: ObjectKey(items[i]),
+        padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+        child: _soundRow(items, i, hint, onRemove, onPersist),
+      ),
     );
   }
 
@@ -1645,18 +1684,31 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
   ) {
     final item = items[i];
     final canRemove = items.length > 1;
+    final cs = Theme.of(context).colorScheme;
+    // 오디오인데 내부 저장 파일이 유실된 경우(재설치·복원 등) → 음소거 아이콘·취소선·흐림.
+    final bool missing = item.isAudio && !_existingSoundFiles.contains(item.value);
     final Widget content = item.isAudio
         ? InputDecorator(
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               isDense: true,
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.audiotrack, size: 20),
+              border: const OutlineInputBorder(),
+              prefixIcon: Icon(
+                missing ? Icons.music_off : Icons.audiotrack,
+                size: 20,
+                color: missing ? cs.error : null,
+              ),
             ),
             child: Text(
-              item.label.isNotEmpty ? item.label : '오디오 파일',
+              (missing ? '(파일 없음) ' : '') +
+                  (item.label.isNotEmpty ? item.label : '오디오 파일'),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontSize: 14),
+              style: TextStyle(
+                fontSize: 14,
+                color: missing ? cs.error.withValues(alpha: 0.85) : null,
+                decoration: missing ? TextDecoration.lineThrough : null,
+                decorationColor: missing ? cs.error : null,
+              ),
             ),
           )
         : TextField(
@@ -1678,18 +1730,25 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
           ),
         ),
         Expanded(child: content),
-        IconButton(
-          icon: const Icon(Icons.volume_up_outlined),
-          tooltip: '미리듣기',
-          onPressed: () {
-            if (item.isAudio) {
-              BtRemoteService.previewAudio(item.value);
-            } else {
-              final t = item.ctrl!.text.trim();
-              if (t.isNotEmpty) BtRemoteService.previewSound(t);
-            }
-          },
-        ),
+        if (missing)
+          IconButton(
+            icon: Icon(Icons.refresh, color: cs.primary),
+            tooltip: '다시 가져오기',
+            onPressed: () => _reimportAudio(items, i, onPersist),
+          )
+        else
+          IconButton(
+            icon: const Icon(Icons.volume_up_outlined),
+            tooltip: '미리듣기',
+            onPressed: () {
+              if (item.isAudio) {
+                BtRemoteService.previewAudio(item.value);
+              } else {
+                final t = item.ctrl!.text.trim();
+                if (t.isNotEmpty) BtRemoteService.previewSound(t);
+              }
+            },
+          ),
         IconButton(
           icon: const Icon(Icons.remove_circle_outline),
           tooltip: '삭제',
