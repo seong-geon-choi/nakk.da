@@ -3,11 +3,9 @@ package com.sgchoisg.nakkda
 import android.content.Context
 import android.content.Intent
 import android.media.AudioAttributes
-import android.media.AudioFocusRequest
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
-import android.media.VolumeProvider
+import android.media.MediaMetadata
 import android.media.session.MediaSession
 import android.media.session.PlaybackState
 import android.os.Build
@@ -17,31 +15,20 @@ import android.view.KeyEvent
  * 블루투스 이어폰/리모컨의 미디어 버튼(재생·정지·다음곡 등)을 화면 꺼짐 상태에서도 받기 위한
  * 경량 미디어 세션.
  *
- * 설계(사용자 확정): **오디오 포커스를 요청하지 않는다**(다른 앱 음악을 멈추거나 줄이지 않음).
- * 대신 **무음 트랙만 재생**해 우리 세션을 "활성 미디어 세션"으로 유지한다 → 세션이 활성인 동안은
- * 미디어 버튼이 음악앱 대신 이쪽으로 라우팅된다(그 시간 동안 음악 곡 변경은 불가 — 트레이드오프).
+ * 오디오 포커스를 요청하지 않고(다른 앱 음악을 멈추거나 줄이지 않음), **무음 트랙만 재생**해
+ * 우리 세션을 "활성 미디어 세션"으로 유지한다 → 세션이 활성인 동안 미디어 버튼이 이쪽으로 라우팅된다.
+ * (미디어 키만 지원 — 볼륨 후킹/다른 미디어 우선 기능은 제거됨.)
  *
- * onKey(keyCode)로 ACTION_DOWN(비반복) 키만 전달한다.
- *
- * hookVolume=true면 세션을 '원격 볼륨'으로 선언(setPlaybackToRemote)해 하드웨어 볼륨 업/다운
- * 키가 시스템 미디어 볼륨 대신 이쪽으로 들어오게 한다 → 볼륨 버튼 리모컨을 화면 꺼짐·백그라운드에서
- * +1/−1로 쓸 수 있다(그 대신 세션이 활성인 동안 하드웨어 볼륨으로 음악 볼륨 조절 불가 — 트레이드오프).
- * 볼륨 업 → KEYCODE_VOLUME_UP, 볼륨 다운 → KEYCODE_VOLUME_DOWN 으로 변환해 onKey로 전달한다.
+ * onKey(keyCode)로 ACTION_DOWN(비반복) 미디어 키만 전달한다. 워치/시스템 미디어 카드의
+ * ⏮ ▶⏸ ⏭ 버튼(전송 명령)도 동일 키코드로 바꿔 흘려준다.
  */
 class MediaButtonSession(
     private val context: Context,
     private val tag: String,
-    private val hookVolume: Boolean = false,
-    // true면 오디오 포커스를 '덕킹' 모드로 요청해, 다른 미디어 앱이 재생 중(포커스 보유)이어도
-    // 미디어 버튼을 이쪽으로 가져온다(다른 앱은 멈추지 않고 볼륨만 낮춤 — 단, 영상 앱 등은
-    // 자체 정책상 일시정지할 수 있음). false면 포커스를 요청하지 않아 음악이 안 끊기는 대신
-    // 다른 앱이 포커스를 쥐고 있으면 버튼을 못 가져온다.
-    private val requestFocus: Boolean = false,
     private val onKey: (Int) -> Unit,
 ) {
     private var session: MediaSession? = null
     @Volatile private var track: AudioTrack? = null
-    private var focusRequest: AudioFocusRequest? = null
 
     fun start() {
         if (session != null) return
@@ -61,6 +48,14 @@ class MediaButtonSession(
                 }
                 return true
             }
+
+            // 워치/시스템 미디어 카드의 ⏮ ▶⏸ ⏭ 버튼은 하드웨어 키 이벤트가 아니라
+            // '전송 명령'(transport control)으로 들어온다. 하드웨어 리모컨과 동일하게
+            // 동작하도록 대응 미디어 키코드로 바꿔 onKey에 흘려준다(매핑은 동일하게 적용됨).
+            override fun onSkipToNext() = onKey(KeyEvent.KEYCODE_MEDIA_NEXT)
+            override fun onSkipToPrevious() = onKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+            override fun onPlay() = onKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+            override fun onPause() = onKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
         })
         // STATE_PLAYING + 가능한 전송 액션을 선언해야 미디어 버튼 라우팅 대상이 된다.
         s.setPlaybackState(
@@ -73,46 +68,23 @@ class MediaButtonSession(
                 .setState(PlaybackState.STATE_PLAYING, 0L, 1f)
                 .build()
         )
-        // 볼륨 버튼 후킹: 세션을 '원격 볼륨'으로 선언하면 볼륨 키가 onAdjustVolume으로 들어온다.
-        if (hookVolume) {
-            s.setPlaybackToRemote(
-                object : VolumeProvider(VolumeProvider.VOLUME_CONTROL_RELATIVE, 100, 50) {
-                    override fun onAdjustVolume(direction: Int) {
-                        when {
-                            direction > 0 -> onKey(KeyEvent.KEYCODE_VOLUME_UP)
-                            direction < 0 -> onKey(KeyEvent.KEYCODE_VOLUME_DOWN)
-                        }
-                    }
-                }
-            )
-        }
         s.isActive = true
         session = s
-        if (requestFocus) acquireDuckFocus()
         startSilentAudio()
     }
 
-    /**
-     * 오디오 포커스를 '덕킹'(AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)으로 요청한다.
-     * 포커스를 쥐면 미디어 버튼이 이쪽 세션으로 라우팅되고, 다른 앱엔 "볼륨만 낮추라"고
-     * 요청한다(음악은 작아진 채 계속 재생; 영상 앱 등은 자체 정책상 일시정지할 수 있음).
-     * 우리는 무음이므로 포커스 변화에 반응하지 않는다. 세션 종료 시 abandon한다.
-     */
-    private fun acquireDuckFocus() {
+    /** 미디어 카드에 표시할 제목/부제(현재 조과 수)를 갱신한다. */
+    fun updateMetadata(title: String, subtitle: String) {
+        val s = session ?: return
         try {
-            val am = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-            val req = AudioFocusRequest.Builder(
-                AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
-                .setAudioAttributes(
-                    AudioAttributes.Builder()
-                        .setUsage(AudioAttributes.USAGE_MEDIA)
-                        .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                        .build())
-                .setWillPauseWhenDucked(false)
-                .setOnAudioFocusChangeListener { /* 무음이라 반응 없음 */ }
-                .build()
-            am.requestAudioFocus(req)
-            focusRequest = req
+            s.setMetadata(
+                MediaMetadata.Builder()
+                    .putString(MediaMetadata.METADATA_KEY_TITLE, title)
+                    .putString(MediaMetadata.METADATA_KEY_ARTIST, subtitle)
+                    .putString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE, title)
+                    .putString(MediaMetadata.METADATA_KEY_DISPLAY_SUBTITLE, subtitle)
+                    .build()
+            )
         } catch (_: Exception) {}
     }
 
@@ -156,14 +128,6 @@ class MediaButtonSession(
         val t = track
         track = null
         try { t?.stop(); t?.release() } catch (_: Exception) {}
-        val fr = focusRequest
-        focusRequest = null
-        if (fr != null) {
-            try {
-                (context.getSystemService(Context.AUDIO_SERVICE) as AudioManager)
-                    .abandonAudioFocusRequest(fr)
-            } catch (_: Exception) {}
-        }
         try { session?.isActive = false; session?.release() } catch (_: Exception) {}
         session = null
     }

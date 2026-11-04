@@ -1,19 +1,27 @@
 package com.sgchoisg.nakkda
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
+import androidx.core.app.NotificationCompat
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.WearableListenerService
 
 /**
  * 워치로부터 Data Layer 메시지를 수신해 조과 카운트/효과음에 반영한다
  * (폰 UI가 떠 있지 않아도 Data Layer가 이 서비스를 깨운다).
- * BT 리모컨과 동일하게 "실행 중인 카운터 세션"에만 반영한다(세션 미실행 시 무시).
  * - /nakkda/count/add,   payload=어종 인덱스 → 해당 어종 +1
  * - /nakkda/count/remove, payload=어종 인덱스 → 해당 어종 −1
  * - /nakkda/count/stop                        → 재생 중인 추임새/TTS 중지
  * - /nakkda/count/request                      → 현재 어종·조과 상태를 워치로 즉시 push
- *   (워치 진입 시 최신 설정을 폰에서 한 번 당겨오기 위함. 세션 미실행이어도 응답).
+ * - /nakkda/chart/request                      → 그래프(시간당 조과+조위) 데이터를 워치로 push
+ *
+ * 세션이 실행 중이면 포그라운드 서비스(알림/TTS/위치)에 명령을 전달한다. 세션이 없으면
+ * 포그라운드 서비스를 백그라운드에서 시작할 수 없으므로(안드로이드 제한), 워치 카운트를
+ * 오늘 MD 파일에 **직접 기록**하고 워치로 반영한다(숫자는 저장됨). 폰에서 이어 조작할 수
+ * 있도록 탭하면 카운터를 여는 알림을 띄운다.
  */
 class WearListenerService : WearableListenerService() {
 
@@ -31,11 +39,19 @@ class WearListenerService : WearableListenerService() {
         data?.let { String(it).trim().toIntOrNull() } ?: 0
 
     private fun forward(action: String, speciesIndex: Int) {
-        // 세션 미실행이면 무시(리모컨과 동일 의미). 활성 중엔 서비스가 포그라운드로 떠 있어
-        // startForegroundService가 기존 인스턴스에 onStartCommand로 명령을 전달한다.
         val active = CatchLogService.prefsOf(this)
             .getBoolean(CatchLogService.PREFS_ACTIVE_KEY, false)
-        if (!active) return
+        if (!active) {
+            // 세션 미실행: FGS를 백그라운드에서 시작할 수 없으므로 파일에 직접 기록만 한다.
+            // (STOP_SOUND는 재생 중인 소리가 없으니 무시.)
+            when (action) {
+                CatchLogService.ACTION_ADD, CatchLogService.ACTION_REMOVE ->
+                    recordWithoutSession(action, speciesIndex)
+            }
+            return
+        }
+        // 활성 중엔 서비스가 포그라운드로 떠 있어 startForegroundService가 기존 인스턴스에
+        // onStartCommand로 명령을 전달한다.
         val intent = Intent(this, CatchLogService::class.java).apply {
             this.action = action
             if (speciesIndex >= 0) {
@@ -53,11 +69,69 @@ class WearListenerService : WearableListenerService() {
         }
     }
 
+    /**
+     * 세션이 없을 때 워치 카운트를 오늘 MD 파일에 직접 기록하고 워치로 최신 수를 반영한다.
+     * 포그라운드 세션(알림/TTS/위치) 없이 '저장'만 수행 — 백그라운드 FGS 시작 제한을 피한다.
+     * 폰에서 이어서 조작할 수 있도록, 탭하면 카운터 화면을 여는 알림을 띄운다.
+     */
+    private fun recordWithoutSession(action: String, speciesIndex: Int) {
+        val species = CatchLogService.loadSpecies(this).getOrNull(speciesIndex) ?: return
+        when (action) {
+            CatchLogService.ACTION_ADD ->
+                CatchLogService.appendCatchToFile(this, species, null, null)
+            CatchLogService.ACTION_REMOVE ->
+                CatchLogService.removeLastCatchFromFile(this, species)
+        }
+        // 카운터 화면이 떠 있으면 즉시 갱신 + 워치로 최신 수 반영.
+        try {
+            sendBroadcast(
+                Intent(CatchLogService.ACTION_COUNTS_CHANGED).setPackage(packageName))
+        } catch (_: Exception) {}
+        CatchLogService.pushStateToWatch(this)
+        postRecordedNotification()
+    }
+
+    /** '워치에서 기록됨 — 탭하면 카운터 열기' 알림(일반 알림이라 백그라운드에서도 가능). */
+    private fun postRecordedNotification() {
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID, "워치 조과 기록", NotificationManager.IMPORTANCE_LOW
+                ).apply { setShowBadge(false); setSound(null, null) })
+        }
+        val species = CatchLogService.loadSpecies(this)
+        val counts = CatchLogService.loadCountsFromFile(this)
+        val summary = if (species.isEmpty()) {
+            "탭하여 카운터 열기"
+        } else {
+            species.joinToString(" · ") { "$it ${counts[it] ?: 0}" }
+        }
+        val openPi = PendingIntent.getActivity(
+            this, 301,
+            Intent(this, CatchCounterActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+        val notif = NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("워치에서 조과 기록됨")
+            .setContentText(summary)
+            .setSmallIcon(android.R.drawable.ic_menu_edit)
+            .setContentIntent(openPi)
+            .setAutoCancel(true)
+            .setOnlyAlertOnce(true)
+            .setSilent(true)
+            .build()
+        try { nm.notify(NOTIF_ID, notif) } catch (_: Exception) {}
+    }
+
     companion object {
         private const val PATH_COUNT_ADD = "/nakkda/count/add"
         private const val PATH_COUNT_REMOVE = "/nakkda/count/remove"
         private const val PATH_STOP_SOUND = "/nakkda/count/stop"
         private const val PATH_STATE_REQUEST = "/nakkda/count/request"
         private const val PATH_CHART_REQUEST = "/nakkda/chart/request"
+        private const val CHANNEL_ID = "nakkda_watch_record"
+        private const val NOTIF_ID = 1009
     }
 }

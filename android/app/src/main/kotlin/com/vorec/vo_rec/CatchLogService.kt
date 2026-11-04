@@ -95,12 +95,6 @@ class CatchLogService : Service() {
         const val PREFS_BTMAP_ENABLED_KEY = "catch_btmap_enabled"
         // 블루투스 기본 매핑을 최초 1회만 시드했는지 표시(재시드/기존설정 덮어쓰기 방지).
         const val PREFS_BTMAP_SEEDED_KEY = "catch_btmap_seeded"
-        // 볼륨 버튼으로 카운트(원격 볼륨 후킹). 켜면 볼륨 키가 백그라운드에서도 들어오나
-        // 그동안 하드웨어 볼륨으로 음악 볼륨 조절은 안 된다. 기본 꺼짐.
-        const val PREFS_BTVOL_ENABLED_KEY = "catch_btvol_enabled"
-        // 다른 미디어보다 리모컨 우선(덕킹 포커스 요청). 켜면 YouTube 등 재생 중에도 버튼을
-        // 가져오나 그동안 다른 앱 볼륨이 낮아짐(영상 앱은 일시정지될 수 있음). 기본 켜짐.
-        const val PREFS_BTFOCUS_ENABLED_KEY = "catch_btfocus_enabled"
         // 집계 변동(리모컨으로 ±) 시 카운터 화면이 즉시 다시 그리도록 알리는 로컬 브로드캐스트.
         const val ACTION_COUNTS_CHANGED = "com.sgchoisg.nakkda.COUNTS_CHANGED"
         // 설정에서 연동 on/off를 바꿨을 때 실행 중인 서비스가 세션을 즉시 재동기화하도록 하는 액션.
@@ -117,14 +111,6 @@ class CatchLogService : Service() {
         /** 블루투스 버튼 연동이 사용자에 의해 켜져 있는지(기본 꺼짐). */
         fun isBtEnabled(context: Context): Boolean =
             prefsOf(context).getBoolean(PREFS_BTMAP_ENABLED_KEY, false)
-
-        /** 볼륨 버튼 후킹(원격 볼륨)이 켜져 있는지(기본 꺼짐). */
-        fun isBtVolEnabled(context: Context): Boolean =
-            prefsOf(context).getBoolean(PREFS_BTVOL_ENABLED_KEY, false)
-
-        /** 다른 미디어보다 리모컨 우선(덕킹 포커스 요청)이 켜져 있는지(기본 켜짐). */
-        fun isBtFocusEnabled(context: Context): Boolean =
-            prefsOf(context).getBoolean(PREFS_BTFOCUS_ENABLED_KEY, true)
 
         /**
          * 블루투스 리모컨 카운트 기본값을 최초 1회만 시드한다(앱 시작 시 호출).
@@ -581,12 +567,8 @@ class CatchLogService : Service() {
 
     private val io = Executors.newSingleThreadExecutor()
 
-    // 블루투스 리모컨/이어폰 미디어 버튼 수신용 무음 세션(포커스 미요청).
+    // 블루투스 리모컨/이어폰 미디어 버튼 수신용 무음 세션.
     private var mediaButton: MediaButtonSession? = null
-    // 현재 세션이 볼륨 후킹 상태로 떠 있는지(토글 변경 시 재생성 판단용).
-    private var mediaButtonVol = false
-    // 현재 세션이 덕킹 포커스 요청 상태로 떠 있는지(토글 변경 시 재생성 판단용).
-    private var mediaButtonFocus = false
 
     // 조과 효과음용 TTS(한국어). onCreate에서 초기화, onDestroy에서 종료.
     private var tts: TextToSpeech? = null
@@ -782,23 +764,15 @@ class CatchLogService : Service() {
      * 리모컨을 안 쓰는 사용자의 이어폰 음악 버튼 제어권을 뺏지 않기 위함.
      */
     private fun syncMediaButton() {
+        // 미디어 버튼만 연동(볼륨 후킹·다른 미디어 우선 기능 제거).
         val has = isBtEnabled(this) && loadKeyMap(this).isNotEmpty()
-        val wantVol = has && isBtVolEnabled(this)
-        val wantFocus = has && isBtFocusEnabled(this)
-        if (has && (mediaButton == null || mediaButtonVol != wantVol ||
-                mediaButtonFocus != wantFocus)) {
-            // 볼륨 후킹·포커스 on/off가 바뀌면 세션을 재생성해야 선언이 반영된다.
-            mediaButton?.stop()
-            mediaButtonVol = wantVol
-            mediaButtonFocus = wantFocus
-            mediaButton = MediaButtonSession(
-                this, "nakkda_catch", hookVolume = wantVol, requestFocus = wantFocus
-            ) { keyCode -> onRemoteKey(keyCode) }.also { it.start() }
+        if (has && mediaButton == null) {
+            mediaButton = MediaButtonSession(this, "nakkda_catch") { keyCode ->
+                onRemoteKey(keyCode)
+            }.also { it.start() }
         } else if (!has && mediaButton != null) {
             mediaButton?.stop()
             mediaButton = null
-            mediaButtonVol = false
-            mediaButtonFocus = false
         }
     }
 
@@ -935,8 +909,24 @@ class CatchLogService : Service() {
     }
 
     private fun updateNotification() {
+        val counts = currentCounts()
         (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
-            .notify(NOTIFICATION_ID, buildNotification(currentCounts()))
+            .notify(NOTIFICATION_ID, buildNotification(counts))
+        updateMediaDisplay(counts)
+    }
+
+    /** 미디어 카드(워치 등)에 현재 어종별 조과 수를 표시한다(세션이 미디어 세션일 때만). */
+    private fun updateMediaDisplay(counts: List<Int>) {
+        val mb = mediaButton ?: return
+        val species = speciesList()
+        val title = if (species.isEmpty()) {
+            "조과 기록"
+        } else {
+            species.indices.joinToString(" · ") {
+                "${species[it]} ${counts.getOrElse(it) { 0 }}"
+            }
+        }
+        mb.updateMetadata(title, "낚.다")
     }
 
     /** counts=null이면 집계 미상(초기 알림) — 버튼에 수를 표시하지 않는다. */

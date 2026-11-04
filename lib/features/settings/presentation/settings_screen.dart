@@ -322,6 +322,16 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               trailing: const Icon(Icons.edit_outlined),
               onTap: () => _editCatchQuickSpecies(context, ref),
             ),
+            SwitchListTile(
+              secondary: const Icon(Icons.play_circle_outline),
+              title: const Text('앱 실행 시 카운터 자동 시작'),
+              subtitle: const Text(
+                  '앱을 열면 조과 카운터 세션을 자동 시작합니다 · 워치·리모컨으로 바로 기록 (알림·위치가 동작)'),
+              value: settings.autoStartCounterOnLaunch,
+              onChanged: (v) => ref
+                  .read(settingsProvider.notifier)
+                  .updateAutoStartCounterOnLaunch(v),
+            ),
             ListTile(
               leading: const Icon(Icons.settings_remote_outlined),
               title: const Text('블루투스 버튼 연동'),
@@ -1763,8 +1773,6 @@ class _RemoteKeyMappingScreen extends StatefulWidget {
 class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
   Map<String, int> _map = {};
   bool _enabled = false;
-  bool _volHook = false;
-  bool _focusDuck = true; // 기본 켜짐(네이티브와 일치, 로드 전 깜빡임 방지)
 
   @override
   void initState() {
@@ -1775,14 +1783,10 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
   Future<void> _load() async {
     final m = await BtRemoteService.getKeyMap();
     final en = await BtRemoteService.getEnabled();
-    final vh = await BtRemoteService.getVolHook();
-    final fd = await BtRemoteService.getFocusDuck();
     if (mounted) {
       setState(() {
         _map = m;
         _enabled = en;
-        _volHook = vh;
-        _focusDuck = fd;
       });
     }
   }
@@ -1792,24 +1796,10 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
     await BtRemoteService.setEnabled(v);
   }
 
-  Future<void> _setVolHook(bool v) async {
-    setState(() => _volHook = v);
-    await BtRemoteService.setVolHook(v);
-  }
-
-  Future<void> _setFocusDuck(bool v) async {
-    setState(() => _focusDuck = v);
-    await BtRemoteService.setFocusDuck(v);
-  }
-
   static const _mediaCodes = {85, 126, 127, 87, 88, 86, 90, 89, 79};
-  static const _volumeCodes = {24, 25};
 
-  /// 화면 꺼짐·백그라운드에서 그 키가 들어올 수 있는지.
-  /// 미디어 키는 항상, 볼륨 키는 볼륨 후킹이 켜져 있을 때만.
-  bool _worksInBackground(int code) =>
-      _mediaCodes.contains(code) ||
-      (_volHook && _volumeCodes.contains(code));
+  /// 화면 꺼짐·백그라운드에서 그 키가 들어올 수 있는지(미디어 키만 가능).
+  bool _worksInBackground(int code) => _mediaCodes.contains(code);
 
   /// 재생/정지 계열(play·pause·play_pause·headsethook)을 하나로 합쳐 비교.
   /// 네이티브 CatchLogService.canonicalKey와 동일 기준이어야 중복 판정이 실제 동작과 맞는다.
@@ -1889,15 +1879,7 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
     await BtRemoteService.setKey(action, code);
     if (!mounted) return;
     setState(() => _map[action] = code);
-    final isVolume = _volumeCodes.contains(code);
-    if (isVolume && !_volHook) {
-      // 볼륨 키인데 볼륨 후킹이 꺼져 있음 → 켜면 백그라운드에서도 동작함을 안내.
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('볼륨 버튼이네요. 아래 "볼륨 버튼 연동 사용"을 켜면 '
-            '화면이 꺼진 상태에서도 동작합니다.'),
-        duration: Duration(seconds: 5),
-      ));
-    } else if (!isMedia && !isVolume) {
+    if (!isMedia) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
         content: Text('이 버튼은 미디어 키가 아니라서 화면이 꺼지면 동작하지 않을 수 있어요. '
             '(카운터 화면이 켜져 있을 때만 동작)'),
@@ -1967,32 +1949,11 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
                       ? '지정한 버튼으로 카운트가 올라갑니다'
                       : '꺼져 있으면 버튼을 지정해도 동작하지 않습니다'),
                 ),
-                SwitchListTile(
-                  value: _volHook,
-                  onChanged: _setVolHook,
-                  secondary: const Icon(Icons.volume_up_outlined),
-                  title: const Text('볼륨 버튼 연동 사용'),
-                  subtitle: Text(_volHook
-                      ? '볼륨 +/− 버튼이 화면 꺼짐에서도 동작합니다 · 이 동안 음악 볼륨 조절은 안 됩니다'
-                      : '켜면 볼륨 버튼 리모컨을 백그라운드에서 쓸 수 있습니다'),
-                ),
-                SwitchListTile(
-                  value: _focusDuck,
-                  onChanged: _setFocusDuck,
-                  secondary: const Icon(Icons.music_note_outlined),
-                  title: const Text('다른 미디어보다 리모컨 우선'),
-                  subtitle: Text(_focusDuck
-                      ? 'YouTube·음악이 재생 중이어도 버튼을 가져옵니다 · 그동안 다른 앱 볼륨이 낮아집니다 · 음악이나 영상이 끊기면 이 옵션을 꺼주세요'
-                      : '꺼져 있으면 다른 앱이 재생 중일 때 그 앱을 종료하기 전까지 버튼을 못 받을 수 있습니다'),
-                ),
                 const Padding(
                   padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
                   child: Text(
-                    '블루투스 이어폰·리모컨 버튼으로 조과를 세어보세요.\n'
-                    '• 재생/정지·다음곡 같은 "미디어 키"는 화면이 꺼진 주머니 속에서도 동작합니다.\n'
-                    '• 볼륨 +/− 버튼은 "볼륨 버튼 연동 사용"을 켜야 화면 꺼짐에서도 동작합니다.\n'
-                    '• 유튜브나 음악 재생 중에는 블루투스키 연동이 원활하지 않을 수 있습니다. '
-                    '이럴 땐 빠른 실행(흔들기) 모드를 사용하거나 워치 앱을 이용해 주세요.',
+                    '블루투스 이어폰·리모컨의 미디어 버튼(재생/정지·다음곡·이전곡 등)으로 '
+                    '조과를 셀 수 있습니다. 화면이 꺼진 백그라운드 상태에서도 동작합니다.',
                     style: TextStyle(fontSize: 13, height: 1.5),
                   ),
                 ),

@@ -85,39 +85,6 @@ class BtRemoteService {
     } catch (_) {}
   }
 
-  /// 볼륨 버튼으로 카운트(원격 볼륨 후킹) 사용 여부. 기본 꺼짐.
-  /// 켜면 볼륨 키가 백그라운드·화면꺼짐에서도 ±로 들어오나, 그동안 음악 볼륨 조절은 안 된다.
-  static Future<bool> getVolHook() async {
-    try {
-      return await _channel.invokeMethod<bool>('getVolHook') ?? false;
-    } catch (_) {
-      return false;
-    }
-  }
-
-  static Future<void> setVolHook(bool enabled) async {
-    try {
-      await _channel.invokeMethod('setVolHook', {'enabled': enabled});
-    } catch (_) {}
-  }
-
-  /// 다른 미디어보다 리모컨 우선(덕킹 포커스 요청). 기본 켜짐.
-  /// 켜면 YouTube·음악 등 재생 중에도 버튼을 가져오나, 그동안 다른 앱 볼륨이 낮아진다
-  /// (영상 앱은 자체 정책상 일시정지될 수 있음).
-  static Future<bool> getFocusDuck() async {
-    try {
-      return await _channel.invokeMethod<bool>('getFocusDuck') ?? true;
-    } catch (_) {
-      return true;
-    }
-  }
-
-  static Future<void> setFocusDuck(bool enabled) async {
-    try {
-      await _channel.invokeMethod('setFocusDuck', {'enabled': enabled});
-    } catch (_) {}
-  }
-
   /// 조과 효과음(TTS 음성) 사용 여부. 기본 켜짐.
   static Future<bool> getSoundEnabled() async {
     try {

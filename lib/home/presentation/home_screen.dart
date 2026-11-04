@@ -1373,6 +1373,7 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
         _checkPendingShakePhotos();
         _autoSetupSaveFolderIfNeeded();
         _maybePromptUpdate();
+        _maybeAutoStartCounter();
       });
     }
   }
@@ -1392,6 +1393,25 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
   }
 
   // ── 홈 전용 로직(isToday일 때만 호출) ─────────────────────
+
+  /// 설정이 켜져 있으면 앱 실행(홈 진입) 시 조과 카운터 세션을 자동 시작한다.
+  /// 어종·저장경로가 있어야 하고, 이미 실행 중이면 그대로 둔다.
+  /// (앱이 포그라운드라 이 시점엔 포그라운드 서비스 시작이 허용된다.)
+  Future<void> _maybeAutoStartCounter() async {
+    final settings = await ref.read(settingsProvider.future);
+    if (!settings.autoStartCounterOnLaunch) return;
+    final species = settings.catchQuickSpecies
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (species.isEmpty || settings.savePath.isEmpty) return;
+    if (await CatchLogService().isCatchSession()) return; // 이미 실행 중이면 유지
+    await CatchLogService().syncConfig(species, settings.savePath);
+    await CatchLogService().startCatchSession(species);
+    // 워치 그래프 배경용 오늘 조위도 함께 push(best-effort).
+    unawaited(ref.read(locationProvider.notifier).pushTodayTideToWatch());
+  }
+
   Future<void> _maybePromptUpdate() async {
     if (!await AppUpdateService.isUpdateAvailable()) return;
     if (!mounted) return;

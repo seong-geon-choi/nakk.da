@@ -11,6 +11,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _photoSavePathKey = 'photo_save_path';
   static const _showLocationButtonKey = 'show_location_button';
   static const _autoLocationOnFirstEntryKey = 'auto_location_on_first_entry';
+  static const _autoStartCounterOnLaunchKey = 'auto_start_counter_on_launch';
   static const _autoSaveVoiceKey = 'auto_save_voice';
   static const _showAddressInMemoNameKey = 'show_address_in_memo_name';
   static const _showCatchInputKey = 'show_catch_input'; // 구버전 마이그레이션용
@@ -78,6 +79,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final showLocationButton = prefs.getBool(_showLocationButtonKey) ?? true;
     final autoLocationOnFirstEntry =
         prefs.getBool(_autoLocationOnFirstEntryKey) ?? true;
+    final autoStartCounterOnLaunch =
+        prefs.getBool(_autoStartCounterOnLaunchKey) ?? false;
     final autoSaveVoice = prefs.getBool(_autoSaveVoiceKey) ?? true;
     final showAddressInMemoName = prefs.getBool(_showAddressInMemoNameKey) ?? true;
     // 신규 키 우선. 없으면: 구버전 show_catch_input 있으면 이관(true→최소, false→일반),
@@ -200,6 +203,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       photoSavePath: photoSavePath,
       showLocationButton: showLocationButton,
       autoLocationOnFirstEntry: autoLocationOnFirstEntry,
+      autoStartCounterOnLaunch: autoStartCounterOnLaunch,
       autoSaveVoice: autoSaveVoice,
       showAddressInMemoName: showAddressInMemoName,
       memoComplexity: memoComplexity,
@@ -262,6 +266,8 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setBool(_showLocationButtonKey, settings.showLocationButton);
     await prefs.setBool(
         _autoLocationOnFirstEntryKey, settings.autoLocationOnFirstEntry);
+    await prefs.setBool(
+        _autoStartCounterOnLaunchKey, settings.autoStartCounterOnLaunch);
     await prefs.setBool(_autoSaveVoiceKey, settings.autoSaveVoice);
     await prefs.setBool(_showAddressInMemoNameKey, settings.showAddressInMemoName);
     await prefs.setString(_memoComplexityKey, settings.memoComplexity.name);

@@ -815,22 +815,6 @@ class MainActivity : FlutterActivity() {
                     setBtEnabled(enabled)
                     result.success(null)
                 }
-                "getVolHook" -> {
-                    result.success(CatchLogService.isBtVolEnabled(this))
-                }
-                "setVolHook" -> {
-                    val enabled = call.argument<Boolean>("enabled") ?: false
-                    setBtVolHook(enabled)
-                    result.success(null)
-                }
-                "getFocusDuck" -> {
-                    result.success(CatchLogService.isBtFocusEnabled(this))
-                }
-                "setFocusDuck" -> {
-                    val enabled = call.argument<Boolean>("enabled") ?: false
-                    setBtFocusDuck(enabled)
-                    result.success(null)
-                }
                 "getSoundEnabled" -> {
                     result.success(CatchLogService.isSoundEnabled(this))
                 }
@@ -1009,20 +993,6 @@ class MainActivity : FlutterActivity() {
     private fun setBtEnabled(enabled: Boolean) {
         CatchLogService.prefsOf(this).edit()
             .putBoolean(CatchLogService.PREFS_BTMAP_ENABLED_KEY, enabled).apply()
-        resyncBtSession()
-    }
-
-    /** 볼륨 후킹 on/off 저장 + 세션 즉시 재동기화(원격 볼륨 선언 반영). */
-    private fun setBtVolHook(enabled: Boolean) {
-        CatchLogService.prefsOf(this).edit()
-            .putBoolean(CatchLogService.PREFS_BTVOL_ENABLED_KEY, enabled).apply()
-        resyncBtSession()
-    }
-
-    /** 리모컨 우선(덕킹 포커스) on/off 저장 + 세션 즉시 재동기화(포커스 요청 반영). */
-    private fun setBtFocusDuck(enabled: Boolean) {
-        CatchLogService.prefsOf(this).edit()
-            .putBoolean(CatchLogService.PREFS_BTFOCUS_ENABLED_KEY, enabled).apply()
         resyncBtSession()
     }
 

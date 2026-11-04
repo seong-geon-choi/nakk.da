@@ -535,6 +535,7 @@ class AppSettings {
   final String photoSavePath;
   final bool showLocationButton;
   final bool autoLocationOnFirstEntry; // 첫 기록 시 현장 정보 1회 자동 추가
+  final bool autoStartCounterOnLaunch; // 앱 실행 시 조과 카운터 세션 자동 시작(기본 꺼짐)
   final bool autoSaveVoice;
   final bool showAddressInMemoName;
   final MemoComplexity memoComplexity; // 메모 입력항목 복잡도(단순/복잡/일반)
@@ -635,6 +636,7 @@ class AppSettings {
     required this.photoSavePath,
     this.showLocationButton = true,
     this.autoLocationOnFirstEntry = true,
+    this.autoStartCounterOnLaunch = false,
     this.autoSaveVoice = true,
     this.showAddressInMemoName = true,
     this.memoComplexity = MemoComplexity.complexFishing,
@@ -703,6 +705,7 @@ class AppSettings {
     String? photoSavePath,
     bool? showLocationButton,
     bool? autoLocationOnFirstEntry,
+    bool? autoStartCounterOnLaunch,
     bool? autoSaveVoice,
     bool? showAddressInMemoName,
     MemoComplexity? memoComplexity,
@@ -763,6 +766,8 @@ class AppSettings {
       showLocationButton: showLocationButton ?? this.showLocationButton,
       autoLocationOnFirstEntry:
           autoLocationOnFirstEntry ?? this.autoLocationOnFirstEntry,
+      autoStartCounterOnLaunch:
+          autoStartCounterOnLaunch ?? this.autoStartCounterOnLaunch,
       autoSaveVoice: autoSaveVoice ?? this.autoSaveVoice,
       showAddressInMemoName: showAddressInMemoName ?? this.showAddressInMemoName,
       memoComplexity: memoComplexity ?? this.memoComplexity,

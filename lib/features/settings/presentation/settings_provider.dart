@@ -424,6 +424,14 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
     state = AsyncData(updated);
   }
 
+  Future<void> updateAutoStartCounterOnLaunch(bool value) async {
+    final current = state.valueOrNull;
+    if (current == null) return;
+    final updated = current.copyWith(autoStartCounterOnLaunch: value);
+    await ref.read(settingsRepositoryProvider).save(updated);
+    state = AsyncData(updated);
+  }
+
   Future<void> updateMemoComplexity(MemoComplexity mode) async {
     final current = state.valueOrNull;
     if (current == null) return;
