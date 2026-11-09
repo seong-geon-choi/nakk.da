@@ -1369,7 +1369,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
               // 이동경로 좌표: 길게 누르면 삭제할 수 있게 마커로 렌더(투명한 큰
               // 히트 영역 안에 작은 점). 겹칠 때 선 모양이 흐트러지지 않도록 충분히
               // 확대(줌 ≥ 15)했을 때만 표시하고, 축소 상태에선 선만 깔끔히 보인다.
-              if ((_showTrack || _showTimes) && fTrack.isNotEmpty && _zoom >= 15.0)
+              if ((_showTrack || _showTimes) && fTrack.isNotEmpty && _zoom >= 13.0)
                 MarkerLayer(
                   markers: [
                     for (final p in fTrack)
@@ -1806,9 +1806,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    // 드래그 핸들: 끌어서 버튼바를 위/아래로 이동(마지막 위치 저장·재사용)
+                    // 드래그 핸들: 탭하면 버튼바 접기/펼치기, 끌면 위/아래로 이동(위치 저장).
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
+                      onTap: () => setState(
+                          () => _toolbarCollapsed = !_toolbarCollapsed),
                       onPanUpdate: (d) {
                         final ts = _stackSize(context);
                         final curTop = _toolTop ??
@@ -1829,15 +1831,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                 .onSurfaceVariant
                                 .withValues(alpha: 0.7)),
                       ),
-                    ),
-                    // 버튼바 접기/펼치기 — 접으면 지도를 넓게 볼 수 있다.
-                    _toolBtn(
-                      _toolbarCollapsed
-                          ? Icons.unfold_more
-                          : Icons.unfold_less,
-                      Theme.of(context).colorScheme.primary,
-                      () => setState(
-                          () => _toolbarCollapsed = !_toolbarCollapsed),
                     ),
                     if (!_toolbarCollapsed) ...[
                     const Divider(
@@ -1868,7 +1861,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     _divider(),
                     // ── 마커 표시(종류별 켜기) ─────────────────
                     _toolBtn(
-                      _showMemoPoints ? Icons.location_on : Icons.location_off,
+                      _showMemoPoints ? Icons.photo : Icons.hide_image,
                       _points.any((p) => p.isMemo)
                           ? (_showMemoPoints
                               ? Theme.of(context).colorScheme.primary
