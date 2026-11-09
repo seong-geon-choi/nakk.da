@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.WearableListenerService
@@ -32,7 +33,48 @@ class WearListenerService : WearableListenerService() {
             PATH_STOP_SOUND -> forward(CatchLogService.ACTION_STOP_SOUND, -1)
             PATH_STATE_REQUEST -> CatchLogService.pushStateToWatch(this)
             PATH_CHART_REQUEST -> CatchLogService.pushChartStateToWatch(this)
+            PATH_CAMERA_OPEN -> launchCamera()
+            PATH_CAMERA_CLOSE ->
+                sendBroadcast(Intent(ACTION_CLOSE_CAMERA).setPackage(packageName))
+            PATH_CAMERA_SHOOT -> sendBroadcast(
+                Intent(ACTION_CAMERA_SHOOT).setPackage(packageName)
+                    .putExtra("delay", parseIndex(event.data)))
+            PATH_CAMERA_FLIP ->
+                sendBroadcast(Intent(ACTION_CAMERA_FLIP).setPackage(packageName))
         }
+    }
+
+    /**
+     * 워치 요청으로 폰 카메라(셀카)를 포그라운드로 연다 — 흔들기 카메라와 동일 메커니즘.
+     * 오버레이 권한이 있으면 바로 실행, 없으면 전면 인텐트 알림으로 폴백.
+     */
+    private fun launchCamera() {
+        val intent = Intent(this, CameraLockActivity::class.java)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+            .putExtra("selfie", true)
+        if (Settings.canDrawOverlays(this)) {
+            try { startActivity(intent); return } catch (_: Exception) {}
+        }
+        val pi = PendingIntent.getActivity(
+            this, 0, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        val nm = getSystemService(NotificationManager::class.java) ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    CAMERA_CHANNEL_ID, "워치 카메라 실행", NotificationManager.IMPORTANCE_HIGH))
+        }
+        val notif = NotificationCompat.Builder(this, CAMERA_CHANNEL_ID)
+            .setContentTitle("카메라 실행")
+            .setContentText("워치에서 카메라를 엽니다")
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_EVENT)
+            .setAutoCancel(true)
+            .setFullScreenIntent(pi, true)
+            .setContentIntent(pi)
+            .build()
+        nm.notify(CAMERA_NOTIF_ID, notif)
     }
 
     private fun parseIndex(data: ByteArray?): Int =
@@ -77,8 +119,12 @@ class WearListenerService : WearableListenerService() {
     private fun recordWithoutSession(action: String, speciesIndex: Int) {
         val species = CatchLogService.loadSpecies(this).getOrNull(speciesIndex) ?: return
         when (action) {
-            CatchLogService.ACTION_ADD ->
-                CatchLogService.appendCatchToFile(this, species, null, null)
+            CatchLogService.ACTION_ADD -> {
+                // 세션 있을 때(addCatch)와 동일하게 현재 좌표를 포함해 기록.
+                // (onMessageReceived는 백그라운드 스레드라 동기 조회 가능.)
+                val loc = CatchLogService.lastLocationBlocking(this)
+                CatchLogService.appendCatchToFile(this, species, loc?.first, loc?.second)
+            }
             CatchLogService.ACTION_REMOVE ->
                 CatchLogService.removeLastCatchFromFile(this, species)
         }
@@ -131,7 +177,17 @@ class WearListenerService : WearableListenerService() {
         private const val PATH_STOP_SOUND = "/nakkda/count/stop"
         private const val PATH_STATE_REQUEST = "/nakkda/count/request"
         private const val PATH_CHART_REQUEST = "/nakkda/chart/request"
+        private const val PATH_CAMERA_OPEN = "/nakkda/camera/open"
+        private const val PATH_CAMERA_CLOSE = "/nakkda/camera/close"
+        private const val PATH_CAMERA_SHOOT = "/nakkda/camera/shoot"
+        private const val PATH_CAMERA_FLIP = "/nakkda/camera/flip"
         private const val CHANNEL_ID = "nakkda_watch_record"
         private const val NOTIF_ID = 1009
+        private const val CAMERA_CHANNEL_ID = "nakkda_watch_camera"
+        private const val CAMERA_NOTIF_ID = 1010
+        // CameraLockActivity가 수신하는 브로드캐스트(워치 카메라 조작).
+        const val ACTION_CLOSE_CAMERA = "com.sgchoisg.nakkda.CLOSE_CAMERA"
+        const val ACTION_CAMERA_SHOOT = "com.sgchoisg.nakkda.CAMERA_SHOOT"
+        const val ACTION_CAMERA_FLIP = "com.sgchoisg.nakkda.CAMERA_FLIP"
     }
 }

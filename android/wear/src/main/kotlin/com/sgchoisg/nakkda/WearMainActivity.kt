@@ -45,6 +45,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
@@ -76,6 +77,8 @@ import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataMap
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.Wearable
+import androidx.wear.ambient.AmbientLifecycleObserver
+import kotlinx.coroutines.launch
 import kotlin.math.cos
 
 /** 좌/우 영역 배경색 팔레트(16색). 영역을 길게 누르면 그리드 피커에서 선택. */
@@ -119,6 +122,28 @@ class WearMainActivity : ComponentActivity() {
     private var chartHours by mutableStateOf<List<IntArray>>(emptyList())
     private var tideMins by mutableStateOf<List<Int>>(emptyList())
     private var tideLevels by mutableStateOf<List<Int>>(emptyList())
+    // 카메라 페이지에서 '실행'을 눌러 폰 카메라를 연 상태(셔터 UI 노출). 페이지 이탈 시 false.
+    private var cameraLaunched by mutableStateOf(false)
+    // 앰비언트(화면 꺼짐) 상태 — true면 저전력 AoD만 표시하고 앱은 활성으로 유지(워치페이스로
+    // 안 돌아감). 화면이 다시 켜지면 그대로 카운터 화면이 유지된다.
+    private var ambient by mutableStateOf(false)
+
+    private val ambientObserver by lazy {
+        AmbientLifecycleObserver(
+            this,
+            object : AmbientLifecycleObserver.AmbientLifecycleCallback {
+                override fun onEnterAmbient(
+                    ambientDetails: AmbientLifecycleObserver.AmbientDetails
+                ) {
+                    ambient = true
+                }
+
+                override fun onExitAmbient() {
+                    ambient = false
+                }
+            },
+        )
+    }
     // 플립 애니메이션 여부 — 연타(짧은 간격)면 스냅(false), 단독 조작이면 플립(true).
     private var animateFlip by mutableStateOf(false)
     // 색상 그리드 피커가 열린 영역(null=닫힘, 0=좌, 1=우).
@@ -145,15 +170,26 @@ class WearMainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // 화면이 꺼져도 앱을 활성으로 유지(앰비언트) — 다시 켜면 카운터 화면이 그대로 유지된다.
+        lifecycle.addObserver(ambientObserver)
         prefs = getSharedPreferences("wear_counter", Context.MODE_PRIVATE)
         colorIdx = intArrayOf(prefs.getInt("color_0", 0), prefs.getInt("color_1", 4))
         setContent {
             MaterialTheme {
                 Box(Modifier.fillMaxSize().background(Color.Black)) {
-                    val pagerState = rememberPagerState(pageCount = { 2 })
+                    // 0=조과 그래프(왼쪽), 1=카운터(시작·가운데), 2=카메라(오른쪽).
+                    val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
+                    val scope = rememberCoroutineScope()
                     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
-                        if (page == 0) {
-                            Box(Modifier.fillMaxSize()) {
+                        when (page) {
+                            0 -> ChartScreen(
+                                names = chartNames,
+                                hours = chartHours,
+                                tideMins = tideMins,
+                                tideLevels = tideLevels,
+                                colorIdx = colorIdx,
+                            )
+                            1 -> Box(Modifier.fillMaxSize()) {
                                 CounterScreen(
                                     names = names,
                                     counts = counts,
@@ -181,21 +217,31 @@ class WearMainActivity : ComponentActivity() {
                                     )
                                 }
                             }
-                        } else {
-                            ChartScreen(
-                                names = chartNames,
-                                hours = chartHours,
-                                tideMins = tideMins,
-                                tideLevels = tideLevels,
-                                colorIdx = colorIdx,
+                            else -> CameraScreen(
+                                launched = cameraLaunched,
+                                onLaunch = { cameraLaunched = true; sendCameraOpen() },
+                                onCancel = { scope.launch { pagerState.animateScrollToPage(1) } },
+                                onShoot = { delaySec -> sendCameraShoot(delaySec) },
+                                onFlip = { sendCameraFlip() },
                             )
                         }
                     }
-                    PageDots(2, pagerState.currentPage, Modifier.align(Alignment.BottomCenter))
-                    // 그래프 페이지로 넘어오면 폰에 최신 데이터 요청.
+                    PageDots(3, pagerState.currentPage, Modifier.align(Alignment.BottomCenter))
+                    // 앰비언트(화면 꺼짐): 밝은 UI 대신 저전력 AoD를 덮어 표시(앱은 유지).
+                    if (ambient) {
+                        AmbientOverlay(names = names, counts = counts)
+                    }
                     LaunchedEffect(pagerState) {
-                        snapshotFlow { pagerState.currentPage }.collect {
-                            if (it == 1) requestChart()
+                        var prev = pagerState.currentPage
+                        snapshotFlow { pagerState.currentPage }.collect { page ->
+                            // 그래프 페이지로 넘어오면 폰에 최신 데이터 요청.
+                            if (page == 0) requestChart()
+                            // 카메라 페이지(2)에서 빠져나오면 폰 카메라 화면을 닫는다.
+                            if (prev == 2 && page != 2) {
+                                sendCameraClose()
+                                cameraLaunched = false
+                            }
+                            prev = page
                         }
                     }
                 }
@@ -343,6 +389,32 @@ class WearMainActivity : ComponentActivity() {
         }
     }
 
+    /** 카메라 페이지에서 '실행' 확인 시 폰에 카메라(셀카) 열기를 요청. */
+    private fun sendCameraOpen() = sendToPhone(PATH_CAMERA_OPEN)
+
+    /** 카메라 페이지에서 빠져나올 때 폰 카메라 화면 닫기를 요청. */
+    private fun sendCameraClose() = sendToPhone(PATH_CAMERA_CLOSE)
+
+    /** 셔터: [delaySec]초 뒤 촬영(0이면 즉시). 폰이 카운트다운 후 촬영한다. */
+    private fun sendCameraShoot(delaySec: Int) =
+        sendToPhone(PATH_CAMERA_SHOOT, delaySec.toString().toByteArray())
+
+    /** 전/후면 카메라 전환 요청. */
+    private fun sendCameraFlip() = sendToPhone(PATH_CAMERA_FLIP)
+
+    /** 연결된 노드로 메시지를 보낸다(캐시 노드 우선, 없으면 조회 후 전송). */
+    private fun sendToPhone(path: String, payload: ByteArray = ByteArray(0)) {
+        val nodes = cachedNodes
+        if (nodes.isNotEmpty()) {
+            for (id in nodes) messageClient.sendMessage(id, path, payload)
+        } else {
+            Wearable.getNodeClient(this).connectedNodes.addOnSuccessListener { ns ->
+                cachedNodes = ns.map { it.id }
+                for (n in ns) messageClient.sendMessage(n.id, path, payload)
+            }
+        }
+    }
+
     /** 미리보기(상태만): 영역 색을 즉시 바꿔 배경·피커 커서에 반영. 저장은 닫을 때. */
     private fun previewColor(side: Int, idx: Int) {
         val arr = colorIdx.copyOf()
@@ -371,6 +443,10 @@ class WearMainActivity : ComponentActivity() {
         private const val PATH_REQUEST = "/nakkda/count/request"
         private const val PATH_CHART = "/nakkda/chart/state"
         private const val PATH_CHART_REQUEST = "/nakkda/chart/request"
+        private const val PATH_CAMERA_OPEN = "/nakkda/camera/open"
+        private const val PATH_CAMERA_CLOSE = "/nakkda/camera/close"
+        private const val PATH_CAMERA_SHOOT = "/nakkda/camera/shoot"
+        private const val PATH_CAMERA_FLIP = "/nakkda/camera/flip"
         // 조작·push가 멈춘 뒤 이 시간이 지나야 권위값 반영을 시도(디바운스).
         private const val RECONCILE_MS = 700L
         // 낙관적 값과 불일치가 이 시간 이상 지속되면(명령 유실 등) 한 번 강제 보정.
@@ -600,7 +676,187 @@ private fun ColorPicker(
     }
 }
 
-/** 하단 페이지 인디케이터(스와이프로 2페이지 있음을 알림). */
+/**
+ * 카메라 페이지 — 실수로 스와이프돼도 바로 실행되지 않도록 확인을 거친 뒤
+ * 폰 카메라(셀카)를 연다. 이 페이지에서 빠져나가면(스와이프) 폰 카메라는 닫힌다.
+ */
+@Composable
+private fun CameraScreen(
+    launched: Boolean,
+    onLaunch: () -> Unit,
+    onCancel: () -> Unit,
+    onShoot: (Int) -> Unit,
+    onFlip: () -> Unit,
+) {
+    if (!launched) {
+        Box(
+            Modifier.fillMaxSize().background(Color.Black).padding(18.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("카메라 (셀카)", color = Color.White, fontSize = 15.sp,
+                    fontWeight = FontWeight.Bold)
+                Text("폰 카메라를 실행할까요?", color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 12.sp, textAlign = TextAlign.Center)
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    PillButton("취소", Color(0xFF37474F), onCancel)
+                    PillButton("실행", Color(0xFF2E7D32), onLaunch)
+                }
+            }
+        }
+    } else {
+        CameraControls(onShoot = onShoot, onFlip = onFlip)
+    }
+}
+
+/** 폰 카메라 원격 조작 — 셔터(탭=즉시, 길게=누른 초만큼 타이머) + 상하 스와이프 전/후면 전환. */
+@OptIn(ExperimentalAnimationApi::class)
+@Composable
+private fun CameraControls(onShoot: (Int) -> Unit, onFlip: () -> Unit) {
+    val scope = rememberCoroutineScope()
+    var heldSec by remember { mutableStateOf(0) }
+    var pressing by remember { mutableStateOf(false) }
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            // 상하 스와이프: 전/후면 전환.
+            .pointerInput(Unit) {
+                var dy = 0f
+                val threshold = 28.dp.toPx()
+                detectVerticalDragGestures(
+                    onDragStart = { dy = 0f },
+                    onVerticalDrag = { change, delta -> dy += delta; change.consume() },
+                    onDragEnd = { if (kotlin.math.abs(dy) >= threshold) onFlip() },
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            Modifier.fillMaxSize().padding(vertical = 18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            // 설명(위)
+            Text(
+                "탭=즉시 · 길게=타이머\n상하 스와이프=전/후면",
+                color = Color.White.copy(alpha = 0.7f),
+                fontSize = 10.sp,
+                textAlign = TextAlign.Center,
+            )
+            // 셔터 버튼(아래)
+            Box(
+                Modifier
+                    .size(96.dp)
+                    .clip(CircleShape)
+                    .background(Color.White)
+                    .pointerInput(Unit) {
+                        detectTapGestures(
+                            onPress = {
+                                pressing = true
+                                val start = SystemClock.elapsedRealtime()
+                                val job = scope.launch {
+                                    while (true) {
+                                        heldSec =
+                                            ((SystemClock.elapsedRealtime() - start) / 1000).toInt()
+                                        kotlinx.coroutines.delay(100)
+                                    }
+                                }
+                                val released = tryAwaitRelease()
+                                job.cancel()
+                                val secs =
+                                    ((SystemClock.elapsedRealtime() - start) / 1000).toInt()
+                                pressing = false
+                                heldSec = 0
+                                if (released) onShoot(secs)
+                            },
+                        )
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Box(Modifier.size(74.dp).clip(CircleShape).background(Color(0xFFD32F2F)))
+            }
+        }
+        // 길게 누르는 동안: 누적 초를 화면 가득 크게(애니메이션) 표시.
+        if (pressing && heldSec > 0) {
+            Box(
+                Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.82f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                AnimatedContent(
+                    targetState = heldSec,
+                    transitionSpec = {
+                        (slideInVertically { h -> h / 2 } + fadeIn()) togetherWith
+                            (slideOutVertically { h -> -h / 2 } + fadeOut())
+                    },
+                    label = "held",
+                ) { s ->
+                    Text(
+                        "$s",
+                        color = Color.White,
+                        fontSize = 120.sp,
+                        fontWeight = FontWeight.Black,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PillButton(label: String, color: Color, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .clip(CircleShape)
+            .background(color)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+            ) { onClick() }
+            .padding(horizontal = 18.dp, vertical = 9.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/** 앰비언트(화면 꺼짐) AoD — 검은 배경에 어종별 조과 수만 흐리게 표시(저전력·번인 방지). */
+@Composable
+private fun AmbientOverlay(names: List<String>, counts: List<Int>) {
+    Box(
+        Modifier.fillMaxSize().background(Color.Black),
+        contentAlignment = Alignment.Center,
+    ) {
+        val dim = Color.White.copy(alpha = 0.6f)
+        if (names.isEmpty()) {
+            Text("낚.다", color = dim, fontSize = 18.sp)
+            return@Box
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            for (i in names.indices.take(2)) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        names[i],
+                        color = dim.copy(alpha = 0.45f),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                    )
+                    Text(
+                        "${counts.getOrElse(i) { 0 }}",
+                        color = dim,
+                        fontSize = 40.sp,
+                        fontWeight = FontWeight.Bold,
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** 하단 페이지 인디케이터(스와이프로 여러 페이지가 있음을 알림). */
 @Composable
 private fun PageDots(count: Int, current: Int, modifier: Modifier = Modifier) {
     Row(

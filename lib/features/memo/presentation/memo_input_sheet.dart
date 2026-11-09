@@ -101,7 +101,7 @@ class MemoInputSheet extends ConsumerStatefulWidget {
   }
 
   /// 소스 선택 → 사진/동영상 촬영/선택까지 처리.
-  static Future<({String path, bool isVideo, double? length, ({double lat, double lng})? gps, DateTime? timestamp, List<({String path, bool isVideo})>? multi})?> pickMedia(
+  static Future<({String path, bool isVideo, double? length, ({double lat, double lng})? gps, DateTime? timestamp, List<ShotResult>? multi})?> pickMedia(
     BuildContext context,
     WidgetRef ref,
   ) async {
@@ -200,23 +200,25 @@ class MemoInputSheet extends ConsumerStatefulWidget {
       path = await saveToGallery(rawPath, relativePath: relPath);
       length = arResult.distanceCm;
     } else if (source == PhotoSource.camera) {
-      final camResult = await Navigator.of(context)
-          .push<({String path, bool isVideo, ({double lat, double lng})? gps})>(
+      // 카메라는 여러 장(추가 촬영)을 목록으로 반환한다. 각 사진을 갤러리에 저장해
+      // multi로 넘기면 호출측이 각각 메모 항목으로 추가한다(gps 보존).
+      final shots = await Navigator.of(context).push<List<ShotResult>>(
         MaterialPageRoute(builder: (_) => const CameraRulerScreen()),
       );
-      if (camResult == null || !context.mounted) return null;
-
-      // GPS는 카메라가 프리뷰 동안 미리 받아둔 값 사용(촬영 시 대기 없음).
-      gps = camResult.gps;
-      if (camResult.isVideo) {
-        // 카메라 동영상: _saveVideo()가 이미 앱 스토리지에 저장했으므로 경로 그대로 사용
-        isVideo = true;
-        path = camResult.path;
-      } else {
-        // 카메라 사진: 기존 플로우
-        exifSourcePath = camResult.path;
-        path = await saveToGallery(camResult.path, relativePath: relPath);
+      if (shots == null || shots.isEmpty || !context.mounted) return null;
+      final saved = <ShotResult>[];
+      for (final s in shots) {
+        if (s.isVideo) {
+          saved.add(s); // 동영상은 _saveVideo로 이미 앱 저장소에 있음
+        } else {
+          final p = await saveToGallery(s.path, relativePath: relPath) ?? s.path;
+          saved.add((path: p, isVideo: false, gps: s.gps));
+        }
       }
+      return (
+        path: '', isVideo: false, length: null, gps: null,
+        timestamp: null, multi: saved,
+      );
     } else {
       // gallery: 커스텀 갤러리 화면 (전체/사진/동영상 탭)
       final picked = await Navigator.of(context).push<Object?>(
@@ -227,9 +229,14 @@ class MemoInputSheet extends ConsumerStatefulWidget {
       if (picked is List) {
         final items = picked.cast<({String path, bool isVideo})>();
         if (items.isEmpty) return null;
+        // 갤러리 항목은 gps 없음(null)으로 채워 공용 multi 타입(ShotResult)에 맞춘다.
+        final multi = items
+            .map((e) =>
+                (path: e.path, isVideo: e.isVideo, gps: null) as ShotResult)
+            .toList();
         return (
           path: '', isVideo: false, length: null, gps: null,
-          timestamp: null, multi: items,
+          timestamp: null, multi: multi,
         );
       }
       final single = picked as ({String path, bool isVideo});
@@ -914,6 +921,10 @@ class _MemoInputSheetState extends ConsumerState<MemoInputSheet> {
         } else {
           _photoPath = first.path;
           _videoPath = null;
+        }
+        if (first.gps != null) {
+          _latCtrl.text = first.gps!.lat.toStringAsFixed(4);
+          _lngCtrl.text = first.gps!.lng.toStringAsFixed(4);
         }
       });
       if (!first.isVideo) _recognizePhoto();

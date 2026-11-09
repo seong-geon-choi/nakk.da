@@ -16,14 +16,15 @@ import 'camera_ruler_screen.dart';
 /// 갖춰진 메인 앱이 열릴 때(홈 화면 resume/콜드스타트) 갤러리 저장 + 오늘 메모
 /// 등록을 처리한다(음성 결과 전달과 동일한 패턴).
 class CameraLockApp extends StatelessWidget {
-  const CameraLockApp({super.key});
+  final bool selfie; // 워치 호출 시 전면(셀카) 카메라로 시작
+  const CameraLockApp({super.key, this.selfie = false});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: Colors.blue, useMaterial3: true),
-      home: const _CameraLockHost(),
+      home: _CameraLockHost(selfie: selfie),
     );
   }
 }
@@ -32,7 +33,8 @@ class CameraLockApp extends StatelessWidget {
 const String kPendingShakePhotosKey = 'pending_shake_photos';
 
 class _CameraLockHost extends ConsumerStatefulWidget {
-  const _CameraLockHost();
+  final bool selfie;
+  const _CameraLockHost({this.selfie = false});
 
   @override
   ConsumerState<_CameraLockHost> createState() => _CameraLockHostState();
@@ -52,12 +54,13 @@ class _CameraLockHostState extends ConsumerState<_CameraLockHost> {
     if (_started) return;
     _started = true;
     try {
-      final result = await Navigator.of(context)
-          .push<({String path, bool isVideo, ({double lat, double lng})? gps})>(
-        MaterialPageRoute(builder: (_) => const CameraRulerScreen()),
+      final results = await Navigator.of(context).push<List<ShotResult>>(
+        MaterialPageRoute(
+            builder: (_) => CameraRulerScreen(
+                initialFront: widget.selfie, standalone: true)),
       );
-      if (result != null) {
-        await _queuePhoto(result);
+      for (final r in results ?? const <ShotResult>[]) {
+        await _queuePhoto(r);
       }
     } catch (_) {
       // 촬영/대기열 저장 실패 시에도 액티비티는 닫는다.

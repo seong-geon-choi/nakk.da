@@ -7,12 +7,12 @@ import 'app.dart';
 import 'features/photo/presentation/camera_lock_host.dart';
 import 'features/species_ai/data/model_update_service.dart';
 
-/// 흔들기 → 잠금화면 위 카메라 전용 진입점(CameraLockActivity가 실행).
-/// 앱 전체가 아닌 카메라 화면만 렌더한다.
+/// 흔들기·워치 → 잠금화면 위 카메라 전용 진입점(CameraLockActivity가 실행).
+/// 앱 전체가 아닌 카메라 화면만 렌더한다. [args]에 'selfie'가 있으면 전면 카메라로 연다.
 @pragma('vm:entry-point')
-void cameraLockMain() {
+void cameraLockMain(List<String> args) {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const ProviderScope(child: CameraLockApp()));
+  runApp(ProviderScope(child: CameraLockApp(selfie: args.contains('selfie'))));
 }
 
 void main() async {

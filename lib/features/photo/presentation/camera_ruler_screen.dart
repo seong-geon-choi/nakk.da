@@ -1,6 +1,9 @@
 import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 import 'package:camera/camera.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:geolocator/geolocator.dart';
@@ -13,8 +16,19 @@ import '../../location/presentation/location_provider.dart';
 import '../../../core/utils/watermark.dart';
 import '../../../core/utils/media_scanner.dart';
 
+/// 촬영 대기열 prefs 키 — camera_lock_host.dart의 kPendingShakePhotosKey와 동일해야 한다
+/// (원격 촬영이 흔들기 촬영과 같은 큐를 쓰도록).
+const _kPendingShakePhotosKey = 'pending_shake_photos';
+
+/// 한 번의 촬영 결과(경로·동영상여부·GPS). 화면은 여러 장을 모아 목록으로 반환한다.
+typedef ShotResult = ({String path, bool isVideo, ({double lat, double lng})? gps});
+
 class CameraRulerScreen extends ConsumerStatefulWidget {
-  const CameraRulerScreen({super.key});
+  final bool initialFront; // true면 전면(셀카) 카메라로 시작(워치 셀카 호출)
+  // true면 독립 실행(흔들기·워치·카운터→카메라): '카운터로' 버튼 노출. 메모 첨부는 false.
+  final bool standalone;
+  const CameraRulerScreen(
+      {super.key, this.initialFront = false, this.standalone = false});
 
   @override
   ConsumerState<CameraRulerScreen> createState() => _CameraRulerScreenState();
@@ -27,11 +41,16 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   bool _permissionDenied = false; // _error가 권한 문제일 때 '설정 열기' 노출용
   bool _initializing = false; // 권한 다이얼로그 resume 등으로 인한 중복 초기화 방지
   bool _capturing = false;
+  // 폰 셔터로 찍은 결과 누적(여러 장). '돌아가기'/뒤로가기 시 이 목록을 반환한다.
+  final List<ShotResult> _captured = [];
+  // 워치 원격 조작 채널(네이티브 CameraLockActivity → remoteShoot/remoteFlip).
+  static const _remoteChannel = MethodChannel('nakkda/cameraLock');
+  int? _countdown; // 워치 셔터 셀프타이머 남은 초(화면 표시용). null=비표시.
   double _minZoom = 1.0;
   double _maxZoom = 1.0;
   double _currentZoom = 1.0;
   double _baseZoom = 1.0;
-  bool _useFrontCamera = false; // 셀카(전면 카메라) 사용 여부
+  bool _useFrontCamera = false; // 셀카(전면 카메라) 사용 여부(initState에서 initialFront 반영)
   bool _mirrorSelfie = true; // 전면 촬영 시 좌우 반전(미러) 저장 여부(사용자 토글)
   // 한 손가락 가로 스와이프로 사진/동영상 모드 전환을 판정하기 위한 누적값.
   // 핀치 줌과의 제스처 충돌을 없애려고 가로 드래그 대신 scale 콜백에서 처리한다.
@@ -65,6 +84,8 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   @override
   void initState() {
     super.initState();
+    _useFrontCamera = widget.initialFront; // 워치 셀카 호출이면 전면으로 시작
+    _remoteChannel.setMethodCallHandler(_onRemote); // 워치 셔터/전환 수신
     WidgetsBinding.instance.addObserver(this);
     // 레이아웃이 화면과 같이 돌지 않도록 세로로 고정
     SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
@@ -192,6 +213,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     _toastTimer?.cancel();
     _recordTimer?.cancel();
     _accelSub?.cancel();
+    _remoteChannel.setMethodCallHandler(null);
     // 화면 방향 잠금 해제 (앱 기본값 복구)
     SystemChrome.setPreferredOrientations(DeviceOrientation.values);
     WidgetsBinding.instance.removeObserver(this);
@@ -340,6 +362,38 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     if (mounted) _showToast(_useFrontCamera ? '전면 카메라' : '후면 카메라');
   }
 
+  /// 워치(네이티브)에서 오는 원격 명령: 셔터(remoteShoot)·전후면 전환(remoteFlip).
+  Future<dynamic> _onRemote(MethodCall call) async {
+    switch (call.method) {
+      case 'remoteShoot':
+        final args = call.arguments;
+        final delay = (args is Map && args['delay'] is int) ? args['delay'] as int : 0;
+        await _remoteShoot(delay);
+        break;
+      case 'remoteFlip':
+        await _flipCamera();
+        break;
+    }
+    return null;
+  }
+
+  /// 워치 셔터: [delaySec]초 카운트다운을 화면에 표시한 뒤 촬영(0이면 즉시).
+  Future<void> _remoteShoot(int delaySec) async {
+    if (_capturing || _countdown != null) return;
+    if (delaySec <= 0) {
+      await _remoteCapture();
+      return;
+    }
+    for (var s = delaySec; s > 0; s--) {
+      if (!mounted) return;
+      setState(() => _countdown = s);
+      await Future.delayed(const Duration(seconds: 1));
+    }
+    if (!mounted) return;
+    setState(() => _countdown = null);
+    await _remoteCapture();
+  }
+
   Future<void> _toggleResolution() async {
     if (_isRecording) return;
     final next = _videoResolution == ResolutionPreset.high
@@ -357,9 +411,94 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     _showToast(next == ResolutionPreset.veryHigh ? '1080p' : '720p');
   }
 
+  /// 폰 셔터: 촬영 → 결과 누적 → "추가 촬영?" 팝업. 화면은 유지하고, '돌아가기'를
+  /// 누르면 그동안 누적한 사진 목록을 반환하며 닫는다.
   Future<void> _capture() async {
+    final r = await _processPhoto();
+    if (r == null || !mounted) return;
+    _captured.add(r);
+    await _askContinue();
+  }
+
+  /// 촬영 후 추가 촬영 여부를 묻는다. '돌아가기'면 누적 목록을 반환하며 화면을 닫는다.
+  Future<void> _askContinue() async {
+    final again = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        content: Text('사진 ${_captured.length}장 추가됨.\n더 찍으시겠어요?'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('돌아가기'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: const Text('추가 촬영'),
+          ),
+        ],
+      ),
+    );
+    if (again == true) return; // 계속 촬영(화면 유지)
+    _finishWithCaptured();
+  }
+
+  // 누적한 촬영 목록을 반환하며 화면을 닫는다(비어 있어도 목록으로 반환).
+  void _finishWithCaptured() {
+    if (mounted) Navigator.of(context).pop<List<ShotResult>>(_captured);
+  }
+
+  /// 카메라를 닫고 조과 카운터로 이동(독립 모드 전용). 네이티브가 카메라 액티비티를
+  /// 종료하고 카운터를 띄운다. pop이 아니라 액티비티 종료라, 찍어둔 사진은 여기서
+  /// 대기열에 저장해 유실을 막는다.
+  Future<void> _goToCounter() async {
+    for (final r in _captured) {
+      await _queuePhotoLocal(r);
+    }
+    _captured.clear();
+    try {
+      await _remoteChannel.invokeMethod('openCounter');
+    } catch (_) {}
+  }
+
+  /// 워치 원격 셔터: 촬영 결과를 대기열에 저장하고 카메라는 그대로 유지(연속 촬영).
+  Future<void> _remoteCapture() async {
+    final r = await _processPhoto();
+    if (r == null) return;
+    await _queuePhotoLocal(r);
+    if (mounted) _showToast('촬영됨');
+  }
+
+  /// 원격 촬영 결과를 흔들기 촬영과 동일한 대기열(prefs)에 저장한다(메인 앱이 메모에 등록).
+  Future<void> _queuePhotoLocal(
+      ({String path, bool isVideo, ({double lat, double lng})? gps}) r) async {
+    try {
+      final docs = await getApplicationDocumentsDirectory();
+      final pendingDir = Directory('${docs.path}/pending_shake');
+      await pendingDir.create(recursive: true);
+      final ts = DateTime.now();
+      final ext = r.isVideo ? 'mp4' : 'jpg';
+      final dest = '${pendingDir.path}/${ts.millisecondsSinceEpoch}.$ext';
+      await File(r.path).copy(dest);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.reload();
+      final list = prefs.getStringList(_kPendingShakePhotosKey) ?? [];
+      list.add(jsonEncode({
+        'path': dest,
+        'isVideo': r.isVideo,
+        'ts': ts.toIso8601String(),
+        'lat': r.gps?.lat,
+        'lng': r.gps?.lng,
+      }));
+      await prefs.setStringList(_kPendingShakePhotosKey, list);
+    } catch (_) {}
+  }
+
+  /// 사진을 찍고 워터마크·회전까지 처리한 결과를 반환(pop 안 함, 화면 유지). 실패 시 null.
+  Future<({String path, bool isVideo, ({double lat, double lng})? gps})?>
+      _processPhoto() async {
     final ctrl = _ctrl;
-    if (ctrl == null || !ctrl.value.isInitialized || _capturing) return;
+    if (ctrl == null || !ctrl.value.isInitialized || _capturing) return null;
     setState(() => _capturing = true);
     try {
       // 촬영 방향은 셔터 누른 시점 값으로 고정(캡처 중 방향이 바뀌어도 일관되게).
@@ -369,7 +508,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       var rotateDeg = rotateDegreesForTurns(_uiQuarterTurns);
       if (_useFrontCamera) rotateDeg = (360 - rotateDeg) % 360;
       final file = await ctrl.takePicture();
-      if (!mounted) return;
+      if (!mounted) return null;
 
       final wmSettings = ref.read(settingsProvider).valueOrNull?.watermark;
       // 화면 진입 시 미리 받아둔 주소를 재사용(대개 이미 완료됨). 없으면 즉석 조회.
@@ -401,11 +540,8 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               : file.path);
 
       final gps = await _captureGps();
-      if (!mounted) return;
-      Navigator.of(context)
-          .pop<({String path, bool isVideo, ({double lat, double lng})? gps})>(
-        (path: photoPath, isVideo: false, gps: gps),
-      );
+      if (!mounted) return null;
+      return (path: photoPath, isVideo: false, gps: gps);
     } finally {
       if (mounted) setState(() => _capturing = false);
     }
@@ -449,10 +585,9 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       final savedPath = await _saveVideo(file.path);
       final gps = await _captureGps();
       if (!mounted) return;
-      Navigator.of(context)
-          .pop<({String path, bool isVideo, ({double lat, double lng})? gps})>(
-        (path: savedPath ?? file.path, isVideo: true, gps: gps),
-      );
+      // 동영상은 한 번 녹화로 끝 — 누적 목록에 더해 바로 반환(팝업 없음).
+      _captured.add((path: savedPath ?? file.path, isVideo: true, gps: gps));
+      _finishWithCaptured();
     } catch (e) {
       if (mounted) {
         setState(() => _isRecording = false);
@@ -632,8 +767,34 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                 children: [
                   IconButton(
                     icon: _rot(const Icon(Icons.arrow_back, color: Colors.white)),
-                    onPressed: _isRecording ? null : () => Navigator.of(context).pop(),
+                    onPressed: _isRecording ? null : _finishWithCaptured,
                   ),
+                  // 독립 실행일 때만: 카메라 닫고 조과 카운터로 이동.
+                  if (widget.standalone && !_isRecording)
+                    GestureDetector(
+                      onTap: _goToCounter,
+                      child: Container(
+                        padding:
+                            const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: _rot(const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.exposure_plus_1,
+                                color: Colors.white, size: 16),
+                            SizedBox(width: 4),
+                            Text('카운터',
+                                style: TextStyle(
+                                    color: Colors.white,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold)),
+                          ],
+                        )),
+                      ),
+                    ),
                   const Spacer(),
                   // 동영상 모드: 해상도 버튼
                   if (_isVideoMode)
@@ -816,6 +977,24 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               ),
             ),
           ),
+          // 워치 셀프타이머 카운트다운(피사체가 보도록 크게 중앙 표시)
+          if (_countdown != null)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: Container(
+                  color: Colors.black.withValues(alpha: 0.25),
+                  alignment: Alignment.center,
+                  child: Text(
+                    '$_countdown',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 120,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ),
           // 토스트
           if (_toastMsg != null)
             Positioned(

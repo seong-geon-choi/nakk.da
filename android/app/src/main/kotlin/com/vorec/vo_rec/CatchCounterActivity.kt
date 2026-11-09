@@ -237,6 +237,8 @@ class CatchCounterActivity : Activity() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
             typeface = Typeface.DEFAULT_BOLD
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        // 카메라로 이동(후면·독립 모드). 카운터는 뒤에 유지되어 카메라 닫으면 복귀한다.
+        header.addView(smallButton("📷") { openCamera() })
         header.addView(smallButton("✕") { finish() })
         root.addView(header)
 
@@ -281,6 +283,13 @@ class CatchCounterActivity : Activity() {
     }
 
     /** 어종 1개 단위: 이름 + 숫자판 + [−][+]. 이 영역을 좌/우로 쓸면 이 카운터의 스킨만 바뀜. */
+    /** 카메라(후면·일반)로 이동. 카운터는 스택에 남아, 카메라를 닫으면 자연히 복귀한다. */
+    private fun openCamera() {
+        try {
+            startActivity(android.content.Intent(this, CameraLockActivity::class.java))
+        } catch (_: Exception) {}
+    }
+
     private fun buildUnit(index: Int): View {
         val gd = unitSwipeDetector(index)
         val unit = LinearLayout(this).apply {

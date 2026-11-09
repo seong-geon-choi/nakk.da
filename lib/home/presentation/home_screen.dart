@@ -956,7 +956,7 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     }
 
     final settings = ref.read(settingsProvider).valueOrNull;
-    final interval = settings?.trackingIntervalMeters ?? 100;
+    final interval = settings?.trackingIntervalMeters ?? 50;
     await TrackingService().startTracking(interval);
     await ref.read(settingsProvider.notifier).updateLocationTrackingEnabled(true);
     if (mounted) setState(() => _isActive = true);
@@ -1532,8 +1532,10 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
         final ts = DateTime.tryParse(j['ts'] as String? ?? '') ?? DateTime.now();
         final lat = (j['lat'] as num?)?.toDouble();
         final lng = (j['lng'] as num?)?.toDouble();
-        final stored =
-            await saveToGallery(srcPath, relativePath: relPath) ?? srcPath;
+        final stored = await saveToGallery(srcPath,
+                relativePath: relPath,
+                timestampMillis: ts.millisecondsSinceEpoch) ??
+            srcPath;
         final day = DateTime(ts.year, ts.month, ts.day);
         await repo.appendEntry(
           day,
@@ -2058,7 +2060,8 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
   /// 갤러리에서 멀티 선택한 사진/동영상을 현재 보는 메모에 일괄 추가한다.
   /// 사진 시각·GPS는 각 파일 EXIF에서 읽고(없으면 현재시각), 편집 시트는 거치지 않는다.
   Future<void> _addMultiToCurrent(
-      List<({String path, bool isVideo})> items) async {
+      List<({String path, bool isVideo, ({double lat, double lng})? gps})>
+          items) async {
     final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
     if (savePath.isEmpty) return;
     final screenName = _filePath.replaceAll('\\', '/').split('/').last;
@@ -2068,13 +2071,16 @@ class _DayMemoScreenState extends ConsumerState<DayMemoScreen>
     final entries = <MemoEntry>[];
     for (final it in items) {
       DateTime ts = DateTime.now();
-      double? lat;
-      double? lng;
+      // 제공된 gps(카메라 프리뷰) 우선, 없으면 파일 EXIF에서 읽는다.
+      double? lat = it.gps?.lat;
+      double? lng = it.gps?.lng;
       if (!it.isVideo) {
         ts = await readExifTimestamp(it.path) ?? ts;
-        final gps = await readExifGps(it.path);
-        lat = gps?.lat;
-        lng = gps?.lng;
+        if (lat == null || lng == null) {
+          final gps = await readExifGps(it.path);
+          lat = gps?.lat;
+          lng = gps?.lng;
+        }
       }
       entries.add(MemoEntry(
         timestamp: ts,
