@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
@@ -127,6 +128,8 @@ class WearMainActivity : ComponentActivity() {
     // 앰비언트(화면 꺼짐) 상태 — true면 저전력 AoD만 표시하고 앱은 활성으로 유지(워치페이스로
     // 안 돌아감). 화면이 다시 켜지면 그대로 카운터 화면이 유지된다.
     private var ambient by mutableStateOf(false)
+    // 유사 AOD 표시 상태 — true면 어두운 오버레이(AmbientOverlay)로 카운트만 희미하게.
+    private var dimmed by mutableStateOf(false)
 
     private val ambientObserver by lazy {
         AmbientLifecycleObserver(
@@ -157,6 +160,11 @@ class WearMainActivity : ComponentActivity() {
     private var pendingCounts: List<Int>? = null
     private val reconcileRunnable = Runnable { tryReconcile() }
 
+    // 유사 AOD: 화면은 계속 켜두되(FLAG_KEEP_SCREEN_ON) 일정 시간 조작이 없으면 창
+    // 밝기만 낮추고, 터치·카운트 동작 시 원래 밝기로 복귀(시스템 Ambient 미지원 대체).
+    private val dimHandler = Handler(Looper.getMainLooper())
+    private val dimRunnable = Runnable { dimmed = true; applyDim(true) }
+
     private val dataListener = DataClient.OnDataChangedListener { buffer ->
         for (event in buffer) {
             if (event.type != DataEvent.TYPE_CHANGED) continue
@@ -172,6 +180,10 @@ class WearMainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // 화면이 꺼져도 앱을 활성으로 유지(앰비언트) — 다시 켜면 카운터 화면이 그대로 유지된다.
         lifecycle.addObserver(ambientObserver)
+        // 갤럭시 워치는 화면이 꺼지면 타임아웃 후 서드파티 앱을 워치페이스로 강제 복귀시킨다
+        // (액티비티 Ambient 오프로드 미지원). 그래서 화면을 계속 켜두고, 유휴 시 창 밝기만
+        // 낮추는 '유사 AOD'(applyDim/wakeBright)로 카운터를 유지한다(배터리 완화).
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         prefs = getSharedPreferences("wear_counter", Context.MODE_PRIVATE)
         colorIdx = intArrayOf(prefs.getInt("color_0", 0), prefs.getInt("color_1", 4))
         setContent {
@@ -228,7 +240,7 @@ class WearMainActivity : ComponentActivity() {
                     }
                     PageDots(3, pagerState.currentPage, Modifier.align(Alignment.BottomCenter))
                     // 앰비언트(화면 꺼짐): 밝은 UI 대신 저전력 AoD를 덮어 표시(앱은 유지).
-                    if (ambient) {
+                    if (ambient || dimmed) {
                         AmbientOverlay(names = names, counts = counts)
                     }
                     LaunchedEffect(pagerState) {
@@ -251,6 +263,7 @@ class WearMainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        wakeBright() // 화면 밝게 + 유휴(어둡게) 타이머 시작
         dataClient.addListener(dataListener)
         // 연결 노드 캐시 갱신(전송 지연 축소) + 진입 시 폰에 최신 어종·조과 상태 요청.
         // (폰에서 어종을 바꾼 뒤 앱을 안 열어 캐시된 state가 낡았을 수 있으므로 한 번 당겨온다.)
@@ -277,6 +290,32 @@ class WearMainActivity : ComponentActivity() {
         super.onPause()
         dataClient.removeListener(dataListener)
         reconcileHandler.removeCallbacks(reconcileRunnable)
+        dimHandler.removeCallbacks(dimRunnable)
+    }
+
+    // 모든 터치·키 입력에서 호출됨 — 밝기 복원 + 유휴 타이머 재시작.
+    override fun onUserInteraction() {
+        super.onUserInteraction()
+        wakeBright()
+    }
+
+    /** 창 밝기를 낮추거나(어둡게) 기본값으로 되돌린다(창 단위라 시스템 설정은 불변). */
+    private fun applyDim(dim: Boolean) {
+        val target =
+            if (dim) DIM_LEVEL else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        val lp = window.attributes
+        if (lp.screenBrightness != target) {
+            lp.screenBrightness = target
+            window.attributes = lp
+        }
+    }
+
+    /** 밝기를 원래대로 복원하고 유휴 타이머를 재시작(DIM_IDLE_MS 후 다시 어둡게). */
+    private fun wakeBright() {
+        dimmed = false
+        applyDim(false)
+        dimHandler.removeCallbacks(dimRunnable)
+        dimHandler.postDelayed(dimRunnable, DIM_IDLE_MS)
     }
 
     private fun applyData(map: DataMap) {
@@ -347,6 +386,7 @@ class WearMainActivity : ComponentActivity() {
         }
         counts = pending
         pendingCounts = null
+        wakeBright() // 폰/리모컨發 원격 카운트 변경 시 화면을 밝혀 알림
     }
 
     /** 낙관적 즉시 반영: 워치 숫자를 먼저 올리고(폰 왕복 대기 없음) 명령을 전송한다.
@@ -453,6 +493,10 @@ class WearMainActivity : ComponentActivity() {
         private const val MAX_RECONCILE_MS = 2500L
         // 직전 조작과 간격이 이보다 짧으면 연타로 보고 플립을 생략(스냅).
         private const val FLIP_GAP_MS = 320L
+        // 유사 AOD: 이 시간 동안 조작이 없으면 화면을 어둡게(창 밝기 낮춤).
+        private const val DIM_IDLE_MS = 15000L
+        // 어두울 때의 창 밝기(0~1). 희미하게 유지해 글랜서블하면서 배터리 절감(조정 가능).
+        private const val DIM_LEVEL = 0.1f
     }
 }
 
@@ -827,7 +871,11 @@ private fun PillButton(label: String, color: Color, onClick: () -> Unit) {
 @Composable
 private fun AmbientOverlay(names: List<String>, counts: List<Int>) {
     Box(
-        Modifier.fillMaxSize().background(Color.Black),
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black)
+            // 어둠 상태의 첫 입력은 '깨우기'로만 소비(밑의 카운터 오증가 방지).
+            .pointerInput(Unit) { detectTapGestures {} },
         contentAlignment = Alignment.Center,
     ) {
         val dim = Color.White.copy(alpha = 0.6f)
