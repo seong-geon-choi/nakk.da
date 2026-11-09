@@ -128,7 +128,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
             .clamp(0, 2);
     final showTrackingButton = prefs.getBool(_showTrackingButtonKey) ?? true;
     final locationTrackingEnabled = prefs.getBool(_locationTrackingEnabledKey) ?? false;
-    final trackingIntervalMeters = prefs.getInt(_trackingIntervalMetersKey) ?? 100;
+    final trackingIntervalMeters = prefs.getInt(_trackingIntervalMetersKey) ?? 50;
     final quickLaunchModeStr = prefs.getString(_quickLaunchModeKey) ?? 'shake';
     final quickLaunchMode = QuickLaunchMode.values.firstWhere(
       (e) => e.name == quickLaunchModeStr,

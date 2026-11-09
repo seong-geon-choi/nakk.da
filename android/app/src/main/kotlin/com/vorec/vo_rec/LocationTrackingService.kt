@@ -44,6 +44,22 @@ class LocationTrackingService : Service() {
         private const val STILL_RADIUS_M = 40f              // 정지로 간주할 반경
         private const val STILL_INTERVAL_MS = 3 * 60 * 1000L // 정지 중 위치 확인 주기(저전력)
 
+        // ── 속도 적응형 저장(4단계) ────────────────────────────────
+        // 정지·조업은 사용자 설정 거리, 그 이상은 속도 구간별 고정 거리로 저장해 고속
+        // 구간의 과도한 점 생성을 줄인다.
+        //   조업/정지  ( < 2.0 m/s, ~7km/h)  → 사용자 설정(minDistanceMeters)
+        //   저속이동   (2.0~5.6,  ~7–20km/h) → 100m
+        //   순항       (5.6~11,  ~20–40km/h) → 300m
+        //   고속       ( ≥ 11,    ~40km/h+)  → 1000m
+        private const val SPEED_FISHING_MAX_MPS = 2.0f   // 조업↔저속이동 경계
+        private const val SPEED_SLOW_MAX_MPS = 5.6f      // 저속이동↔순항 경계
+        private const val SPEED_FAST_MIN_MPS = 11.0f     // 순항↔고속 경계
+        private const val THRESHOLD_SLOW_M = 100f        // 저속이동
+        private const val THRESHOLD_CRUISE_M = 300f      // 순항
+        private const val THRESHOLD_FAST_M = 1000f       // 고속
+        private const val SPEED_HYSTERESIS_MPS = 1.0f    // 구간 경계 떨림 방지 여유
+        private const val SPEED_EMA_ALPHA = 0.4f         // 속도 이동평균 가중치
+
         fun getQuickLaunchMode(context: Context): String =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getString(PREFS_QUICK_LAUNCH_MODE_KEY, "shake") ?: "shake"
@@ -72,8 +88,16 @@ class LocationTrackingService : Service() {
     }
 
     private var fusedClient: FusedLocationProviderClient? = null
-    private var minDistanceMeters: Float = 100f
+    private var minDistanceMeters: Float = 50f   // 정지·조업 기준 거리(사용자 설정, 기본 50m)
     private var lastSavedLocation: Location? = null
+
+    // 속도 적응형 저장: 직전 픽스(속도 폴백용) + 평활 속도 + 현재 속도 구간(히스테리시스).
+    private var lastFixLocation: Location? = null
+    private var smoothedSpeedMps = 0f
+    private var speedTier = 0  // 0=조업/정지, 1=저속이동, 2=순항, 3=고속
+    // 구간 상향 경계(tier i→i+1 기준 속도). 하향은 각 경계 − 히스테리시스.
+    private val speedBounds = floatArrayOf(
+        SPEED_FISHING_MAX_MPS, SPEED_SLOW_MAX_MPS, SPEED_FAST_MIN_MPS)
 
     // 정지 감지 상태
     private var isStill = false
@@ -96,12 +120,45 @@ class LocationTrackingService : Service() {
             val location = result.lastLocation ?: return
             // 지나치게 부정확한 네트워크 픽스 제외 (지하에서도 합리적인 점만 기록)
             if (location.hasAccuracy() && location.accuracy > MAX_ACCURACY_METERS) return
+            // 속도에 따라 저장 거리 임계값을 조정(고속일수록 크게 → 점 수 감소).
+            val threshold = adaptiveThresholdMeters(location)
+            lastFixLocation = location
             val last = lastSavedLocation
-            if (last == null || last.distanceTo(location) >= minDistanceMeters) {
+            if (last == null || last.distanceTo(location) >= threshold) {
                 lastSavedLocation = location
                 savePoint(location.latitude, location.longitude, location.time)
             }
             evaluateStillness(location)
+        }
+    }
+
+    /**
+     * 현재 속도로 저장 거리 임계값을 결정한다. 조업/정지(저속)는 사용자 설정 거리,
+     * 순항은 300m, 고속은 1000m. 속도는 픽스의 speed(없으면 직전 픽스와의 거리/시간)를
+     * 이동평균으로 평활하고, 구간 경계엔 히스테리시스를 둬 떨림을 막는다.
+     * (lastFixLocation 갱신 '전에' 호출할 것 — 폴백이 직전 픽스를 쓴다.)
+     */
+    private fun adaptiveThresholdMeters(location: Location): Float {
+        val raw = if (location.hasSpeed()) {
+            location.speed
+        } else {
+            val lf = lastFixLocation
+            if (lf != null) {
+                val dt = (location.time - lf.time) / 1000f
+                if (dt > 0.5f) lf.distanceTo(location) / dt else smoothedSpeedMps
+            } else 0f
+        }.coerceAtLeast(0f)
+        smoothedSpeedMps = SPEED_EMA_ALPHA * raw + (1f - SPEED_EMA_ALPHA) * smoothedSpeedMps
+        val v = smoothedSpeedMps
+        val h = SPEED_HYSTERESIS_MPS
+        // 상향: 현재 구간 상단 경계+h 초과 시 올림 / 하향: 하단 경계−h 미만 시 내림(여러 단계 허용).
+        while (speedTier < speedBounds.size && v >= speedBounds[speedTier] + h) speedTier++
+        while (speedTier > 0 && v < speedBounds[speedTier - 1] - h) speedTier--
+        return when (speedTier) {
+            0 -> minDistanceMeters   // 조업/정지: 사용자 설정
+            1 -> THRESHOLD_SLOW_M    // 저속이동: 100m
+            2 -> THRESHOLD_CRUISE_M  // 순항: 300m
+            else -> THRESHOLD_FAST_M // 고속: 1000m
         }
     }
 
@@ -127,6 +184,9 @@ class LocationTrackingService : Service() {
         if (isStill) return
         isStill = true
         stillStartWallMs = System.currentTimeMillis()
+        // 정지 진입 — 속도 구간을 조업(저속)으로 리셋(복귀 시 저속부터 다시 평가).
+        smoothedSpeedMps = 0f
+        speedTier = 0
         // 저전력·장주기 요청으로 교체
         val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, STILL_INTERVAL_MS)
             .setMinUpdateDistanceMeters(STILL_RADIUS_M)

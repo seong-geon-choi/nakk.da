@@ -648,7 +648,7 @@ class AppSettings {
     this.watermarkTemplateIndex = 0,
     this.showTrackingButton = true,
     this.locationTrackingEnabled = false,
-    this.trackingIntervalMeters = 100,
+    this.trackingIntervalMeters = 50,
     this.quickLaunchMode = QuickLaunchMode.shake,
     this.shakeAction = ShakeAction.counter,
     this.shakeThresholdG = 3.5,
