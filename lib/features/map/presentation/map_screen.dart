@@ -581,6 +581,25 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return r * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a));
   }
 
+  // 분 범위 [startMin, endMin]에 드는 이동경로 점들의 최초~최종 누적 이동거리(km).
+  // 시각 순으로 정렬해 연속한 점 사이 거리를 합산한다.
+  double _filteredTrackDistanceKm(double startMin, double endMin) {
+    final pts = _trackPoints.where((p) {
+      final m = p.timestamp.hour * 60 + p.timestamp.minute;
+      return m >= startMin && m <= endMin;
+    }).toList()
+      ..sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    var total = 0.0;
+    for (var i = 1; i < pts.length; i++) {
+      total += _haversineKm(pts[i - 1].lat, pts[i - 1].lng, pts[i].lat, pts[i].lng);
+    }
+    return total;
+  }
+
+  // 거리 표기: 1km 미만은 m, 이상은 km(소수 2자리).
+  String _fmtDistanceKm(double km) =>
+      km < 1.0 ? '${(km * 1000).round()} m' : '${km.toStringAsFixed(2)} km';
+
   // 메모 지점을 '화면 픽셀' 기준으로 클러스터링. 가까운(≈34px 이내) 지점들을 한
   // 묶음으로 통합해, 축소 시 겹쳐 뭉치며 흰 테두리만 남는 문제를 막는다. 각 묶음은
   // 원본 _GpsPoint 목록(단독이면 1개). 연결선·이동경로는 실제 좌표로 그리므로 이
@@ -1726,6 +1745,26 @@ class _MapScreenState extends ConsumerState<MapScreen>
                               ),
                             ),
                           ],
+                        ),
+                        // 현재 필터 구간의 최초~최종 누적 이동거리.
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.straighten,
+                                  size: 13, color: cs.primary),
+                              const SizedBox(width: 4),
+                              Text(
+                                '이동거리 '
+                                '${_fmtDistanceKm(_filteredTrackDistanceKm(start, end))}',
+                                style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w600,
+                                    color: cs.primary),
+                              ),
+                            ],
+                          ),
                         ),
                         // 아래 슬라이더(양쪽 핸들)로 드래그 조정 — 입력값과 동기화됨
                         SizedBox(
