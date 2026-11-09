@@ -1621,10 +1621,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           width: 60,
                           height: 150,
                           alignment: Alignment.center,
-                          child: Transform.translate(
-                            // 포인트 위(-28) + 겹침 회피용 세로 어긋트림(yOff).
-                            offset: Offset(0, -28 + e.yOff),
-                            child: Container(
+                          // Align으로 Container가 내용 크기로 줄게 한 뒤 세로 이동
+                          // (Transform은 제약을 완화하지 않아 바로 쓰면 박스 전체로 커진다).
+                          child: Align(
+                            alignment: Alignment.center,
+                            child: Transform.translate(
+                              // 포인트 위(-28) + 겹침 회피용 세로 어긋트림(yOff).
+                              offset: Offset(0, -28 + e.yOff),
+                              child: Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 3, vertical: 1),
                               decoration: BoxDecoration(
@@ -1637,6 +1641,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                 style: const TextStyle(
                                     color: Colors.white, fontSize: 10),
                               ),
+                            ),
                             ),
                           ),
                         ),
