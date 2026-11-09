@@ -50,6 +50,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _showDistances = false;
   bool _showTrack = false;
   bool _showMemoPoints = true; // 메모 지점(파란 마커) 표시 여부. 끄면 숨김
+  bool _toolbarCollapsed = false; // 우측 버튼바 접기(지도 넓게 보기)
   bool _showCatchChart = false; // 조과 보기: 조위+시간당 조과 차트 패널
   bool _showCatchPoints = false; // 조과 마커 표시(그래프 창과 독립)
   Set<String> _hiddenCatchSpecies = {}; // 차트 범례에서 숨긴 어종(지도 마커도 숨김)
@@ -827,6 +828,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
                   BoxShadow(blurRadius: 4, color: Color(0x55000000)),
                 ],
               ),
+              // 메모 지점은 사진 모양으로 구분(조과·현장정보는 색 원 그대로).
+              child: pt.isMemo
+                  ? Icon(Icons.photo, size: size * 0.6, color: Colors.white)
+                  : null,
             ),
           ),
         ),
@@ -1825,6 +1830,16 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                 .withValues(alpha: 0.7)),
                       ),
                     ),
+                    // 버튼바 접기/펼치기 — 접으면 지도를 넓게 볼 수 있다.
+                    _toolBtn(
+                      _toolbarCollapsed
+                          ? Icons.unfold_more
+                          : Icons.unfold_less,
+                      Theme.of(context).colorScheme.primary,
+                      () => setState(
+                          () => _toolbarCollapsed = !_toolbarCollapsed),
+                    ),
+                    if (!_toolbarCollapsed) ...[
                     const Divider(
                         height: 1, thickness: 1, indent: 6, endIndent: 6),
                     // 출퇴근 알림: 설정 마스터 토글이 켜진 경우에만 노출, 추적 켜고/끄기
@@ -1966,6 +1981,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             }
                           : () => _showToastMessage('표시할 위치 정보가 없습니다'),
                     ),
+                    ], // if (!_toolbarCollapsed)
                   ],
                 ),
               ),
