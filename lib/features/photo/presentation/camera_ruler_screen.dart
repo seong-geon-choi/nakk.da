@@ -652,6 +652,26 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     // 뒤집어 미러를 해제해, 저장 이미지(반전 OFF=미러 안 함)와 화면을 일치시킨다.
     final previewFlipX = _useFrontCamera && !_mirrorSelfie;
 
+    // 커버 핏 프레임: 프리뷰·워터마크를 왜곡 없이 화면에 채운다(종횡비 유지).
+    // 프리뷰와 워터마크를 같은 ClipRect+FittedBox(cover) 프레임에 넣어 좌표계를 공유
+    // → 라이브 미리보기가 저장 사진과 일치한다.
+    final ps = ctrl.value.previewSize!;
+    final isPortrait =
+        MediaQuery.of(context).orientation == Orientation.portrait;
+    final frameSize = isPortrait
+        ? Size(math.min(ps.width, ps.height), math.max(ps.width, ps.height))
+        : Size(math.max(ps.width, ps.height), math.min(ps.width, ps.height));
+    Widget coverBox(Widget child) => ClipRect(
+          child: FittedBox(
+            fit: BoxFit.cover,
+            child: SizedBox(
+              width: frameSize.width,
+              height: frameSize.height,
+              child: child,
+            ),
+          ),
+        );
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -711,21 +731,27 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                 _switchMode(false);
               }
             },
-            child: previewFlipX
-                ? Transform.flip(flipX: true, child: CameraPreview(ctrl))
-                : CameraPreview(ctrl),
-          ),
-          // 워터마크 프리뷰 (사진 모드에서만) — 드래그로 위치 이동 가능
-          if (!_isVideoMode && wmEnabled && wm != null)
-            _WatermarkOverlay(
-              wm: wm,
-              previewSize: ctrl.value.previewSize!,
-              quarterTurns: _uiQuarterTurns,
-              address: _wmAddress,
-              onMove: (x, y) => ref
-                  .read(settingsProvider.notifier)
-                  .updateWatermark(wm.copyWith(containerPosX: x, containerPosY: y)),
+            child: coverBox(
+              previewFlipX
+                  ? Transform.flip(flipX: true, child: CameraPreview(ctrl))
+                  : CameraPreview(ctrl),
             ),
+          ),
+          // 워터마크 프리뷰 (사진 모드에서만) — 프리뷰와 같은 커버 프레임 좌표계.
+          if (!_isVideoMode && wmEnabled && wm != null)
+            coverBox(Stack(children: [
+              _WatermarkOverlay(
+                wm: wm,
+                previewSize: ctrl.value.previewSize!,
+                frameSize: frameSize,
+                quarterTurns: _uiQuarterTurns,
+                address: _wmAddress,
+                onMove: (x, y) => ref
+                    .read(settingsProvider.notifier)
+                    .updateWatermark(
+                        wm.copyWith(containerPosX: x, containerPosY: y)),
+              ),
+            ])),
           // 녹화 중 인디케이터
           if (_isRecording)
             Positioned(
@@ -1039,12 +1065,14 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
 class _WatermarkOverlay extends StatefulWidget {
   final WatermarkSettings wm;
   final Size previewSize;
+  final Size frameSize; // 커버 프레임(표시 프레임) px — 화면 대신 이 기준으로 배치·크기
   final void Function(double, double)? onMove;
   final int quarterTurns; // 기기 방향에 맞춘 박스 회전
   final String? address; // 조회 완료된 주소(null이면 자리표시자 표시)
   const _WatermarkOverlay(
       {required this.wm,
       required this.previewSize,
+      required this.frameSize,
       this.onMove,
       this.quarterTurns = 0,
       this.address});
@@ -1099,9 +1127,11 @@ class _WatermarkOverlayState extends State<_WatermarkOverlay> {
         .toList();
     if (visible.isEmpty) return const SizedBox.shrink();
 
-    final mq = MediaQuery.of(context);
-    final screenW = mq.size.width;
-    final screenH = mq.size.height;
+    // 화면이 아니라 커버 프레임(표시 프레임, 사진 종횡비) 기준으로 배치·크기 계산.
+    // 이 오버레이는 프리뷰와 동일한 ClipRect+FittedBox(cover) 안에 있어, 프레임 좌표가
+    // 곧 저장 사진 좌표계와 일치한다(미리보기=저장 결과).
+    final screenW = widget.frameSize.width;
+    final screenH = widget.frameSize.height;
 
     final sensor = widget.previewSize;
     final photoAspect = math.max(sensor.width, sensor.height) /
