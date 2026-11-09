@@ -21,8 +21,9 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
-import android.widget.Button
 import android.widget.FrameLayout
+import android.widget.ImageButton
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
@@ -256,9 +257,11 @@ class CatchCounterActivity : Activity() {
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
             typeface = Typeface.DEFAULT_BOLD
         }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        // 카메라로 이동(후면·독립 모드). 카운터는 뒤에 유지되어 카메라 닫으면 복귀한다.
-        header.addView(smallButton("📷") { openCamera() })
-        header.addView(smallButton("✕") { finish() })
+        // 카메라로 이동(후면·독립 모드) + 닫기 — 통일된 원형 아이콘 버튼.
+        header.addView(headerIconButton(R.drawable.ic_camera) { openCamera() },
+            LinearLayout.LayoutParams(dp(42), dp(42)).apply { marginEnd = dp(8) })
+        header.addView(headerIconButton(R.drawable.ic_close) { finish() },
+            LinearLayout.LayoutParams(dp(42), dp(42)))
         root.addView(header)
 
         if (species.isEmpty()) {
@@ -555,10 +558,24 @@ class CatchCounterActivity : Activity() {
             }
         }
 
-    private fun smallButton(label: String, onClick: () -> Unit): Button =
-        Button(this).apply {
-            text = label
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+    /** 헤더용 원형 아이콘 버튼(닫기·카메라 통일 스타일): 어두운 원 + 흰 벡터 아이콘. */
+    private fun headerIconButton(iconRes: Int, onClick: () -> Unit): ImageButton =
+        ImageButton(this).apply {
+            setImageResource(iconRes)
+            imageTintList = ColorStateList.valueOf(Color.WHITE)
+            scaleType = ImageView.ScaleType.CENTER_INSIDE
+            setPadding(dp(10), dp(10), dp(10), dp(10))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.parseColor("#1E2A38"))
+                setStroke(dp(1), Color.parseColor("#33FFFFFF"))
+            }
+            foreground = RippleDrawable(
+                ColorStateList.valueOf(Color.parseColor("#55FFFFFF")),
+                null,
+                GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL; setColor(Color.WHITE)
+                })
             setOnClickListener { onClick() }
         }
 }
