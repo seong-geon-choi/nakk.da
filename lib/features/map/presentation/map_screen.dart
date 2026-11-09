@@ -761,8 +761,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
     const seqMin = 46.0; // 진행 방향 최소 간격(픽셀)
     const minX = 46.0; // 라벨 가로 겹침 기준
-    const minY = 20.0; // 라벨 세로 겹침 기준
-    const offsets = [0.0, -22.0, 22.0, -44.0, 44.0]; // 세로 어긋트림 후보
+    const minY = 16.0; // 라벨 세로 겹침 기준
+    const offsets = [0.0, -16.0, 16.0, -32.0, 32.0]; // 세로 어긋트림 후보
     final out = <({TrackPoint tp, double yOff})>[];
     final kept = <math.Point<double>>[]; // 배치된 라벨 슬롯(x, y+offset)
     math.Point<double>? last; // 직전에 남긴 라벨의 기준 위치(진행 간격용)
@@ -1619,15 +1619,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       Marker(
                           point: LatLng(e.tp.lat, e.tp.lng),
                           width: 60,
-                          height: 150,
+                          height: 100,
                           alignment: Alignment.center,
                           // Align으로 Container가 내용 크기로 줄게 한 뒤 세로 이동
                           // (Transform은 제약을 완화하지 않아 바로 쓰면 박스 전체로 커진다).
                           child: Align(
                             alignment: Alignment.center,
                             child: Transform.translate(
-                              // 포인트 위(-28) + 겹침 회피용 세로 어긋트림(yOff).
-                              offset: Offset(0, -28 + e.yOff),
+                              // 포인트 위(-16) + 겹침 회피용 세로 어긋트림(yOff).
+                              offset: Offset(0, -16 + e.yOff),
                               child: Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 3, vertical: 1),
