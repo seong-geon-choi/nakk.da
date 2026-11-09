@@ -25,9 +25,11 @@ import android.widget.Button
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import com.google.android.gms.wearable.Wearable
 import org.json.JSONArray
 import kotlin.math.abs
 
@@ -77,6 +79,23 @@ class CatchCounterActivity : Activity() {
         }
 
         setContentView(buildRoot())
+        maybeNotifyWatchAvailable()
+    }
+
+    /** 워치가 연결돼 있으면 "워치에서도 카운터 사용 가능" 안내 토스트를 띄운다.
+     *  연결된 Wear 노드가 있을 때만 노출 → 워치 사용자에게만 보인다. */
+    private fun maybeNotifyWatchAvailable() {
+        try {
+            Wearable.getNodeClient(this).connectedNodes.addOnSuccessListener { nodes ->
+                if (nodes.isNotEmpty()) {
+                    Toast.makeText(
+                        this,
+                        "⌚ 워치에서도 조과 카운터를 사용할 수 있어요",
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     // 화면 버튼으로 보냈으나 아직 파일에 반영되는 중인 ± 연산 수.
