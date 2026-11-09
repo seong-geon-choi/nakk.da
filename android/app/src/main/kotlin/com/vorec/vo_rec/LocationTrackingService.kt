@@ -60,6 +60,13 @@ class LocationTrackingService : Service() {
         private const val SPEED_HYSTERESIS_MPS = 1.0f    // 구간 경계 떨림 방지 여유
         private const val SPEED_EMA_ALPHA = 0.4f         // 속도 이동평균 가중치
 
+        // ── 변침(코너) 보존 ───────────────────────────────────────
+        // 큰 거리 임계값(이동 구간)에서 급선회가 직선으로 뭉개지지 않도록, 진행
+        // 방향이 크게 꺾이면 거리 미달이라도 해당 지점을 저장해 항로 모양을 지킨다.
+        private const val CORNER_ANGLE_DEG = 30f    // 직전 저장 방위 대비 이만큼 꺾이면 코너
+        private const val CORNER_MIN_MOVE_M = 20f   // 직전 저장점 대비 최소 이동(지터 방지)
+        private const val BEARING_MIN_MOVE_M = 8f   // 이 거리 이상 이동해야 방위 신뢰
+
         fun getQuickLaunchMode(context: Context): String =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getString(PREFS_QUICK_LAUNCH_MODE_KEY, "shake") ?: "shake"
@@ -99,6 +106,10 @@ class LocationTrackingService : Service() {
     private val speedBounds = floatArrayOf(
         SPEED_FISHING_MAX_MPS, SPEED_SLOW_MAX_MPS, SPEED_FAST_MIN_MPS)
 
+    // 변침 보존: 신뢰 가능한 최근 진행 방위 + 마지막 저장 시점의 진행 방위.
+    private var lastTravelBearing: Float? = null
+    private var lastSavedBearing: Float? = null
+
     // 정지 감지 상태
     private var isStill = false
     private var anchorLocation: Location? = null  // 정지 판정 기준점
@@ -121,11 +132,24 @@ class LocationTrackingService : Service() {
             // 지나치게 부정확한 네트워크 픽스 제외 (지하에서도 합리적인 점만 기록)
             if (location.hasAccuracy() && location.accuracy > MAX_ACCURACY_METERS) return
             // 속도에 따라 저장 거리 임계값을 조정(고속일수록 크게 → 점 수 감소).
+            // (lastFixLocation 갱신 '전에' 호출 — adaptiveThresholdMeters·방위 계산이 직전 픽스를 씀.)
             val threshold = adaptiveThresholdMeters(location)
+            val lf = lastFixLocation
+            if (lf != null && lf.distanceTo(location) >= BEARING_MIN_MOVE_M) {
+                lastTravelBearing = lf.bearingTo(location)
+            }
             lastFixLocation = location
             val last = lastSavedLocation
-            if (last == null || last.distanceTo(location) >= threshold) {
+            val movedFromSaved = last?.distanceTo(location) ?: Float.MAX_VALUE
+            val distanceHit = movedFromSaved >= threshold
+            // 변침 보존: 이동 구간(tier≥1)에서 방위가 크게 꺾이면 거리 미달이라도 코너로 저장.
+            val cornerHit = !distanceHit && speedTier >= 1 &&
+                movedFromSaved >= CORNER_MIN_MOVE_M &&
+                lastTravelBearing != null && lastSavedBearing != null &&
+                bearingDiff(lastTravelBearing!!, lastSavedBearing!!) >= CORNER_ANGLE_DEG
+            if (distanceHit || cornerHit) {
                 lastSavedLocation = location
+                lastSavedBearing = lastTravelBearing ?: lastSavedBearing
                 savePoint(location.latitude, location.longitude, location.time)
             }
             evaluateStillness(location)
@@ -162,6 +186,12 @@ class LocationTrackingService : Service() {
         }
     }
 
+    /** 두 방위(도)의 최소 사잇각(0~180). bearingTo는 −180~180을 반환하므로 360 보정. */
+    private fun bearingDiff(a: Float, b: Float): Float {
+        val d = Math.abs(a - b) % 360f
+        return if (d > 180f) 360f - d else d
+    }
+
     // 연속 픽스로 정지/이동을 판정하고 모드를 전환한다.
     private fun evaluateStillness(location: Location) {
         if (isStill) {
@@ -187,6 +217,9 @@ class LocationTrackingService : Service() {
         // 정지 진입 — 속도 구간을 조업(저속)으로 리셋(복귀 시 저속부터 다시 평가).
         smoothedSpeedMps = 0f
         speedTier = 0
+        // 방위 상태도 리셋 — 정지 후 복귀 첫 구간을 새 방위로 다시 추적.
+        lastTravelBearing = null
+        lastSavedBearing = null
         // 저전력·장주기 요청으로 교체
         val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, STILL_INTERVAL_MS)
             .setMinUpdateDistanceMeters(STILL_RADIUS_M)
