@@ -744,10 +744,13 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return false;
   }
 
-  // 시간 표시용 경로 라벨을 솎는다: 메모·조과와 겹치면 생략(_trackLabelRedundant),
-  // 남은 라벨도 경로를 따라 화면 픽셀 최소 간격 이상 떨어진 것만 남겨 서로 겹치지
-  // 않게 한다(줌과 무관하게 균일). 카메라 미준비 시 빈 목록(다음 리빌드에 표시).
-  List<TrackPoint> _spacedTrackLabels(
+  // 시간 표시용 경로 라벨을 솎고, 왕복 등으로 겹치는 라벨은 세로로 어긋트려 둘 다
+  // 보이게 한다. 각 결과는 (경로점 tp, 세로 어긋트림 yOff). 카메라 미준비 시 빈 목록.
+  //  (1) 진행 방향 솎기: 직전에 남긴 라벨과 너무 가까우면(seqMin) 생략 → 직선 구간은
+  //      일정 간격으로만 표시.
+  //  (2) 겹침 회피: 남은 라벨이 '이미 배치한 모든 라벨'과 박스로 겹치면(minX·minY),
+  //      세로로 ±step씩 어긋트려 빈 자리를 찾는다(끝내 없으면 생략).
+  List<({TrackPoint tp, double yOff})> _spacedTrackLabels(
       List<TrackPoint> track, List<_GpsPoint> points, double threshold) {
     if (track.isEmpty) return const [];
     final MapCamera cam;
@@ -756,18 +759,36 @@ class _MapScreenState extends ConsumerState<MapScreen>
     } catch (_) {
       return const [];
     }
-    const minPx = 46.0; // 라벨 최소 간격(픽셀)
-    final out = <TrackPoint>[];
-    math.Point<double>? last;
+    const seqMin = 46.0; // 진행 방향 최소 간격(픽셀)
+    const minX = 46.0; // 라벨 가로 겹침 기준
+    const minY = 20.0; // 라벨 세로 겹침 기준
+    const offsets = [0.0, -22.0, 22.0, -44.0, 44.0]; // 세로 어긋트림 후보
+    final out = <({TrackPoint tp, double yOff})>[];
+    final kept = <math.Point<double>>[]; // 배치된 라벨 슬롯(x, y+offset)
+    math.Point<double>? last; // 직전에 남긴 라벨의 기준 위치(진행 간격용)
     for (final tp in track) {
       if (_trackLabelRedundant(tp, points, threshold)) continue;
       final sp = cam.latLngToScreenPoint(LatLng(tp.lat, tp.lng));
+      // (1) 진행 방향 솎기
       if (last != null) {
         final dx = sp.x - last.x, dy = sp.y - last.y;
-        if (dx * dx + dy * dy < minPx * minPx) continue;
+        if (dx * dx + dy * dy < seqMin * seqMin) continue;
       }
-      out.add(tp);
+      // (2) 겹침 회피: 세로 어긋트림으로 빈 자리 찾기
+      double? chosen;
+      for (final off in offsets) {
+        final cy = sp.y + off;
+        final clash = kept.any(
+            (k) => (sp.x - k.x).abs() < minX && (cy - k.y).abs() < minY);
+        if (!clash) {
+          chosen = off;
+          break;
+        }
+      }
+      if (chosen == null) continue; // 어긋트려도 자리 없음 → 생략
+      kept.add(math.Point(sp.x, sp.y + chosen));
       last = sp;
+      out.add((tp: tp, yOff: chosen));
     }
     return out;
   }
@@ -1592,16 +1613,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
               if (_showTimes && fTrack.isNotEmpty)
                 MarkerLayer(
                   markers: [
-                    // 메모·조과 겹침 생략 + 경로 라벨끼리 픽셀 간격으로 솎기.
-                    for (final tp in _spacedTrackLabels(
+                    // 메모·조과 겹침 생략 + 라벨 솎기 + 왕복 겹침 세로 어긋트림.
+                    for (final e in _spacedTrackLabels(
                         fTrack, fPoints, markerThreshold))
                       Marker(
-                          point: LatLng(tp.lat, tp.lng),
-                          width: 56,
-                          height: 36,
-                          alignment: Alignment.bottomCenter,
-                          child: Align(
-                            alignment: Alignment.topCenter,
+                          point: LatLng(e.tp.lat, e.tp.lng),
+                          width: 60,
+                          height: 150,
+                          alignment: Alignment.center,
+                          child: Transform.translate(
+                            // 포인트 위(-28) + 겹침 회피용 세로 어긋트림(yOff).
+                            offset: Offset(0, -28 + e.yOff),
                             child: Container(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 3, vertical: 1),
@@ -1610,8 +1632,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                 borderRadius: BorderRadius.circular(3),
                               ),
                               child: Text(
-                                '${tp.timestamp.hour.toString().padLeft(2, '0')}'
-                                ':${tp.timestamp.minute.toString().padLeft(2, '0')}',
+                                '${e.tp.timestamp.hour.toString().padLeft(2, '0')}'
+                                ':${e.tp.timestamp.minute.toString().padLeft(2, '0')}',
                                 style: const TextStyle(
                                     color: Colors.white, fontSize: 10),
                               ),
