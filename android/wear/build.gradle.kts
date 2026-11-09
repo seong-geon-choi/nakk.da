@@ -68,6 +68,8 @@ dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.12.01"))
     implementation("androidx.wear.compose:compose-material:1.4.1")
     implementation("androidx.wear.compose:compose-foundation:1.4.1")
+    // 화면 꺼짐(앰비언트)에도 앱이 활성 상태로 유지되도록(워치페이스로 안 돌아감).
+    implementation("androidx.wear:wear:1.3.0")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.animation:animation")
     implementation("androidx.activity:activity-compose:1.9.3")

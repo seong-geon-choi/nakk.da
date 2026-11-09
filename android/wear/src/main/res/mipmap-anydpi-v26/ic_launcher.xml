@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 어댑티브 아이콘 — 앱 선택 화면·워치페이스 컴플리케이션 등 시스템이 원형 마스크를
+     적용하는 곳에서 둥글게 보이도록 한다.
+     전체 디자인을 '배경' 레이어에 두는 이유: 전경은 안전영역(안쪽 72dp)만 보장돼 풀블리드
+     디자인의 바깥이 과하게 잘린다. 배경은 마스크된 원 전체를 채우므로 모서리만 잘린다
+     (런처 둥근 아이콘과 동일한 정도). -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@mipmap/ic_launcher_foreground"/>
+    <foreground android:drawable="@android:color/transparent"/>
+</adaptive-icon>
