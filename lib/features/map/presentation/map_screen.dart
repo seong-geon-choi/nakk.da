@@ -744,6 +744,34 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return false;
   }
 
+  // 시간 표시용 경로 라벨을 솎는다: 메모·조과와 겹치면 생략(_trackLabelRedundant),
+  // 남은 라벨도 경로를 따라 화면 픽셀 최소 간격 이상 떨어진 것만 남겨 서로 겹치지
+  // 않게 한다(줌과 무관하게 균일). 카메라 미준비 시 빈 목록(다음 리빌드에 표시).
+  List<TrackPoint> _spacedTrackLabels(
+      List<TrackPoint> track, List<_GpsPoint> points, double threshold) {
+    if (track.isEmpty) return const [];
+    final MapCamera cam;
+    try {
+      cam = _mapController.camera;
+    } catch (_) {
+      return const [];
+    }
+    const minPx = 46.0; // 라벨 최소 간격(픽셀)
+    final out = <TrackPoint>[];
+    math.Point<double>? last;
+    for (final tp in track) {
+      if (_trackLabelRedundant(tp, points, threshold)) continue;
+      final sp = cam.latLngToScreenPoint(LatLng(tp.lat, tp.lng));
+      if (last != null) {
+        final dx = sp.x - last.x, dy = sp.y - last.y;
+        if (dx * dx + dy * dy < minPx * minPx) continue;
+      }
+      out.add(tp);
+      last = sp;
+    }
+    return out;
+  }
+
   // 연결선 진행 방향 화살표: 선을 '화면 픽셀' 기준 균일 간격(≈64px)으로 걸으며
   // 다음 지점 방향으로 회전한 화살촉을 놓는다. 픽셀 기준이라 확대/축소해도 화면상
   // 밀도가 일정해 지저분해지지 않는다. 너무 축소돼 경로가 짧게 뭉치면 생략.
@@ -1564,10 +1592,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
               if (_showTimes && fTrack.isNotEmpty)
                 MarkerLayer(
                   markers: [
-                    for (final tp in fTrack)
-                      // 메모·조과와 같은 위치·시각에 겹치는 경로 라벨은 생략(중복 방지).
-                      if (!_trackLabelRedundant(tp, fPoints, markerThreshold))
-                        Marker(
+                    // 메모·조과 겹침 생략 + 경로 라벨끼리 픽셀 간격으로 솎기.
+                    for (final tp in _spacedTrackLabels(
+                        fTrack, fPoints, markerThreshold))
+                      Marker(
                           point: LatLng(tp.lat, tp.lng),
                           width: 56,
                           height: 36,
