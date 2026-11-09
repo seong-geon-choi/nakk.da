@@ -66,6 +66,9 @@ class VoiceRecordForegroundService : Service() {
     private var currentMode         = "shake"
     private var currentAction       = "voice"   // "voice" | "camera"
     private var lastCameraLaunchTime = 0L
+    // 알림 post 시각 고정 + 시각 숨김 — 스티키 재시작/갱신 때마다 현재 시각이 찍혀
+    // 알림 목록 상단으로 튀거나(재정렬) 한밤중 시각만 덜렁 보이는 것을 방지한다.
+    private val notifWhen = System.currentTimeMillis()
 
     // ── 흔들기 감지 ────────────────────────────────────────────
     private var sensorManager: SensorManager? = null
@@ -349,6 +352,8 @@ class VoiceRecordForegroundService : Service() {
             .setContentText(body)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setOngoing(true).setSilent(true)
+            .setWhen(notifWhen).setShowWhen(false) // 재시작 시각 노출·상단 재정렬 방지
+            .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_MIN)
             .addAction(android.R.drawable.ic_delete, "중지", stopPi)
         // 카운터 대기 알림을 탭하면 바로 카운터 화면을 연다(즉시 활성화·이동).
