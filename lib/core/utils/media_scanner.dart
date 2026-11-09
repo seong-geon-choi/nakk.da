@@ -7,12 +7,16 @@ const _channel = MethodChannel('com.sgchoisg.nakkda/media');
 
 /// [sourcePath] 파일을 MediaStore에 등록해 갤러리에서 보이도록 저장.
 /// [relativePath]: "DCIM/nakkda" 형태의 MediaStore 상대 경로.
+/// [timestampMillis]: 파일명에 쓸 촬영 시각(없으면 현재 시각). 대기열 일괄 처리 시
+///   현재 시각을 쓰면 여러 장이 같은 이름이 돼 중복(괄호)명이 생기므로 촬영 시각을 넘긴다.
 /// 반환값: 저장된 절대 경로, 실패 시 null.
-Future<String?> saveToGallery(String sourcePath, {String relativePath = 'DCIM/nakkda'}) async {
+Future<String?> saveToGallery(String sourcePath,
+    {String relativePath = 'DCIM/nakkda', int? timestampMillis}) async {
   try {
     return await _channel.invokeMethod<String>('saveToGallery', {
       'path': sourcePath,
       'relativePath': relativePath,
+      'timestampMillis': timestampMillis, // null이면 네이티브가 현재 시각 사용
     });
   } catch (_) {
     return null;

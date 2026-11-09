@@ -364,9 +364,14 @@ class MdSerializer {
         }
 
         final body = bodyLines.join('\n');
-        final photoMatch = RegExp(r'!\[\]\((.+?)\)').firstMatch(body);
+        // 사진/동영상은 각각 독립된 줄(![](경로))이므로 줄 단위 탐욕 매칭으로 전체 경로를
+        // 잡는다. 비탐욕(.+?)이면 경로에 ')'가 있을 때(예: 갤러리 중복명 "NAME (1).jpg")
+        // 거기서 끊겨 파일을 못 찾아 사진이 안 보인다.
+        final photoMatch =
+            RegExp(r'^!\[\]\((.+)\)$', multiLine: true).firstMatch(body);
         final photoPath = photoMatch?.group(1);
-        final videoMatch = RegExp(r'\[video\]\((.+?)\)').firstMatch(body);
+        final videoMatch =
+            RegExp(r'^\[video\]\((.+)\)$', multiLine: true).firstMatch(body);
         final videoPath = videoMatch?.group(1);
         var remaining = body;
         if (photoPath != null) remaining = remaining.replaceFirst('![]($photoPath)', '');

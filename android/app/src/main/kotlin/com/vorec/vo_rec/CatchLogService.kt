@@ -15,6 +15,7 @@ import android.widget.RemoteViews
 import androidx.core.app.NotificationCompat
 import androidx.documentfile.provider.DocumentFile
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.tasks.Tasks
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import org.json.JSONArray
@@ -24,6 +25,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * 추임새/삭제 멘트 1개. 텍스트(TTS) 또는 오디오 파일 중 하나.
@@ -499,6 +501,21 @@ class CatchLogService : Service() {
             } catch (_: Exception) {}
         }
 
+        /**
+         * 마지막으로 알려진 위치(lastLocation, 캐시값 — 대개 즉시)를 **동기로** 얻는다.
+         * 권한 없음/실패/타임아웃이면 null. 백그라운드 스레드에서 호출할 것(최대 2초 블록).
+         * 조과 기록의 모든 경로(세션/무세션)가 동일하게 좌표를 담도록 공용으로 쓴다.
+         */
+        @SuppressLint("MissingPermission")
+        fun lastLocationBlocking(context: Context): Pair<Double, Double>? = try {
+            val loc = Tasks.await(
+                LocationServices.getFusedLocationProviderClient(context).lastLocation,
+                2, TimeUnit.SECONDS)
+            loc?.let { it.latitude to it.longitude }
+        } catch (_: Exception) {
+            null
+        }
+
         /** 조과 항목 추가(파일 없으면 헤더부터 생성). */
         fun appendCatchToFile(context: Context, species: String, lat: Double?, lng: Double?) {
             val existing = readMd(context) ?: fileHeader()
@@ -855,23 +872,17 @@ class CatchLogService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     /** +1: 현재 위치를 얻어 파일에 조과 항목을 추가하고 알림 갱신(모두 백그라운드). */
-    @SuppressLint("MissingPermission")
     private fun addCatch(index: Int) {
         val species = speciesList().getOrNull(index) ?: return
-        fun commit(lat: Double?, lng: Double?) = io.execute {
-            appendCatchToFile(this, species, lat, lng)
+        io.execute {
+            // 세션/무세션 경로가 동일하게 좌표를 담도록 공용 함수로 조회(io 스레드에서 동기).
+            val loc = lastLocationBlocking(this)
+            appendCatchToFile(this, species, loc?.first, loc?.second)
             // 조과 수를 먼저 반영(워치·알림 즉시 갱신) → 미디어는 그 다음에 재생.
             sendCountsChanged()
             updateNotification()
             // 음성 문구는 안내 모드에 따름(진동은 countFeedback 내부에서 별도 처리).
             countFeedback { catchAnnounce(species) }
-        }
-        try {
-            LocationServices.getFusedLocationProviderClient(this).lastLocation
-                .addOnSuccessListener { loc -> commit(loc?.latitude, loc?.longitude) }
-                .addOnFailureListener { commit(null, null) }
-        } catch (_: Exception) {
-            commit(null, null)
         }
     }
 

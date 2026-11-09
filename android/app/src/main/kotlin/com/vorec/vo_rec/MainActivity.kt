@@ -138,7 +138,13 @@ class MainActivity : FlutterActivity() {
                             isPendingKey = MediaStore.Images.Media.IS_PENDING
                             dataKey = MediaStore.Images.Media.DATA
                         }
-                        val dateStr = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+                        // 파일명은 촬영 시각 기준(없으면 현재). 대기열 일괄 처리 시 현재 시각을
+                        // 쓰면 여러 장이 같은 이름→중복("NAME (1)") 괄호명이 되어 메모 파싱이
+                        // 깨지므로, 호출측이 넘긴 촬영 시각을 쓴다. 밀리초까지 포함해 고유화.
+                        val tsMillis = call.argument<Number>("timestampMillis")?.toLong()
+                        val whenDate = if (tsMillis != null) Date(tsMillis) else Date()
+                        val dateStr =
+                            SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(whenDate)
                         val displayName = "NAKKDA_$dateStr$ext"
 
                         val values = ContentValues().apply {
