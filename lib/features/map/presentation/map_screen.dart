@@ -729,6 +729,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return false;
   }
 
+  // 경로 점의 시간 라벨이 메모/조과 지점과 같은 위치(threshold)·같은 시각(±1분)에
+  // 겹치면 true. 중복 라벨을 피하려 이 경우 경로(주황) 라벨을 생략한다.
+  bool _trackLabelRedundant(
+      TrackPoint p, List<_GpsPoint> points, double threshold) {
+    final pMin = p.timestamp.hour * 60 + p.timestamp.minute;
+    for (final m in points) {
+      if ((m.lat - p.lat).abs() < threshold &&
+          (m.lng - p.lng).abs() < threshold &&
+          (m.timestamp.hour * 60 + m.timestamp.minute - pMin).abs() <= 1) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   // 연결선 진행 방향 화살표: 선을 '화면 픽셀' 기준 균일 간격(≈64px)으로 걸으며
   // 다음 지점 방향으로 회전한 화살촉을 놓는다. 픽셀 기준이라 확대/축소해도 화면상
   // 밀도가 일정해 지저분해지지 않는다. 너무 축소돼 경로가 짧게 뭉치면 생략.
@@ -829,7 +844,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 ],
               ),
               // 메모 지점은 사진 모양으로 구분(조과·현장정보는 색 원 그대로).
-              child: pt.isMemo
+              child: pt.isMemo && !pt.isCatch
                   ? Icon(Icons.photo, size: size * 0.6, color: Colors.white)
                   : null,
             ),
@@ -1223,7 +1238,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
           (!_showCatchPoints || _hiddenCatchSpecies.contains(p.species))) {
         return false;
       }
-      if (!_showMemoPoints && p.isMemo) return false;
+      // 조과 카운트 지점은 isMemo=true이기도 하므로, 메모 토글은 순수 메모에만 적용
+      // (조과 지점은 위의 _showCatchPoints 조건만 따른다).
+      if (!_showMemoPoints && p.isMemo && !p.isCatch) return false;
       return _passMinute(p.timestamp);
     }).toList();
     final fTrack = _timeFilter == null
@@ -1546,32 +1563,34 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 ),
               if (_showTimes && fTrack.isNotEmpty)
                 MarkerLayer(
-                  markers: fTrack.map((tp) {
-                    final h = tp.timestamp.hour.toString().padLeft(2, '0');
-                    final m = tp.timestamp.minute.toString().padLeft(2, '0');
-                    return Marker(
-                      point: LatLng(tp.lat, tp.lng),
-                      width: 56,
-                      height: 36,
-                      alignment: Alignment.bottomCenter,
-                      child: Align(
-                        alignment: Alignment.topCenter,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 3, vertical: 1),
-                          decoration: BoxDecoration(
-                            color: const Color(0xCCFF6D00),
-                            borderRadius: BorderRadius.circular(3),
-                          ),
-                          child: Text(
-                            '$h:$m',
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 10),
+                  markers: [
+                    for (final tp in fTrack)
+                      // 메모·조과와 같은 위치·시각에 겹치는 경로 라벨은 생략(중복 방지).
+                      if (!_trackLabelRedundant(tp, fPoints, markerThreshold))
+                        Marker(
+                          point: LatLng(tp.lat, tp.lng),
+                          width: 56,
+                          height: 36,
+                          alignment: Alignment.bottomCenter,
+                          child: Align(
+                            alignment: Alignment.topCenter,
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 3, vertical: 1),
+                              decoration: BoxDecoration(
+                                color: const Color(0xCCFF6D00),
+                                borderRadius: BorderRadius.circular(3),
+                              ),
+                              child: Text(
+                                '${tp.timestamp.hour.toString().padLeft(2, '0')}'
+                                ':${tp.timestamp.minute.toString().padLeft(2, '0')}',
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 10),
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                    );
-                  }).toList(),
+                  ],
                 ),
               // 현재위치 역펄스: 바깥 원이 중심으로 붕괴 후 점이 번쩍(3초).
               if (_currentLocMarker != null)
@@ -1861,13 +1880,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     _divider(),
                     // ── 마커 표시(종류별 켜기) ─────────────────
                     _toolBtn(
-                      _showMemoPoints ? Icons.photo : Icons.hide_image,
-                      _points.any((p) => p.isMemo)
+                      _showMemoPoints
+                          ? Icons.sticky_note_2
+                          : Icons.sticky_note_2_outlined,
+                      _points.any((p) => p.isMemo && !p.isCatch)
                           ? (_showMemoPoints
                               ? Theme.of(context).colorScheme.primary
                               : null)
                           : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
-                      _points.any((p) => p.isMemo)
+                      _points.any((p) => p.isMemo && !p.isCatch)
                           ? () {
                               setState(() => _showMemoPoints = !_showMemoPoints);
                               _showToastMessage(
