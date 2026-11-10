@@ -51,6 +51,9 @@ tools/*.json
 **/*service*account*.json
 nakkda-*.json
 
+# ── VWorld 지도 API 키 (앱에 포함되지만 저장소엔 커밋 금지) ──────
+lib/core/vworld_key.dart
+
 # ── 로컬 작업 메모/지침 (저장소에서 제외) ──────────────────────
 CLAUDE.md
 context.md

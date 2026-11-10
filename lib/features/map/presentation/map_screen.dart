@@ -15,6 +15,7 @@ import '../../location/presentation/location_provider.dart';
 import '../../tide/domain/models/tide_station.dart';
 import '../../../core/widgets/catch_tide_chart.dart';
 import '../../settings/presentation/settings_provider.dart';
+import '../../../core/vworld_key.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/utils/file_name_parser.dart';
 import '../../../core/services/saf_service.dart';
@@ -47,10 +48,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
   _GpsPoint? _selected;
   bool _showLines = false;
   bool _showTimes = false;
-  bool _showDistances = false;
+  // 거리 측정(자) 도구: 측정 모드 + 찍은 점들 + 구간거리 라벨 + 빈지점 '거리재기' 팝업 위치.
+  bool _measureMode = false;
+  final List<LatLng> _measurePoints = [];
+  bool _measureShowSeg = false;
+  LatLng? _measureTapPopup;
   bool _showTrack = false;
   bool _showMemoPoints = true; // 메모 지점(파란 마커) 표시 여부. 끄면 숨김
   bool _toolbarCollapsed = false; // 우측 버튼바 접기(지도 넓게 보기)
+  // 지도 베이스맵: 0=표준(OSM) 1=위성(Esri) 2=해양·수심(Esri Ocean). prefs 저장.
+  int _baseMap = 0;
+  static const _baseMapNames = ['표준', '위성', '해양'];
   bool _showCatchChart = false; // 조과 보기: 조위+시간당 조과 차트 패널
   bool _showCatchPoints = false; // 조과 마커 표시(그래프 창과 독립)
   Set<String> _hiddenCatchSpecies = {}; // 차트 범례에서 숨긴 어종(지도 마커도 숨김)
@@ -133,6 +141,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   static const _kToolTop = 'map_tool_top';
   static const _kChartLeft = 'map_chart_left';
   static const _kChartBottom = 'map_chart_bottom';
+  static const _kBaseMap = 'map_base_mode';
 
   Future<void> _loadPanelPositions() async {
     final p = await SharedPreferences.getInstance();
@@ -142,6 +151,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
       _toolTop = p.getDouble(_kToolTop);
       _chartLeft = p.getDouble(_kChartLeft);
       _chartBottom = p.getDouble(_kChartBottom);
+      _baseMap = (p.getInt(_kBaseMap) ?? 0).clamp(0, 2);
     });
   }
 
@@ -152,6 +162,11 @@ class _MapScreenState extends ConsumerState<MapScreen>
     await put(_kToolTop, _toolTop);
     await put(_kChartLeft, _chartLeft);
     await put(_kChartBottom, _chartBottom);
+  }
+
+  Future<void> _saveBaseMap() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setInt(_kBaseMap, _baseMap);
   }
 
   /// 지도 스택(_mapStackKey)의 실제 크기. 첫 프레임 등 미측정 시 화면 크기로 근사.
@@ -226,7 +241,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
       if (resetToggles) {
         _showLines = false;
         _showTimes = false;
-        _showDistances = false;
+        _measureMode = false;
+        _measurePoints.clear();
+        _measureShowSeg = false;
+        _measureTapPopup = null;
         _showTrack = false;
         _showMemoPoints = true;
         _showCatchChart = false;
@@ -600,6 +618,65 @@ class _MapScreenState extends ConsumerState<MapScreen>
   // 거리 표기: 1km 미만은 m, 이상은 km(소수 2자리).
   String _fmtDistanceKm(double km) =>
       km < 1.0 ? '${(km * 1000).round()} m' : '${km.toStringAsFixed(2)} km';
+
+  // 빈 지점 탭 시 그 위치 근처에 뜨는 '거리재기' 진입 팝업.
+  Widget _measureTapPopupWidget(BuildContext context) {
+    final pt = _measureTapPopup!;
+    Offset? sp;
+    try {
+      final p = _mapController.camera.latLngToScreenPoint(pt);
+      sp = Offset(p.x.toDouble(), p.y.toDouble());
+    } catch (_) {}
+    if (sp == null) return const SizedBox.shrink();
+    final sz = _stackSize(context);
+    final left = (sp.dx - 50).clamp(4.0, sz.width - 120);
+    final top = (sp.dy - 52).clamp(4.0, sz.height - 44);
+    return Positioned(
+      left: left,
+      top: top,
+      child: GestureDetector(
+        onTap: () => setState(() {
+          _measureMode = true;
+          _measurePoints
+            ..clear()
+            ..add(pt);
+          _measureShowSeg = false;
+          _measureTapPopup = null;
+          _selected = null;
+        }),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: const Color(0xEE263238),
+            borderRadius: BorderRadius.circular(8),
+            boxShadow: const [
+              BoxShadow(blurRadius: 6, color: Color(0x66000000))
+            ],
+          ),
+          child: const Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(Icons.straighten, color: Colors.white, size: 16),
+            SizedBox(width: 6),
+            Text('거리재기',
+                style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600)),
+          ]),
+        ),
+      ),
+    );
+  }
+
+  // 거리 측정 점들의 연속 구간(직선·Haversine) 합산 총 거리(km).
+  double _measureTotalKm() {
+    double total = 0;
+    for (var i = 0; i < _measurePoints.length - 1; i++) {
+      total += _haversineKm(
+          _measurePoints[i].latitude, _measurePoints[i].longitude,
+          _measurePoints[i + 1].latitude, _measurePoints[i + 1].longitude);
+    }
+    return total;
+  }
 
   // 메모 지점을 '화면 픽셀' 기준으로 클러스터링. 가까운(≈34px 이내) 지점들을 한
   // 묶음으로 통합해, 축소 시 겹쳐 뭉치며 흰 테두리만 남는 문제를 막는다. 각 묶음은
@@ -1359,9 +1436,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 }
               },
               onTap: (_, latlng) {
-                // 경로 표시 중이면 탭 위치에서 가장 가까운 이동지점의 시각을 토스트로.
+                // 측정 모드: 탭할 때마다 측정 점 추가(마커 위든 빈 곳이든 GPS 좌표로).
+                if (_measureMode) {
+                  setState(() => _measurePoints.add(latlng));
+                  return;
+                }
+                // 빈 지점 탭: 가까운 이동지점 시각 토스트가 없으면 '거리재기' 팝업을 띄운다.
                 if (!_showNearestTrackTime(latlng, fTrack)) {
-                  setState(() => _selected = null);
+                  setState(() {
+                    _selected = null;
+                    _measureTapPopup = latlng;
+                  });
                 }
               },
               onLongPress: (_, latlng) => _onMapLongPress(latlng),
@@ -1372,11 +1457,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
               },
             ),
             children: [
-              TileLayer(
-                urlTemplate:
-                    'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-                userAgentPackageName: 'com.sgchoisg.nakkda',
-              ),
+              ..._baseMapLayers(),
               // 출퇴근 알림 지점: 반경 원 + 핀(탭하면 삭제, 길게 눌러 드래그 이동)
               if (commuteEnabled && commuteActive && commutePins.isNotEmpty) ...[
                 CircleLayer(
@@ -1532,47 +1613,71 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         ),
                   ],
                 ),
-              if (_showLines && _showDistances && placedSorted.length >= 2)
-                MarkerLayer(
-                  markers: () {
-                    final markers = <Marker>[];
-                    for (int i = 0; i < placedSorted.length - 1; i++) {
-                      final a = placedSorted[i];
-                      final b = placedSorted[i + 1];
-                      final km = _haversineKm(
-                          a.point.lat, a.point.lng, b.point.lat, b.point.lng);
-                      final t = _thresholdDeg();
-                      if (km < 0.001 ||
-                          ((a.point.lat - b.point.lat).abs() < t &&
-                           (a.point.lng - b.point.lng).abs() < t)) {
-                        continue;
-                      }
-                      final label = km < 1
-                          ? '${(km * 1000).round()}m'
-                          : '${km.toStringAsFixed(2)}km';
-                      markers.add(Marker(
-                        point: LatLng((a.lat + b.lat) / 2, (a.lng + b.lng) / 2),
-                        width: 64,
-                        height: 20,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 4, vertical: 2),
-                          decoration: BoxDecoration(
-                            color: const Color(0xCC1565C0),
-                            borderRadius: BorderRadius.circular(4),
-                          ),
-                          child: Text(
-                            label,
-                            style: const TextStyle(
-                                color: Colors.white, fontSize: 10),
-                            textAlign: TextAlign.center,
-                          ),
+              // ── 거리 측정 자: 연결선 + 번호 점 + (옵션) 구간거리 라벨 ──
+              if (_measurePoints.length >= 2)
+                PolylineLayer(polylines: [
+                  Polyline(
+                    points: _measurePoints,
+                    color: const Color(0xFFFFC107),
+                    strokeWidth: 3,
+                  ),
+                ]),
+              if (_measureShowSeg && _measurePoints.length >= 2)
+                MarkerLayer(markers: [
+                  for (int i = 0; i < _measurePoints.length - 1; i++)
+                    Marker(
+                      point: LatLng(
+                          (_measurePoints[i].latitude +
+                                  _measurePoints[i + 1].latitude) /
+                              2,
+                          (_measurePoints[i].longitude +
+                                  _measurePoints[i + 1].longitude) /
+                              2),
+                      width: 72,
+                      height: 20,
+                      child: Container(
+                        alignment: Alignment.center,
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 4, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: const Color(0xCC6A1B9A),
+                          borderRadius: BorderRadius.circular(4),
                         ),
-                      ));
-                    }
-                    return markers;
-                  }(),
-                ),
+                        child: Text(
+                          _fmtDistanceKm(_haversineKm(
+                              _measurePoints[i].latitude,
+                              _measurePoints[i].longitude,
+                              _measurePoints[i + 1].latitude,
+                              _measurePoints[i + 1].longitude)),
+                          style: const TextStyle(
+                              color: Colors.white, fontSize: 10),
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                ]),
+              if (_measurePoints.isNotEmpty)
+                MarkerLayer(markers: [
+                  for (int i = 0; i < _measurePoints.length; i++)
+                    Marker(
+                      point: _measurePoints[i],
+                      width: 22,
+                      height: 22,
+                      child: Container(
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: const Color(0xFFFFC107),
+                          border: Border.all(color: Colors.white, width: 2),
+                        ),
+                        child: Text('${i + 1}',
+                            style: const TextStyle(
+                                color: Colors.black,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold)),
+                      ),
+                    ),
+                ]),
               // 지점 마커: 같은 종류는 묶음(개수), 겹친 다른 종류는 부채꼴로 펼침.
               MarkerLayer(markers: clusterMarkers),
               // 시간 표시: 겹치지 않은 단독 지점에만(묶음·펼침 지점은 시트/선택으로 확인)
@@ -1667,6 +1772,14 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     ),
                   ],
                 ),
+              // 지도 출처 표기(베이스맵별). 우하단 작은 배지.
+              RichAttributionWidget(
+                alignment: AttributionAlignment.bottomLeft,
+                showFlutterMapAttribution: false,
+                attributions: [
+                  TextSourceAttribution(_baseMapAttribution()),
+                ],
+              ),
             ],
           ),
           // 조과 보기 패널: 조위 사인곡선 + 시간당 조과 막대. 제목줄을 잡고 드래그 이동.
@@ -1684,6 +1797,89 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 savePath: _savePath,
                 galleryItems: _dayMediaItems(),
                 onClose: () => setState(() => _selected = null),
+              ),
+            ),
+          // 빈 지점 탭 → '거리재기' 진입 팝업(탭 위치 근처).
+          if (_measureTapPopup != null && !_measureMode)
+            _measureTapPopupWidget(context),
+          // 거리 측정 패널(측정 모드) — 총 거리 + [구간거리 표시][되돌리기][종료].
+          if (_measureMode)
+            Positioned(
+              left: 12,
+              right: 12,
+              bottom: 12,
+              child: Material(
+                elevation: 4,
+                borderRadius: BorderRadius.circular(12),
+                color: Theme.of(context)
+                    .colorScheme
+                    .surfaceContainerHighest
+                    .withValues(alpha: 0.96),
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(14, 8, 8, 6),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(children: [
+                        Icon(Icons.straighten,
+                            size: 18,
+                            color: Theme.of(context).colorScheme.primary),
+                        const SizedBox(width: 6),
+                        const Text('거리 측정',
+                            style: TextStyle(fontWeight: FontWeight.bold)),
+                        const Spacer(),
+                        Text(
+                          _measurePoints.length < 2
+                              ? '점 ${_measurePoints.length}개'
+                              : '총 ${_fmtDistanceKm(_measureTotalKm())}',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 15,
+                              color: Theme.of(context).colorScheme.primary),
+                        ),
+                      ]),
+                      Row(children: [
+                        TextButton.icon(
+                          onPressed: _measurePoints.length >= 2
+                              ? () => setState(
+                                  () => _measureShowSeg = !_measureShowSeg)
+                              : null,
+                          icon: Icon(
+                              _measureShowSeg
+                                  ? Icons.visibility_off
+                                  : Icons.straighten,
+                              size: 16),
+                          label: Text(_measureShowSeg ? '구간 숨김' : '거리 표시'),
+                        ),
+                        TextButton.icon(
+                          onPressed: _measurePoints.isNotEmpty
+                              ? () =>
+                                  setState(() => _measurePoints.removeLast())
+                              : null,
+                          icon: const Icon(Icons.undo, size: 16),
+                          label: const Text('되돌리기'),
+                        ),
+                        const Spacer(),
+                        TextButton(
+                          onPressed: () => setState(() {
+                            _measureMode = false;
+                            _measurePoints.clear();
+                            _measureShowSeg = false;
+                          }),
+                          child: const Text('종료'),
+                        ),
+                      ]),
+                      if (_measurePoints.length < 2)
+                        Text('지도를 탭해 점을 찍으세요(2개 이상)',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant)),
+                    ],
+                  ),
+                ),
               ),
             ),
           // GPS 없음 안내 (메모 GPS + 트래킹 포인트 모두 없을 때만 표시)
@@ -1932,6 +2128,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
                       _divider(),
                     ],
                     _toolBtn(Icons.my_location, null, _moveToCurrentLocation),
+                    // 지도 전환(표준→위성→해양 순환). 비표준일 때 강조색.
+                    _toolBtn(
+                      _baseMap == 1
+                          ? Icons.satellite_alt
+                          : _baseMap == 2
+                              ? Icons.waves
+                              : Icons.map,
+                      _baseMap == 0
+                          ? null
+                          : Theme.of(context).colorScheme.primary,
+                      () {
+                        setState(() => _baseMap = (_baseMap + 1) % 3);
+                        _saveBaseMap();
+                        _showToastMessage('지도: ${_baseMapNames[_baseMap]}');
+                      },
+                    ),
                     _divider(),
                     // ── 마커 표시(종류별 켜기) ─────────────────
                     _toolBtn(
@@ -1984,22 +2196,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             }
                           : () => _showToastMessage('연결할 마커가 2개 이상 필요합니다'),
                     ),
+                    // 거리 측정(자) 모드 토글. 지도를 탭해 점을 찍으면 구간·총 거리 계산.
                     _toolBtn(
                       Icons.straighten,
-                      placed.length >= 2 && _showLines && _showDistances
+                      _measureMode
                           ? Theme.of(context).colorScheme.primary
-                          : (placed.length < 2 || !_showLines)
-                              ? Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3)
-                              : null,
-                      placed.length < 2
-                          ? () => _showToastMessage('지점이 2개 이상 필요합니다')
-                          : !_showLines
-                              ? () => _showToastMessage('마커 연결을 먼저 켜세요')
-                              : () {
-                                  setState(() => _showDistances = !_showDistances);
-                                  _showToastMessage(
-                                      _showDistances ? '거리 표시 켜짐' : '거리 표시 꺼짐');
-                                },
+                          : null,
+                      () => setState(() {
+                        _measureMode = !_measureMode;
+                        _measureTapPopup = null;
+                        _selected = null;
+                        _measurePoints.clear();
+                        _measureShowSeg = false;
+                        _showToastMessage(_measureMode
+                            ? '거리 측정: 지도를 탭해 점을 찍으세요'
+                            : '거리 측정 종료');
+                      }),
                     ),
                     _divider(),
                     // ── 오버레이(그래프·필터·시간) ─────────────
@@ -2063,6 +2275,78 @@ class _MapScreenState extends ConsumerState<MapScreen>
         ],
       ),
     );
+  }
+
+  /// 베이스맵 타일 레이어(모드별). 해양은 수심 음영(base)+지명/수심 라벨(reference) 2장.
+  /// Esri Ocean은 z13까지만 캐시되므로 maxNativeZoom으로 그 이상은 확대(overzoom)한다.
+  List<Widget> _baseMapLayers() {
+    switch (_baseMap) {
+      case 1: // 위성 — VWorld 위성 + 한글 라벨(Hybrid). 키 없으면 Esri 위성으로 폴백.
+        if (kVworldKey.isEmpty || kVworldKey.startsWith('YOUR_')) {
+          return [
+            TileLayer(
+              urlTemplate:
+                  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+              userAgentPackageName: 'com.sgchoisg.nakkda',
+              maxNativeZoom: 19,
+            ),
+          ];
+        }
+        return [
+          TileLayer(
+            urlTemplate:
+                'https://api.vworld.kr/req/wmts/1.0.0/$kVworldKey/Satellite/{z}/{y}/{x}.jpeg',
+            userAgentPackageName: 'com.sgchoisg.nakkda',
+            maxNativeZoom: 19,
+          ),
+          _vworldHybridLayer(),
+        ];
+      case 2: // 해양·수심 — Esri Ocean(수심) + VWorld 한글 라벨 오버레이.
+        return [
+          TileLayer(
+            urlTemplate:
+                'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
+            userAgentPackageName: 'com.sgchoisg.nakkda',
+            maxNativeZoom: 13,
+          ),
+          TileLayer(
+            urlTemplate:
+                'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}',
+            userAgentPackageName: 'com.sgchoisg.nakkda',
+            maxNativeZoom: 13,
+          ),
+          if (kVworldKey.isNotEmpty && !kVworldKey.startsWith('YOUR_'))
+            _vworldHybridLayer(),
+        ];
+      default: // 표준(OSM)
+        return [
+          TileLayer(
+            urlTemplate: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+            userAgentPackageName: 'com.sgchoisg.nakkda',
+          ),
+        ];
+    }
+  }
+
+  /// VWorld Hybrid: 한글 지명·섬 이름·항로 라벨만 담긴 투명 오버레이.
+  TileLayer _vworldHybridLayer() => TileLayer(
+        urlTemplate:
+            'https://api.vworld.kr/req/wmts/1.0.0/$kVworldKey/Hybrid/{z}/{y}/{x}.png',
+        userAgentPackageName: 'com.sgchoisg.nakkda',
+        maxNativeZoom: 19,
+      );
+
+  String _baseMapAttribution() {
+    switch (_baseMap) {
+      case 1:
+        return (kVworldKey.isEmpty || kVworldKey.startsWith('YOUR_'))
+            ? 'Esri · Maxar · Earthstar'
+            : 'VWorld · 국토교통부';
+      case 2:
+        return 'Esri · VWorld';
+      default:
+        return '© OpenStreetMap';
+    }
   }
 
   Widget _toolBtn(IconData icon, Color? color, VoidCallback? onPressed) {
