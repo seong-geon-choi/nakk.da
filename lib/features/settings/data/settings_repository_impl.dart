@@ -77,12 +77,12 @@ class SettingsRepositoryImpl implements SettingsRepository {
         ? await _defaultPhotoSavePath()
         : storedPhotoPath;
     final showLocationButton = prefs.getBool(_showLocationButtonKey) ?? true;
-    final autoLocationOnFirstEntry =
-        prefs.getBool(_autoLocationOnFirstEntryKey) ?? true;
+    // 설정 메뉴 제거됨 — 항상 on(이전에 off로 저장한 값도 무시).
+    const autoLocationOnFirstEntry = true;
     final autoStartCounterOnLaunch =
         prefs.getBool(_autoStartCounterOnLaunchKey) ?? false;
-    final autoSaveVoice = prefs.getBool(_autoSaveVoiceKey) ?? true;
-    final showAddressInMemoName = prefs.getBool(_showAddressInMemoNameKey) ?? true;
+    const autoSaveVoice = true;
+    const showAddressInMemoName = true; // 설정 메뉴 제거됨 — 항상 on
     // 신규 키 우선. 없으면: 구버전 show_catch_input 있으면 이관(true→최소, false→일반),
     // 아무 것도 없으면(신규 설치) 기본값 낚시(상세).
     final memoComplexity = MemoComplexity.values.firstWhere(
@@ -93,7 +93,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
         return old ? MemoComplexity.simpleFishing : MemoComplexity.general;
       },
     );
-    final shareEnabled = prefs.getBool(_shareEnabledKey) ?? true;
+    const shareEnabled = true; // 설정 메뉴 제거됨 — 항상 on
     final adsEnabled = prefs.getBool(_adsEnabledKey) ?? true;
     final contributeImages = prefs.getBool(_contributeImagesKey) ?? false;
     final khoaApiKey = prefs.getString(_khoaApiKeyKey);

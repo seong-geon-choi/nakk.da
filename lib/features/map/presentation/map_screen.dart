@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
+import 'package:http/http.dart' as http;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
@@ -48,11 +51,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
   _GpsPoint? _selected;
   bool _showLines = false;
   bool _showTimes = false;
-  // 거리 측정(자) 도구: 측정 모드 + 찍은 점들 + 구간거리 라벨 + 빈지점 '거리재기' 팝업 위치.
+  // 거리 측정(자) 도구: 측정 모드 + 찍은 점들 + 구간거리 라벨.
+  // _measureTimes/_measureIdx는 _measurePoints와 1:1. 경로 점에 스냅되면 그 점의
+  // 시각과 경로 인덱스(fTrack 기준), 빈 지점이면 각각 null.
   bool _measureMode = false;
   final List<LatLng> _measurePoints = [];
+  final List<DateTime?> _measureTimes = [];
+  final List<int?> _measureIdx = [];
   bool _measureShowSeg = false;
-  LatLng? _measureTapPopup;
+  bool _speedKnots = false; // 평균속도 단위: false=km/h, true=kt(노트). 탭으로 전환
   bool _showTrack = false;
   bool _showMemoPoints = true; // 메모 지점(파란 마커) 표시 여부. 끄면 숨김
   bool _toolbarCollapsed = false; // 우측 버튼바 접기(지도 넓게 보기)
@@ -242,9 +249,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _showLines = false;
         _showTimes = false;
         _measureMode = false;
-        _measurePoints.clear();
+        _measureClear();
         _measureShowSeg = false;
-        _measureTapPopup = null;
         _showTrack = false;
         _showMemoPoints = true;
         _showCatchChart = false;
@@ -619,63 +625,126 @@ class _MapScreenState extends ConsumerState<MapScreen>
   String _fmtDistanceKm(double km) =>
       km < 1.0 ? '${(km * 1000).round()} m' : '${km.toStringAsFixed(2)} km';
 
-  // 빈 지점 탭 시 그 위치 근처에 뜨는 '거리재기' 진입 팝업.
-  Widget _measureTapPopupWidget(BuildContext context) {
-    final pt = _measureTapPopup!;
-    Offset? sp;
-    try {
-      final p = _mapController.camera.latLngToScreenPoint(pt);
-      sp = Offset(p.x.toDouble(), p.y.toDouble());
-    } catch (_) {}
-    if (sp == null) return const SizedBox.shrink();
-    final sz = _stackSize(context);
-    final left = (sp.dx - 50).clamp(4.0, sz.width - 120);
-    final top = (sp.dy - 52).clamp(4.0, sz.height - 44);
-    return Positioned(
-      left: left,
-      top: top,
-      child: GestureDetector(
-        onTap: () => setState(() {
-          _measureMode = true;
-          _measurePoints
-            ..clear()
-            ..add(pt);
-          _measureShowSeg = false;
-          _measureTapPopup = null;
-          _selected = null;
-        }),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          decoration: BoxDecoration(
-            color: const Color(0xEE263238),
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: const [
-              BoxShadow(blurRadius: 6, color: Color(0x66000000))
-            ],
-          ),
-          child: const Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.straighten, color: Colors.white, size: 16),
-            SizedBox(width: 6),
-            Text('거리재기',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 13,
-                    fontWeight: FontWeight.w600)),
-          ]),
-        ),
-      ),
-    );
+  // 거리 측정 점들의 연속 구간(직선·Haversine) 합산 총 거리(km).
+  // 구간 i의 거리(km): 양 끝이 모두 경로 점이면 그 사이 실제 이동경로를 따라 합산,
+  // 아니면 직선(Haversine).
+  double _measureSegKm(List<TrackPoint> track, int i) {
+    final ia = _measureIdx[i], ib = _measureIdx[i + 1];
+    if (ia != null &&
+        ib != null &&
+        ia < track.length &&
+        ib < track.length) {
+      return _alongTrackKm(track, ia, ib);
+    }
+    return _haversineKm(
+        _measurePoints[i].latitude, _measurePoints[i].longitude,
+        _measurePoints[i + 1].latitude, _measurePoints[i + 1].longitude);
   }
 
-  // 거리 측정 점들의 연속 구간(직선·Haversine) 합산 총 거리(km).
-  double _measureTotalKm() {
+  // 경로 인덱스 a~b 사이 이동경로를 따라 거리 합산(km).
+  double _alongTrackKm(List<TrackPoint> track, int a, int b) {
+    if (a > b) {
+      final t = a;
+      a = b;
+      b = t;
+    }
+    double sum = 0;
+    for (var i = a; i < b; i++) {
+      sum += _haversineKm(
+          track[i].lat, track[i].lng, track[i + 1].lat, track[i + 1].lng);
+    }
+    return sum;
+  }
+
+  double _measureTotalKm(List<TrackPoint> track) {
     double total = 0;
     for (var i = 0; i < _measurePoints.length - 1; i++) {
-      total += _haversineKm(
-          _measurePoints[i].latitude, _measurePoints[i].longitude,
-          _measurePoints[i + 1].latitude, _measurePoints[i + 1].longitude);
+      total += _measureSegKm(track, i);
     }
     return total;
+  }
+
+  // 측정선 그릴 좌표: 경로 점 두 개 사이 구간은 실제 경로 점들을 끼워 넣어
+  // 이동경로를 따라 그린다(직선 구간은 두 끝점만).
+  List<LatLng> _measurePathPoints(List<TrackPoint> track) {
+    if (_measurePoints.isEmpty) return const [];
+    final out = <LatLng>[_measurePoints.first];
+    for (var i = 0; i < _measurePoints.length - 1; i++) {
+      final ia = _measureIdx[i], ib = _measureIdx[i + 1];
+      if (ia != null && ib != null && ia < track.length && ib < track.length) {
+        // 경로를 따라 ia→ib 사이 점들을 끼워 넣는다(방향에 맞춰).
+        final step = ia <= ib ? 1 : -1;
+        for (var k = ia + step; k != ib + step; k += step) {
+          out.add(LatLng(track[k].lat, track[k].lng));
+        }
+      } else {
+        out.add(_measurePoints[i + 1]);
+      }
+    }
+    return out;
+  }
+
+  // 거리 측정 점/시각/경로인덱스를 1:1로 함께 다룬다.
+  void _measureAdd(LatLng pt, DateTime? t, int? idx) {
+    _measurePoints.add(pt);
+    _measureTimes.add(t);
+    _measureIdx.add(idx);
+  }
+
+  void _measureClear() {
+    _measurePoints.clear();
+    _measureTimes.clear();
+    _measureIdx.clear();
+  }
+
+  void _measureUndo() {
+    if (_measurePoints.isNotEmpty) {
+      _measurePoints.removeLast();
+      _measureTimes.removeLast();
+      _measureIdx.removeLast();
+    }
+  }
+
+  // 탭 위치에서 화면상 ≈44px 이내로 가장 가까운 경로 점의 인덱스(없으면 -1). 스냅용.
+  int _nearestTrackIdx(LatLng tapped, List<TrackPoint> track) {
+    if (track.isEmpty) return -1;
+    final MapCamera cam;
+    try {
+      cam = _mapController.camera;
+    } catch (_) {
+      return -1;
+    }
+    final tapSp = cam.latLngToScreenPoint(tapped);
+    double best = double.infinity;
+    int nearest = -1;
+    for (var i = 0; i < track.length; i++) {
+      final sp = cam.latLngToScreenPoint(LatLng(track[i].lat, track[i].lng));
+      final dx = sp.x - tapSp.x, dy = sp.y - tapSp.y;
+      final d2 = dx * dx + dy * dy;
+      if (d2 < best) {
+        best = d2;
+        nearest = i;
+      }
+    }
+    return (nearest >= 0 && best <= 44 * 44) ? nearest : -1;
+  }
+
+  // 측정 시작/끝 점에 시각이 있으면 경과시간과 평균속도(km/h)를 계산. 없으면 null.
+  ({Duration elapsed, double kmh})? _measureSpeed(List<TrackPoint> track) {
+    if (_measurePoints.length < 2) return null;
+    final t0 = _measureTimes.first, t1 = _measureTimes.last;
+    if (t0 == null || t1 == null) return null;
+    final secs = (t1.difference(t0)).inMilliseconds.abs() / 1000.0;
+    if (secs <= 0) return null;
+    final km = _measureTotalKm(track);
+    return (elapsed: Duration(seconds: secs.round()), kmh: km / (secs / 3600.0));
+  }
+
+  String _fmtDuration(Duration d) {
+    final h = d.inHours, m = d.inMinutes % 60, s = d.inSeconds % 60;
+    if (h > 0) return '$h시간 $m분';
+    if (m > 0) return '$m분 $s초';
+    return '$s초';
   }
 
   // 메모 지점을 '화면 픽셀' 기준으로 클러스터링. 가까운(≈34px 이내) 지점들을 한
@@ -1266,6 +1335,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
     _showToastMessage('$label 저장 시각 $hh:$mm:$ss');
   }
 
+  // 경로 마커 탭: 측정 모드면 그 점에 스냅해 측정 점 추가(거리·시간·속도용),
+  // 아니면 저장 시각 토스트.
+  void _onTrackMarkerTap(TrackPoint p, List<TrackPoint> track) {
+    if (_measureMode) {
+      final idx = track.indexOf(p);
+      setState(() => _measureAdd(
+          LatLng(p.lat, p.lng), p.timestamp, idx >= 0 ? idx : null));
+      return;
+    }
+    _showTrackTime(p);
+  }
+
   /// 체류지점을 누르면 머문 시간대와 체류 시간을 토스트로 표시한다.
   void _showStayInfo(StayPoint p) {
     String hm(DateTime t) =>
@@ -1436,18 +1517,24 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 }
               },
               onTap: (_, latlng) {
-                // 측정 모드: 탭할 때마다 측정 점 추가(마커 위든 빈 곳이든 GPS 좌표로).
+                // 측정 모드일 때만 거리 측정 점 추가. 경로 점 근처면 스냅해 시각도 기록
+                // (시작/끝 점 시각으로 시간·평균속도 계산). 그 외엔 좌표만(거리만).
                 if (_measureMode) {
-                  setState(() => _measurePoints.add(latlng));
+                  // 경로가 보일 때만 경로 점에 스냅(마커를 눌러 선택하는 개념).
+                  final idx =
+                      _showTrack ? _nearestTrackIdx(latlng, fTrack) : -1;
+                  setState(() {
+                    if (idx >= 0) {
+                      final tp = fTrack[idx];
+                      _measureAdd(
+                          LatLng(tp.lat, tp.lng), tp.timestamp, idx);
+                    } else {
+                      _measureAdd(latlng, null, null);
+                    }
+                  });
                   return;
                 }
-                // 빈 지점 탭: 가까운 이동지점 시각 토스트가 없으면 '거리재기' 팝업을 띄운다.
-                if (!_showNearestTrackTime(latlng, fTrack)) {
-                  setState(() {
-                    _selected = null;
-                    _measureTapPopup = latlng;
-                  });
-                }
+                _showNearestTrackTime(latlng, fTrack);
               },
               onLongPress: (_, latlng) => _onMapLongPress(latlng),
               onPositionChanged: (camera, hasGesture) {
@@ -1528,7 +1615,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           height: 24,
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
-                            onTap: () => _showTrackTime(p),
+                            onTap: () => _onTrackMarkerTap(p, fTrack),
                             onLongPress: () => _confirmDeleteTrackPoint(p),
                             child: Center(
                               child: Container(
@@ -1559,7 +1646,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           height: 30,
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
-                            onTap: () => _showTrackTime(p),
+                            onTap: () => _onTrackMarkerTap(p, fTrack),
                             onLongPress: () => _confirmDeleteTrackPoint(p),
                             child: Container(
                               decoration: BoxDecoration(
@@ -1617,7 +1704,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
               if (_measurePoints.length >= 2)
                 PolylineLayer(polylines: [
                   Polyline(
-                    points: _measurePoints,
+                    points: _measurePathPoints(fTrack),
                     color: const Color(0xFFFFC107),
                     strokeWidth: 3,
                   ),
@@ -1644,11 +1731,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           borderRadius: BorderRadius.circular(4),
                         ),
                         child: Text(
-                          _fmtDistanceKm(_haversineKm(
-                              _measurePoints[i].latitude,
-                              _measurePoints[i].longitude,
-                              _measurePoints[i + 1].latitude,
-                              _measurePoints[i + 1].longitude)),
+                          _fmtDistanceKm(_measureSegKm(fTrack, i)),
                           style: const TextStyle(
                               color: Colors.white, fontSize: 10),
                           textAlign: TextAlign.center,
@@ -1799,9 +1882,6 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 onClose: () => setState(() => _selected = null),
               ),
             ),
-          // 빈 지점 탭 → '거리재기' 진입 팝업(탭 위치 근처).
-          if (_measureTapPopup != null && !_measureMode)
-            _measureTapPopupWidget(context),
           // 거리 측정 패널(측정 모드) — 총 거리 + [구간거리 표시][되돌리기][종료].
           if (_measureMode)
             Positioned(
@@ -1832,7 +1912,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         Text(
                           _measurePoints.length < 2
                               ? '점 ${_measurePoints.length}개'
-                              : '총 ${_fmtDistanceKm(_measureTotalKm())}',
+                              : '총 ${_fmtDistanceKm(_measureTotalKm(fTrack))}',
                           style: TextStyle(
                               fontWeight: FontWeight.w700,
                               fontSize: 15,
@@ -1854,8 +1934,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         ),
                         TextButton.icon(
                           onPressed: _measurePoints.isNotEmpty
-                              ? () =>
-                                  setState(() => _measurePoints.removeLast())
+                              ? () => setState(_measureUndo)
                               : null,
                           icon: const Icon(Icons.undo, size: 16),
                           label: const Text('되돌리기'),
@@ -1864,14 +1943,35 @@ class _MapScreenState extends ConsumerState<MapScreen>
                         TextButton(
                           onPressed: () => setState(() {
                             _measureMode = false;
-                            _measurePoints.clear();
+                            _measureClear();
                             _measureShowSeg = false;
                           }),
                           child: const Text('종료'),
                         ),
                       ]),
                       if (_measurePoints.length < 2)
-                        Text('지도를 탭해 점을 찍으세요(2개 이상)',
+                        Text('지도를 탭해 점을 찍으세요(경로 점은 자동 스냅)',
+                            style: TextStyle(
+                                fontSize: 11,
+                                color: Theme.of(context)
+                                    .colorScheme
+                                    .onSurfaceVariant))
+                      else if (_measureSpeed(fTrack) case final s?)
+                        GestureDetector(
+                          onTap: () =>
+                              setState(() => _speedKnots = !_speedKnots),
+                          child: Text(
+                            '시간 ${_fmtDuration(s.elapsed)} · 평균 '
+                            '${(_speedKnots ? s.kmh / 1.852 : s.kmh).toStringAsFixed(1)}'
+                            ' ${_speedKnots ? 'kt' : 'km/h'}',
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: Theme.of(context).colorScheme.primary),
+                          ),
+                        )
+                      else
+                        Text('시작·끝을 경로 점에 맞추면 시간·속도도 표시돼요',
                             style: TextStyle(
                                 fontSize: 11,
                                 color: Theme.of(context)
@@ -2204,9 +2304,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           : null,
                       () => setState(() {
                         _measureMode = !_measureMode;
-                        _measureTapPopup = null;
                         _selected = null;
-                        _measurePoints.clear();
+                        _measureClear();
                         _measureShowSeg = false;
                         _showToastMessage(_measureMode
                             ? '거리 측정: 지도를 탭해 점을 찍으세요'
@@ -2277,46 +2376,46 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
-  /// 베이스맵 타일 레이어(모드별). 해양은 수심 음영(base)+지명/수심 라벨(reference) 2장.
-  /// Esri Ocean은 z13까지만 캐시되므로 maxNativeZoom으로 그 이상은 확대(overzoom)한다.
+  bool get _hasVworld =>
+      kVworldKey.isNotEmpty && !kVworldKey.startsWith('YOUR_');
+
+  /// 위성 이미지 베이스(라벨 제외) — VWorld 위성, 키 없으면 Esri 위성.
+  TileLayer _satelliteBase() => _hasVworld
+      ? TileLayer(
+          urlTemplate:
+              'https://api.vworld.kr/req/wmts/1.0.0/$kVworldKey/Satellite/{z}/{y}/{x}.jpeg',
+          userAgentPackageName: 'com.sgchoisg.nakkda',
+          maxNativeZoom: 19,
+        )
+      : TileLayer(
+          urlTemplate:
+              'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+          userAgentPackageName: 'com.sgchoisg.nakkda',
+          maxNativeZoom: 19,
+        );
+
+  /// 베이스맵 타일 레이어(모드별).
   List<Widget> _baseMapLayers() {
     switch (_baseMap) {
-      case 1: // 위성 — VWorld 위성 + 한글 라벨(Hybrid). 키 없으면 Esri 위성으로 폴백.
-        if (kVworldKey.isEmpty || kVworldKey.startsWith('YOUR_')) {
-          return [
-            TileLayer(
-              urlTemplate:
-                  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-              userAgentPackageName: 'com.sgchoisg.nakkda',
-              maxNativeZoom: 19,
-            ),
-          ];
-        }
+      case 1: // 위성 + 한글 라벨
         return [
-          TileLayer(
-            urlTemplate:
-                'https://api.vworld.kr/req/wmts/1.0.0/$kVworldKey/Satellite/{z}/{y}/{x}.jpeg',
-            userAgentPackageName: 'com.sgchoisg.nakkda',
-            maxNativeZoom: 19,
-          ),
-          _vworldHybridLayer(),
+          _satelliteBase(),
+          if (_hasVworld) _vworldHybridLayer(),
         ];
-      case 2: // 해양·수심 — Esri Ocean(수심) + VWorld 한글 라벨 오버레이.
+      case 2: // 해양·수심
+        // 위성 베이스 위에 Esri Ocean 수심을 올린다. Esri Ocean은 데이터가 없는
+        // 곳에 'Map data not yet available' placeholder 타일을 내보내므로,
+        // 커스텀 TileProvider로 placeholder를 투명 처리해 아래 위성(지형)이 보이게 한다.
         return [
+          _satelliteBase(),
           TileLayer(
             urlTemplate:
                 'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
+            tileProvider: _OceanMaskTileProvider(),
             userAgentPackageName: 'com.sgchoisg.nakkda',
             maxNativeZoom: 13,
           ),
-          TileLayer(
-            urlTemplate:
-                'https://server.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}',
-            userAgentPackageName: 'com.sgchoisg.nakkda',
-            maxNativeZoom: 13,
-          ),
-          if (kVworldKey.isNotEmpty && !kVworldKey.startsWith('YOUR_'))
-            _vworldHybridLayer(),
+          if (_hasVworld) _vworldHybridLayer(),
         ];
       default: // 표준(OSM)
         return [
@@ -2575,6 +2674,61 @@ class _GpsPoint {
     final m = timestamp.minute.toString().padLeft(2, '0');
     return '$h:$m';
   }
+}
+
+// ── Esri Ocean placeholder 마스킹 ─────────────────────────────
+// Esri Ocean은 데이터가 없는 타일에 'Map data not yet available' 안내 이미지를
+// 내보낸다(모든 경우 길이 14226 바이트로 동일). 그 타일을 투명 처리해 아래 베이스
+// (위성)가 비치게 한다.
+const int _kOceanPlaceholderLen = 14226;
+final _kTransparentTile = base64Decode(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPgPAAEEAQB9ssjfAAAAAElFTkSuQmCC');
+
+class _OceanMaskTileProvider extends TileProvider {
+  @override
+  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) =>
+      _OceanMaskImage(getTileUrl(coordinates, options));
+}
+
+class _OceanMaskImage extends ImageProvider<_OceanMaskImage> {
+  final String url;
+  _OceanMaskImage(this.url);
+
+  @override
+  Future<_OceanMaskImage> obtainKey(ImageConfiguration configuration) =>
+      SynchronousFuture<_OceanMaskImage>(this);
+
+  @override
+  ImageStreamCompleter loadImage(
+          _OceanMaskImage key, ImageDecoderCallback decode) =>
+      MultiFrameImageStreamCompleter(
+        codec: _loadCodec(decode),
+        scale: 1.0,
+        debugLabel: url,
+      );
+
+  Future<ui.Codec> _loadCodec(ImageDecoderCallback decode) async {
+    var bytes = _kTransparentTile;
+    try {
+      final res = await http.get(Uri.parse(url),
+          headers: const {'User-Agent': 'com.sgchoisg.nakkda'});
+      if (res.statusCode == 200 &&
+          res.bodyBytes.length != _kOceanPlaceholderLen) {
+        bytes = res.bodyBytes;
+      }
+    } catch (_) {
+      // 실패 시 투명 타일 유지
+    }
+    final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+    return decode(buffer);
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      other is _OceanMaskImage && other.url == url;
+
+  @override
+  int get hashCode => url.hashCode;
 }
 
 // ── 팝업 ──────────────────────────────────────────────────

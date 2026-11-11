@@ -30,10 +30,25 @@ class SettingsScreen extends ConsumerStatefulWidget {
 
 class _SettingsScreenState extends ConsumerState<SettingsScreen>
     with WidgetsBindingObserver {
+  // 블루투스 버튼 연동 / 조과 효과(음성) 사용여부 — 메뉴명 옆 스위치용(BtRemoteService 기반).
+  bool _btEnabled = false;
+  bool _soundEnabled = false;
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _loadToggleStates();
+  }
+
+  Future<void> _loadToggleStates() async {
+    final bt = await BtRemoteService.getEnabled();
+    final snd = await BtRemoteService.getSoundEnabled();
+    if (!mounted) return;
+    setState(() {
+      _btEnabled = bt;
+      _soundEnabled = snd;
+    });
   }
 
   @override
@@ -46,6 +61,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       ref.invalidate(permissionStatusProvider);
+      _loadToggleStates();
     }
   }
 
@@ -68,24 +84,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
           children: [
             // ── 표시 섹션 ─────────────────────────────
             const _SectionHeader(label: '표시'),
-            SwitchListTile(
-              secondary: const Icon(Icons.my_location_outlined),
-              title: const Text('첫 기록 시 현장 정보 자동 추가'),
-              subtitle: const Text(
-                  '그날 현장 정보가 없을 때 첫 메모·사진을 추가하면 백그라운드로 1회 자동 수집·저장합니다'),
-              value: settings.autoLocationOnFirstEntry,
-              onChanged: (v) => ref
-                  .read(settingsProvider.notifier)
-                  .updateAutoLocationOnFirstEntry(v),
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.save_outlined),
-              title: const Text('음성 입력 후 바로 저장'),
-              subtitle: const Text('음성 텍스트 변환 완료 시 확인 없이 자동 저장합니다'),
-              value: settings.autoSaveVoice,
-              onChanged: (v) =>
-                  ref.read(settingsProvider.notifier).updateAutoSaveVoice(v),
-            ),
             ListTile(
               leading: const Icon(Icons.phishing),
               title: const Text('메모 입력 항목'),
@@ -114,15 +112,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   }
                 },
               ),
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.ios_share),
-              title: const Text('메모 공유'),
-              subtitle:
-                  const Text('메모 화면에서 블로그 등 다른 앱으로 공유하는 버튼을 표시합니다'),
-              value: settings.shareEnabled,
-              onChanged: (v) =>
-                  ref.read(settingsProvider.notifier).updateShareEnabled(v),
             ),
 
             // ── 어종 섹션 ─────────────────────────────
@@ -201,7 +190,8 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ListTile(
               leading: const Icon(Icons.route_outlined),
               title: const Text('경로 기록'),
-              subtitle: Text('기록 간격: ${settings.trackingIntervalMeters}m'),
+              subtitle: Text(
+                  '정지·조업 ${settings.trackingIntervalMeters}m · 이동 속도가 빠를수록 간격 자동 확대'),
               trailing: Switch(
                 value: settings.showTrackingButton,
                 onChanged: (v) => ref
@@ -256,7 +246,31 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               leading: const Icon(Icons.backup_outlined),
               title: const Text('구글 드라이브 동기화'),
               subtitle: const Text('Wi-Fi 연결 시 메모를 드라이브에 자동 백업합니다'),
-              trailing: const Icon(Icons.chevron_right),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Switch(
+                    value: ref.watch(backupProvider).valueOrNull?.enabled ?? false,
+                    onChanged: (v) async {
+                      if (v) {
+                        final result = await ref
+                            .read(backupProvider.notifier)
+                            .enableBackup();
+                        if (!result.ok && context.mounted) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                                content:
+                                    Text('구글 로그인 실패: ${result.error}')),
+                          );
+                        }
+                      } else {
+                        await ref.read(backupProvider.notifier).disableBackup();
+                      }
+                    },
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const _BackupSubScreen()),
               ),
@@ -272,14 +286,6 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               value: settings.showLocationButton,
               onChanged: (v) =>
                   ref.read(settingsProvider.notifier).updateShowLocationButton(v),
-            ),
-            SwitchListTile(
-              secondary: const Icon(Icons.place_outlined),
-              title: const Text('메모 이름에 지역정보 표시'),
-              subtitle: const Text('메모 목록에서 날짜 옆에 촬영 지역 주소를 표시합니다'),
-              value: settings.showAddressInMemoName,
-              onChanged: (v) =>
-                  ref.read(settingsProvider.notifier).updateShowAddressInMemoName(v),
             ),
             ListTile(
               leading: const Icon(Icons.set_meal_outlined),
@@ -336,23 +342,53 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               leading: const Icon(Icons.settings_remote_outlined),
               title: const Text('블루투스 버튼 연동'),
               subtitle: const Text('이어폰·리모컨 버튼으로 카운트 올리기/내리기'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => _RemoteKeyMappingScreen(
-                  species: settings.catchQuickSpecies
-                      .where((s) => s.trim().isNotEmpty)
-                      .toList(),
-                ),
-              )),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Switch(
+                    value: _btEnabled,
+                    onChanged: (v) async {
+                      await BtRemoteService.setEnabled(v);
+                      if (mounted) setState(() => _btEnabled = v);
+                    },
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
+              onTap: () async {
+                await Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => _RemoteKeyMappingScreen(
+                    species: settings.catchQuickSpecies
+                        .where((s) => s.trim().isNotEmpty)
+                        .toList(),
+                  ),
+                ));
+                _loadToggleStates();
+              },
             ),
             ListTile(
               leading: const Icon(Icons.record_voice_over_outlined),
               title: const Text('조과 카운트 효과(음성/진동)'),
               subtitle: const Text('카운트 때 음성·진동으로 알림 · 10마리마다 마릿수'),
-              trailing: const Icon(Icons.chevron_right),
-              onTap: () => Navigator.of(context).push(MaterialPageRoute(
-                builder: (_) => const _CatchSoundScreen(),
-              )),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Switch(
+                    value: _soundEnabled,
+                    onChanged: (v) async {
+                      await BtRemoteService.setSoundEnabled(v);
+                      if (mounted) setState(() => _soundEnabled = v);
+                    },
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
+              ),
+              onTap: () async {
+                await Navigator.of(context).push(MaterialPageRoute(
+                  builder: (_) => const _CatchSoundScreen(),
+                ));
+                _loadToggleStates();
+              },
             ),
             ListTile(
               leading: const Icon(Icons.add_to_home_screen),
@@ -668,7 +704,7 @@ class _TrackingIntervalSubScreenState
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  '최소 이동 거리: ${current.round()}m',
+                  '최소 이동 거리(정지·조업): ${current.round()}m',
                   style: Theme.of(context).textTheme.titleMedium,
                 ),
                 const SizedBox(height: 16),
@@ -697,8 +733,10 @@ class _TrackingIntervalSubScreenState
                 ),
                 const SizedBox(height: 24),
                 Text(
-                  '이동 경로 기록 시 최소 이동 거리를 설정합니다.\n'
+                  '정지·조업 중일 때의 최소 이동 거리를 설정합니다.\n'
                   '거리가 짧을수록 더 상세한 경로가 기록됩니다.\n\n'
+                  '이동 속도가 빠르면 간격이 자동으로 넓어집니다 — 저속 이동 100m · 순항 300m · 고속 1000m.\n'
+                  '방향이 크게 꺾이는 코너는 간격과 상관없이 저장해 경로 모양을 보존합니다.\n\n'
                   '메모 작성 화면에서 이동 경로 기록 버튼을 활성화한 경우에만 이동 경로가 기록됩니다.\n\n'
                   '이동 경로 기록은 자정(0시)이 되면 자동으로 중단됩니다.',
                   style: TextStyle(
@@ -1128,7 +1166,6 @@ class _CatchSoundScreen extends StatefulWidget {
 }
 
 class _CatchSoundScreenState extends State<_CatchSoundScreen> {
-  bool _enabled = true;
   bool _vibrate = true;
   String _mode = 'both'; // phrase / count / both
   String _order = 'random'; // random / sequential
@@ -1155,7 +1192,6 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
   }
 
   Future<void> _load() async {
-    final en = await BtRemoteService.getSoundEnabled();
     final vib = await BtRemoteService.getVibrateEnabled();
     final mode = await BtRemoteService.getSoundMode();
     final order = await BtRemoteService.getSoundOrder();
@@ -1168,7 +1204,6 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
     if (!mounted) return;
     setState(() {
       _existingSoundFiles = existing.toSet();
-      _enabled = en;
       _vibrate = vib;
       _mode = mode;
       _order = order;
@@ -1247,11 +1282,6 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
       it.dispose();
     }
     super.dispose();
-  }
-
-  Future<void> _setEnabled(bool v) async {
-    setState(() => _enabled = v);
-    await BtRemoteService.setSoundEnabled(v);
   }
 
   Future<void> _setVibrate(bool v) async {
@@ -1459,16 +1489,6 @@ class _CatchSoundScreenState extends State<_CatchSoundScreen> {
         ),
         body: Column(
           children: [
-            SwitchListTile(
-              dense: true,
-              value: _enabled,
-              onChanged: _setEnabled,
-              secondary: const Icon(Icons.record_voice_over_outlined),
-              title: const Text('음성 알림 사용'),
-              subtitle: Text(_enabled
-                  ? '미디어 볼륨이 켜져 있으면 +1·삭제 음성을 재생합니다'
-                  : '꺼져 있으면 음성이 나지 않습니다'),
-            ),
             SwitchListTile(
               dense: true,
               value: _vibrate,
@@ -1772,7 +1792,6 @@ class _RemoteKeyMappingScreen extends StatefulWidget {
 
 class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
   Map<String, int> _map = {};
-  bool _enabled = false;
 
   @override
   void initState() {
@@ -1782,18 +1801,11 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
 
   Future<void> _load() async {
     final m = await BtRemoteService.getKeyMap();
-    final en = await BtRemoteService.getEnabled();
     if (mounted) {
       setState(() {
         _map = m;
-        _enabled = en;
       });
     }
-  }
-
-  Future<void> _setEnabled(bool v) async {
-    setState(() => _enabled = v);
-    await BtRemoteService.setEnabled(v);
   }
 
   static const _mediaCodes = {85, 126, 127, 87, 88, 86, 90, 89, 79};
@@ -1940,15 +1952,6 @@ class _RemoteKeyMappingScreenState extends State<_RemoteKeyMappingScreen> {
             )
           : ListView(
               children: [
-                SwitchListTile(
-                  value: _enabled,
-                  onChanged: _setEnabled,
-                  secondary: const Icon(Icons.settings_remote_outlined),
-                  title: const Text('블루투스 버튼 연동 사용'),
-                  subtitle: Text(_enabled
-                      ? '지정한 버튼으로 카운트가 올라갑니다'
-                      : '꺼져 있으면 버튼을 지정해도 동작하지 않습니다'),
-                ),
                 const Padding(
                   padding: EdgeInsets.fromLTRB(16, 4, 16, 8),
                   child: Text(
@@ -2558,27 +2561,14 @@ class _BackupSubScreen extends ConsumerWidget {
             child: ListView(
               padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
               children: [
-                SwitchListTile(
-                  secondary: const Icon(Icons.cloud_outlined),
+                ListTile(
+                  leading: const Icon(Icons.cloud_outlined),
                   title: const Text('구글 드라이브 동기화'),
                   subtitle: Text(
                     backup.enabled && backup.accountEmail != null
                         ? backup.accountEmail!
-                        : '비활성화됨 — Wi-Fi 연결 시에만 동기화',
+                        : '설정 화면에서 동기화를 켜면 계정·범위가 표시됩니다',
                   ),
-                  value: backup.enabled,
-                  onChanged: (v) async {
-                    if (v) {
-                      final result = await ref.read(backupProvider.notifier).enableBackup();
-                      if (!result.ok && context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('구글 로그인 실패: ${result.error}')),
-                        );
-                      }
-                    } else {
-                      await ref.read(backupProvider.notifier).disableBackup();
-                    }
-                  },
                 ),
                 if (backup.enabled) ...[
                   const Divider(indent: 16, endIndent: 16),
