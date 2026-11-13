@@ -9,6 +9,7 @@ import android.os.SystemClock
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
@@ -177,6 +178,8 @@ class WearMainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // 시작 시 검정 배경 + 48dp 원형 아이콘 스플래시(Wear 품질기준 WO-V15). super.onCreate 이전 호출.
+        installSplashScreen()
         super.onCreate(savedInstanceState)
         // 화면이 꺼져도 앱을 활성으로 유지(앰비언트) — 다시 켜면 카운터 화면이 그대로 유지된다.
         lifecycle.addObserver(ambientObserver)

@@ -1,0 +1,4 @@
+<resources>
+    <!-- 원형 아이콘은 기본 영역 전체(48dp) 사용(WO-V15). -->
+    <dimen name="splash_screen_icon_size">48dp</dimen>
+</resources>

@@ -32,10 +32,10 @@ android {
         minSdk = 30
         // Play 타깃 API 요구치(API 35). compileSdk와 일치.
         targetSdk = 35
-        // Wear 번들 versionCode는 폰(2075)보다 크고 고유해야 함(Play 규칙: 폼팩터 무관
-        // 패키지 내 versionCode 고유 + 워치 ≥ 폰). 2074→2076: 폰 2075 게시에 맞춰 상향(내용 동일).
-        versionCode = 2076
-        versionName = "3.14.2"
+        // Wear 번들 versionCode는 폰(2077)보다 크고 고유해야 함(Play 규칙: 폼팩터 무관
+        // 패키지 내 versionCode 고유 + 워치 ≥ 폰). 2076→2078: 폰 2077에 맞춰 상향(스플래시 수정).
+        versionCode = 2078
+        versionName = "3.14.3"
     }
 
     buildFeatures {
@@ -74,6 +74,8 @@ dependencies {
     implementation("androidx.compose.animation:animation")
     implementation("androidx.activity:activity-compose:1.9.3")
     implementation("androidx.core:core-ktx:1.15.0")
+    // 시작 스플래시(검정 배경 + 48dp 아이콘). 1.0.1+ 라야 Wear OS 기본 치수 지원.
+    implementation("androidx.core:core-splashscreen:1.0.1")
     implementation("com.google.android.gms:play-services-wearable:18.2.0")
     // 전이 의존성으로 딸려오는 오래된 fragment(1.1.0)를 최신으로 강제(Play SDK 경고 해소).
     implementation("androidx.fragment:fragment:1.8.6")

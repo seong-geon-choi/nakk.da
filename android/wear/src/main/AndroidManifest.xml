@@ -22,7 +22,7 @@
         <activity
             android:name=".WearMainActivity"
             android:exported="true"
-            android:theme="@style/WearAppTheme">
+            android:theme="@style/WearAppTheme.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
