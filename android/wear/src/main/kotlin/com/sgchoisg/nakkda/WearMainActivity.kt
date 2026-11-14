@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.EnterTransition
@@ -50,6 +51,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -84,6 +87,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
@@ -92,6 +96,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.Image
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.input.pointer.positionChange
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -214,6 +219,9 @@ class WearMainActivity : ComponentActivity() {
     private var menuAllowReset by mutableStateOf(true)
     // 짧은 안내 문구(저장·초기화 결과). 잠시 뒤 자동으로 사라짐.
     private var toast by mutableStateOf<String?>(null)
+    // −1 되돌리기: 3초 동안 삭제를 미뤄 두는 어종 인덱스들(실수 −1이면 원래 기록·시각 보존).
+    private var pendingRemoves by mutableStateOf(listOf<Int>())
+    private val removeRunnable = Runnable { flushRemoves() }
     // 다른 페이지로 이동 요청(예: 폰 카메라 닫힘 → 카운터). Compose에서 처리 후 null로.
     private var pageRequest by mutableStateOf<Int?>(null)
     // 폰 카메라 미리보기 최신 프레임(폰이 초당 약 4장 JPEG로 보냄). null=아직 없음.
@@ -287,7 +295,13 @@ class WearMainActivity : ComponentActivity() {
                     // 0=조과 그래프(왼쪽), 1=카운터(시작·가운데), 2=카메라(오른쪽).
                     val pagerState = rememberPagerState(initialPage = startPage, pageCount = { 3 })
                     val scope = rememberCoroutineScope()
-                    HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize(),
+                        // 짧게 밀어도(화면 폭 25%) 다음 페이지로 넘어가게(기본 50%).
+                        flingBehavior = PagerDefaults.flingBehavior(
+                            state = pagerState, snapPositionalThreshold = 0.25f),
+                    ) { page ->
                         when (page) {
                             // 그래프 화면 길게 누르기 → 저장 메뉴(손가락에 가려 즉시 저장 결과가 안 보여 한 단계 둠).
                             0 -> Box(
@@ -314,8 +328,8 @@ class WearMainActivity : ComponentActivity() {
                                     colorIdx = colorIdx,
                                     eco = ecoColors,
                                     animate = animateFlip,
-                                    onPlus = { i -> bump(i, 1, PATH_ADD) },
-                                    onMinus = { i -> bump(i, -1, PATH_REMOVE) },
+                                    onPlus = { i -> plus(i) },
+                                    onMinus = { i -> minus(i) },
                                     onStop = { sendStop() },
                                     onMenu = {
                                         menuAllowReset = true
@@ -352,6 +366,13 @@ class WearMainActivity : ComponentActivity() {
                         }
                     }
                     PageDots(3, pagerState.currentPage, Modifier.align(Alignment.BottomCenter))
+                    // −1 되돌리기: 화면 가운데 원형 되돌리기(↻) 버튼(3초 동안).
+                    if (pendingRemoves.isNotEmpty()) {
+                        UndoButton(
+                            Modifier.align(Alignment.Center),
+                            onClick = { undoRemoves() },
+                        )
+                    }
                     if (menuOpen) {
                         ActionMenu(
                             allowReset = menuAllowReset,
@@ -486,6 +507,7 @@ class WearMainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
+        flushRemoves() // 화면이 꺼지거나 앱을 벗어나면 미뤄 둔 −1을 바로 반영
         dataClient.removeListener(dataListener)
         reconcileHandler.removeCallbacks(reconcileRunnable)
         dimHandler.removeCallbacks(dimRunnable)
@@ -670,6 +692,8 @@ class WearMainActivity : ComponentActivity() {
     private fun resetCounts() {
         menuOpen = false
         confirmReset = false
+        dimHandler.removeCallbacks(removeRunnable)
+        pendingRemoves = emptyList()
         counts = counts.map { 0 }
         pendingCounts = null
         lastCatchAt = 0L
@@ -686,6 +710,7 @@ class WearMainActivity : ComponentActivity() {
             showToast("조과 없음 · 요약 생략")
             return
         }
+        flushRemoves() // 요약에 −1이 반영되도록 먼저 전송
         // 카운터 화면으로 이동해 캡처한 뒤, 그 이미지를 담아 요약 요청(아래 LaunchedEffect).
         endCapturePending = true
     }
@@ -803,6 +828,11 @@ class WearMainActivity : ComponentActivity() {
 
     private fun tryReconcile() {
         val pending = pendingCounts ?: return
+        // 되돌리기 대기 중인 −1은 폰에 아직 안 보냈으므로 권위값 반영을 미룬다.
+        if (pendingRemoves.isNotEmpty()) {
+            reconcileHandler.postDelayed(reconcileRunnable, 300)
+            return
+        }
         val idle = SystemClock.elapsedRealtime() - lastBumpAt
         // 조작 직후면 반영 보류.
         if (idle < RECONCILE_MS) {
@@ -824,7 +854,7 @@ class WearMainActivity : ComponentActivity() {
 
     /** 낙관적 즉시 반영: 워치 숫자를 먼저 올리고(폰 왕복 대기 없음) 명령을 전송한다.
      *  폰의 권위값 push(applyData)가 오면 그 값으로 보정된다. */
-    private fun bump(index: Int, delta: Int, path: String) {
+    private fun bump(index: Int, delta: Int, path: String?) {
         val now = SystemClock.elapsedRealtime()
         // 직전 조작과 간격이 짧으면(연타) 스냅, 넉넉하면 플립.
         animateFlip = (now - lastBumpAt) >= FLIP_GAP_MS
@@ -838,8 +868,48 @@ class WearMainActivity : ComponentActivity() {
         pendingCounts = null
         if (delta > 0) lastCatchAt = System.currentTimeMillis()
         vibrateCount(delta > 0)
-        send(path, index)
+        if (path != null) send(path, index)
         scheduleReconcile() // 조작 중엔 권위값 반영을 계속 뒤로 미룬다.
+    }
+
+    private fun plus(index: Int) {
+        // 미뤄 둔 −1을 먼저 보내야 폰이 '이번 +1 기록'이 아니라 원래 지우려던 기록을 지운다.
+        flushRemoves()
+        bump(index, 1, PATH_ADD)
+    }
+
+    /** −1: 숫자는 바로 줄이고 삭제 전송은 3초 미룬다(그 안에 '되돌리기'로 취소 가능). */
+    private fun minus(index: Int) {
+        if (counts.getOrElse(index) { 0 } <= 0) return
+        bump(index, -1, null)
+        pendingRemoves = pendingRemoves + index
+        dimHandler.removeCallbacks(removeRunnable)
+        dimHandler.postDelayed(removeRunnable, UNDO_MS)
+    }
+
+    /** 미뤄 둔 −1을 폰에 전송(시간 만료·+1·화면 꺼짐·낚시 종료 시). */
+    private fun flushRemoves() {
+        dimHandler.removeCallbacks(removeRunnable)
+        val list = pendingRemoves
+        if (list.isEmpty()) return
+        pendingRemoves = emptyList()
+        for (i in list) send(PATH_REMOVE, i)
+        lastBumpAt = SystemClock.elapsedRealtime()
+        scheduleReconcile()
+    }
+
+    /** 되돌리기: 아무것도 지우지 않고 숫자만 원래대로. */
+    private fun undoRemoves() {
+        dimHandler.removeCallbacks(removeRunnable)
+        val c = counts.toMutableList()
+        for (i in pendingRemoves) {
+            while (c.size <= i) c.add(0)
+            c[i] = c[i] + 1
+        }
+        counts = c
+        pendingRemoves = emptyList()
+        lastBumpAt = SystemClock.elapsedRealtime()
+        showToast("되돌림")
     }
 
     /** 어종 인덱스를 payload로 담아 폰에 카운트 명령 전송(캐시 노드로 즉시). */
@@ -938,6 +1008,7 @@ class WearMainActivity : ComponentActivity() {
         private const val MAX_MESSAGE_BYTES = 95_000
         // 조작·push가 멈춘 뒤 이 시간이 지나야 권위값 반영을 시도(디바운스).
         private const val RECONCILE_MS = 700L
+        private const val UNDO_MS = 3_000L // −1 되돌리기 가능 시간
         // 낙관적 값과 불일치가 이 시간 이상 지속되면(명령 유실 등) 한 번 강제 보정.
         private const val MAX_RECONCILE_MS = 2500L
         // 직전 조작과 간격이 이보다 짧으면 연타로 보고 플립을 생략(스냅).
@@ -946,6 +1017,54 @@ class WearMainActivity : ComponentActivity() {
         private const val DEF_BRIGHT_ON = 0       // 0=시스템 밝기 따름
         private const val DEF_DIM_LEVEL = 10      // 어두울 때 밝기 10%
         private const val DEF_DIM_IDLE_SEC = 15
+    }
+}
+
+/** 원형 되돌리기 버튼 — 회전 화살표(↻)를 직접 그린다(아이콘 라이브러리 없이). */
+@Composable
+private fun UndoButton(modifier: Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .size(60.dp)
+            .clip(CircleShape)
+            .background(Color(0xE6263238))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(30.dp)) {
+            val stroke = 3.dp.toPx()
+            val r = size.minDimension / 2f - stroke
+            val c = Offset(size.width / 2f, size.height / 2f)
+            // 위쪽에서 시작해 시계 방향으로 300° 호.
+            val start = -60f
+            val sweep = 300f
+            drawArc(
+                color = Color.White,
+                startAngle = start,
+                sweepAngle = sweep,
+                useCenter = false,
+                topLeft = Offset(c.x - r, c.y - r),
+                size = Size(r * 2, r * 2),
+                style = Stroke(width = stroke, cap = StrokeCap.Round),
+            )
+            // 호 끝에 진행 방향(시계 방향) 화살촉.
+            val a = Math.toRadians((start + sweep).toDouble())
+            val px = c.x + r * kotlin.math.cos(a).toFloat()
+            val py = c.y + r * kotlin.math.sin(a).toFloat()
+            val tx = -kotlin.math.sin(a).toFloat()
+            val ty = kotlin.math.cos(a).toFloat()
+            val nx = kotlin.math.cos(a).toFloat()
+            val ny = kotlin.math.sin(a).toFloat()
+            val h = stroke * 2.2f
+            val w = stroke * 1.8f
+            val head = Path().apply {
+                moveTo(px + tx * h, py + ty * h)
+                lineTo(px + nx * w, py + ny * w)
+                lineTo(px - nx * w, py - ny * w)
+                close()
+            }
+            drawPath(head, Color.White)
+        }
     }
 }
 
@@ -1115,31 +1234,52 @@ private fun CounterSide(
         modifier
             // 절전 색상이면 어종 색을 옅게 깔아(검정 위 22%) 구분만 유지하고 밝은 면적을 줄인다.
             .background(if (eco) color.copy(alpha = 0.22f) else color)
-            // 탭: 위~숫자영역 하단=+1 / 숫자영역 아래=−1, 길게누름=색상 순환.
+            // 길게 누름 = 색상 선택.
+            .pointerInput(Unit) { detectTapGestures(onLongPress = { onPickColor() }) }
+            // 탭(위=+1 / 아래=−1)·세로 스와이프(위=+1 / 아래=−1)·가로 스와이프(페이지 넘김)를
+            // 한 곳에서 판정한다. 가로로 조금이라도 먼저 움직이면 손을 떼 페이저에 넘기고,
+            // 그 제스처는 탭으로도 세지 않는다(좌우 스와이프 중 +−가 잘못 입력되던 문제).
             .pointerInput(Unit) {
-                detectTapGestures(
-                    onLongPress = { onPickColor() },
-                    onTap = { pos ->
-                        val boundary = if (plusMaxY.isNaN()) size.height / 2f else plusMaxY
-                        if (pos.y < boundary) onPlus() else onMinus()
-                    },
-                )
-            }
-            // 스와이프: 위로=+1 / 아래로=−1 (한 번에 1회).
-            .pointerInput(Unit) {
-                var dy = 0f
-                val threshold = 24.dp.toPx()
-                detectVerticalDragGestures(
-                    onDragStart = { dy = 0f },
-                    onVerticalDrag = { change, delta ->
-                        dy += delta
-                        change.consume()
-                    },
-                    onDragEnd = {
-                        if (dy <= -threshold) onPlus()
-                        else if (dy >= threshold) onMinus()
-                    },
-                )
+                val slop = viewConfiguration.touchSlop
+                val swipeMin = 24.dp.toPx()
+                val longPressMs = viewConfiguration.longPressTimeoutMillis
+                awaitEachGesture {
+                    val down = awaitFirstDown(requireUnconsumed = false)
+                    var dx = 0f
+                    var dy = 0f
+                    var vertical = false
+                    var horizontal = false
+                    var upAt = down.uptimeMillis
+                    var released = false
+                    while (true) {
+                        val ev = awaitPointerEvent()
+                        val ch = ev.changes.firstOrNull { it.id == down.id } ?: break
+                        if (!ch.pressed) { released = true; upAt = ch.uptimeMillis; break }
+                        val d = ch.positionChange()
+                        dx += d.x
+                        dy += d.y
+                        if (!vertical) {
+                            // 가로 우세(작은 움직임부터) → 페이저 몫, 이 제스처는 무시.
+                            if (kotlin.math.abs(dx) > slop * 0.5f &&
+                                kotlin.math.abs(dx) >= kotlin.math.abs(dy)) { horizontal = true; break }
+                            // 세로가 확실히 우세할 때만 세로 스와이프로 잡는다.
+                            if (kotlin.math.abs(dy) > slop &&
+                                kotlin.math.abs(dy) > kotlin.math.abs(dx) * 1.5f) vertical = true
+                        }
+                        if (vertical) ch.consume()
+                    }
+                    when {
+                        horizontal -> {}
+                        vertical -> {
+                            if (dy <= -swipeMin) onPlus() else if (dy >= swipeMin) onMinus()
+                        }
+                        released && upAt - down.uptimeMillis < longPressMs &&
+                            kotlin.math.abs(dx) < slop * 0.5f && kotlin.math.abs(dy) < slop -> {
+                            val boundary = if (plusMaxY.isNaN()) size.height / 2f else plusMaxY
+                            if (down.position.y < boundary) onPlus() else onMinus()
+                        }
+                    }
+                }
             },
     ) {
         // 표시 오버레이(제스처 비소유 → 이벤트가 영역 Box로 전달됨).

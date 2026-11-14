@@ -585,9 +585,24 @@ class CatchLogService : Service() {
                 if (segs[i].lineSequence().any { it.trim() == "- 🎣 $species" }) removeAt = i
             }
             if (removeAt >= 0) {
-                segs.removeAt(removeAt)
+                dropCatchLine(segs, removeAt) { it.trim() == "- 🎣 $species" }
                 writeMd(context, segs.joinToString("\n---\n"))
             }
+        }
+
+        /**
+         * segs[i] 항목에서 조과 줄 1개를 지운다. 사용자가 덧붙인 사진·글이 남아 있으면
+         * 그 내용은 보존하고, 헤더와 조과 줄뿐이던 항목이면 항목째 지운다(카운터 초기화와 같은 보호).
+         */
+        private fun dropCatchLine(segs: MutableList<String>, i: Int, match: (String) -> Boolean) {
+            val lines = segs[i].lines().toMutableList()
+            val at = lines.indexOfFirst(match)
+            if (at >= 0) lines.removeAt(at)
+            val hasContent = lines.any { l ->
+                val t = l.trim()
+                t.isNotEmpty() && !t.startsWith("### ")
+            }
+            if (hasContent) segs[i] = lines.joinToString("\n") else segs.removeAt(i)
         }
 
         /** 어종 무관: 그날 파일에서 가장 최근 조과 항목 1건(🎣 포함 블록) 제거. */
@@ -599,7 +614,7 @@ class CatchLogService : Service() {
                 if (segs[i].lineSequence().any { it.trim().startsWith("- 🎣 ") }) removeAt = i
             }
             if (removeAt >= 0) {
-                segs.removeAt(removeAt)
+                dropCatchLine(segs, removeAt) { it.trim().startsWith("- 🎣 ") }
                 writeMd(context, segs.joinToString("\n---\n"))
             }
         }

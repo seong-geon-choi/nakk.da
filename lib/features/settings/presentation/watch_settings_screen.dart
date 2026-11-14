@@ -188,7 +188,8 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
                 // '계속 표시'일 때만 세부 설정.
                 if (_keepOn) ...[
                   ListTile(
-                    contentPadding: const EdgeInsets.only(left: 80, right: 16),
+                    contentPadding: const EdgeInsets.only(left: 72, right: 16),
+                    leading: const Icon(Icons.timer_outlined),
                     title: const Text('요약 화면으로 바뀌기까지'),
                     trailing: DropdownButton<int>(
                       value: _dimIdleSec,
@@ -205,11 +206,12 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
                   ),
                   if (_dimIdleSec > 0) ...[
                     ListTile(
-                      contentPadding: const EdgeInsets.only(left: 80, right: 16),
+                      contentPadding: const EdgeInsets.only(left: 72, right: 16),
+                      leading: const Icon(Icons.brightness_low_outlined),
                       title: Text('요약 화면 밝기 $_dimLevel%'),
                     ),
                     Padding(
-                      padding: const EdgeInsets.only(left: 64),
+                      padding: const EdgeInsets.only(left: 96),
                       child: Slider(
                         value: _dimLevel.toDouble(),
                         min: 1,
@@ -219,6 +221,29 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
                         onChanged: (v) => setState(() => _dimLevel = v.round()),
                         onChangeEnd: (v) => _save({'dim_level': v.round()}),
                       ),
+                    ),
+                    // 요약 화면에 표시할 항목(요약 화면이 나오는 '계속 표시'에 종속).
+                    SwitchListTile(
+                      contentPadding: const EdgeInsets.only(left: 72, right: 16),
+                      secondary: const Icon(Icons.schedule),
+                      title: const Text('시계 표시'),
+                      subtitle: const Text('요약 화면 위쪽에 현재 시각'),
+                      value: _showClock,
+                      onChanged: (v) {
+                        setState(() => _showClock = v);
+                        _save({'show_clock': v});
+                      },
+                    ),
+                    SwitchListTile(
+                      contentPadding: const EdgeInsets.only(left: 72, right: 16),
+                      secondary: const Icon(Icons.hourglass_bottom),
+                      title: const Text('마지막 조과 경과 시간'),
+                      subtitle: const Text('요약 화면 아래쪽에 예: 12분 전'),
+                      value: _showElapsed,
+                      onChanged: (v) {
+                        setState(() => _showElapsed = v);
+                        _save({'show_elapsed': v});
+                      },
                     ),
                   ],
                 ],
@@ -247,34 +272,6 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
                       onChangeEnd: (v) => _save({'bright_on': v.round()}),
                     ),
                   ),
-                const _Header('요약 화면'),
-                const Padding(
-                  padding: EdgeInsets.fromLTRB(16, 0, 16, 4),
-                  child: Text(
-                    '화면이 어두워지거나 꺼졌을 때 보이는 화면입니다.',
-                    style: TextStyle(fontSize: 12, color: Colors.grey),
-                  ),
-                ),
-                SwitchListTile(
-                  secondary: const Icon(Icons.schedule),
-                  title: const Text('시계 표시'),
-                  subtitle: const Text('현재 시각을 위쪽에 표시합니다'),
-                  value: _showClock,
-                  onChanged: (v) {
-                    setState(() => _showClock = v);
-                    _save({'show_clock': v});
-                  },
-                ),
-                SwitchListTile(
-                  secondary: const Icon(Icons.hourglass_bottom),
-                  title: const Text('마지막 조과 경과 시간'),
-                  subtitle: const Text('예: 마지막 조과 12분 전'),
-                  value: _showElapsed,
-                  onChanged: (v) {
-                    setState(() => _showElapsed = v);
-                    _save({'show_elapsed': v});
-                  },
-                ),
                 const _Header('카운터'),
                 ListTile(
                   leading: const Icon(Icons.palette_outlined),
