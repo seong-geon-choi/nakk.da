@@ -18,7 +18,7 @@ object WatchSettings {
     // 워치와 동일한 기본값.
     private val INT_DEFAULTS = linkedMapOf(
         "bright_on" to 0,      // 켜짐 밝기 %(0=시스템 밝기 따름, 10~100)
-        "dim_level" to 10,     // 어두울 때 밝기 %(1~50)
+        "dim_level" to 30,     // 어두울 때 밝기 %(1~50, 체감 기준)
         "dim_idle_sec" to 15,  // 어둡게 되기까지 초(0=어둡게 안 함)
         "start_page" to 1,     // 시작 화면(0=그래프, 1=카운터, 2=카메라)
     )

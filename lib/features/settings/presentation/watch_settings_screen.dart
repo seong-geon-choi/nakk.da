@@ -43,7 +43,7 @@ class WatchSettingsScreen extends StatefulWidget {
 class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
   bool _loading = true;
   int _brightOn = 0;
-  int _dimLevel = 10;
+  int _dimLevel = 30;
   int _dimIdleSec = 15;
   bool _keepOn = false;
   bool _ecoColors = false;
@@ -65,7 +65,7 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
     if (!mounted) return;
     setState(() {
       _brightOn = (m['bright_on'] as int?) ?? 0;
-      _dimLevel = (m['dim_level'] as int?) ?? 10;
+      _dimLevel = (m['dim_level'] as int?) ?? 30;
       _dimIdleSec = (m['dim_idle_sec'] as int?) ?? 15;
       _keepOn = (m['keep_on'] as bool?) ?? false;
       _ecoColors = (m['eco_colors'] as bool?) ?? false;

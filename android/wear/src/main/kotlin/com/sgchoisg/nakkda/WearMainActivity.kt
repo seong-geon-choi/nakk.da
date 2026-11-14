@@ -25,6 +25,7 @@ import android.os.VibratorManager
 import android.view.PixelCopy
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.NotificationCompat
@@ -288,6 +289,15 @@ class WearMainActivity : ComponentActivity() {
         loadSettings()
         applyKeepOn()
         startOngoing()
+        // 뒤로 버튼(물리 버튼·스와이프)으로 앱을 벗어나면 폰 카메라도 닫는다. 기본 뒤로 동작은 그대로.
+        onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                closePhoneCamera()
+                isEnabled = false
+                onBackPressedDispatcher.onBackPressed()
+                isEnabled = true
+            }
+        })
         val startPage = prefs.getInt("start_page", 1).coerceIn(0, 2)
         setContent {
             MaterialTheme {
@@ -533,8 +543,8 @@ class WearMainActivity : ComponentActivity() {
     /** 창 밝기를 낮추거나(어둡게) 기본값으로 되돌린다(창 단위라 시스템 설정은 불변). */
     private fun applyDim(dim: Boolean) {
         val target = when {
-            dim -> dimLevel / 100f
-            brightOn > 0 -> brightOn / 100f
+            dim -> perceivedToLinear(dimLevel)
+            brightOn > 0 -> perceivedToLinear(brightOn)
             else -> WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
         }
         val lp = window.attributes
@@ -542,6 +552,17 @@ class WearMainActivity : ComponentActivity() {
             lp.screenBrightness = target
             window.attributes = lp
         }
+    }
+
+    /**
+     * 설정 %(체감 밝기)를 창 밝기(백라이트 선형값)로 변환 — 시스템 밝기 슬라이더와 같은 HLG 감마 곡선.
+     * 선형으로 넣으면 30~100%가 모두 '꽤 밝음'으로 보여 차이를 느끼기 어렵다(예: 50% → 약 0.08).
+     */
+    private fun perceivedToLinear(pct: Int): Float {
+        val v = pct / 100f
+        val r = if (v <= 0.5f) (v / 0.5f) * (v / 0.5f)
+        else kotlin.math.exp((v - 0.55991073f) / 0.17883277f) + 0.28466892f
+        return (r / 12f).coerceIn(0.004f, 1f)
     }
 
     /** 밝기를 원래대로 복원하고 유휴 타이머를 재시작(dimIdleSec 후 다시 어둡게).
@@ -940,6 +961,19 @@ class WearMainActivity : ComponentActivity() {
     /** 카메라 페이지에서 빠져나올 때 폰 카메라 화면 닫기를 요청. */
     private fun sendCameraClose() = sendToPhone(PATH_CAMERA_CLOSE)
 
+    /** 폰 카메라가 열려 있으면 닫는다(앱을 벗어날 때). 화면 꺼짐만으로는 닫지 않는다. */
+    private fun closePhoneCamera() {
+        if (!cameraLaunched) return
+        sendCameraClose()
+        cameraLaunched = false
+    }
+
+    // 홈(물리 버튼)으로 앱을 벗어날 때 호출 — 화면 꺼짐에서는 호출되지 않는다.
+    override fun onUserLeaveHint() {
+        super.onUserLeaveHint()
+        closePhoneCamera()
+    }
+
     /** 셔터: [delaySec]초 뒤 촬영(0이면 즉시). 폰이 카운트다운 후 촬영한다. */
     private fun sendCameraShoot(delaySec: Int) =
         sendToPhone(PATH_CAMERA_SHOOT, delaySec.toString().toByteArray())
@@ -1015,7 +1049,7 @@ class WearMainActivity : ComponentActivity() {
         private const val FLIP_GAP_MS = 320L
         // 워치 설정 기본값(폰 WatchSettings와 동일). 유사 AOD: 조작이 없으면 이 시간 후 어둡게.
         private const val DEF_BRIGHT_ON = 0       // 0=시스템 밝기 따름
-        private const val DEF_DIM_LEVEL = 10      // 어두울 때 밝기 10%
+        private const val DEF_DIM_LEVEL = 30      // 어두울 때 밝기 30%(체감 기준)
         private const val DEF_DIM_IDLE_SEC = 15
     }
 }
