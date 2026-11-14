@@ -23,10 +23,11 @@ object WatchSettings {
         "start_page" to 1,     // 시작 화면(0=그래프, 1=카운터, 2=카메라)
     )
     private val BOOL_DEFAULTS = linkedMapOf(
-        "keep_on" to true,     // 화면 항상 켜두기
+        "keep_on" to false,    // 화면 항상 켜두기(기본 끔 — 켜두면 시간당 약 30% 배터리 소모)
         "vibrate" to false,    // 카운트 시 진동
         "show_clock" to true,  // 요약 화면에 시계 표시
         "show_elapsed" to true, // 요약 화면에 마지막 조과 경과 시간 표시
+        "eco_colors" to false, // 카운터 절전 색상(배경 어둡게)
     )
     private val COLOR_KEYS = listOf("color_0", "color_1")
 

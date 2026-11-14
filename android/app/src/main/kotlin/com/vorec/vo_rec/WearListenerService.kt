@@ -24,7 +24,7 @@ import com.google.android.gms.wearable.WearableListenerService
  * - /nakkda/settings/color, payload="side,idx"  → 워치에서 바꾼 카운터 색을 폰 설정에 반영
  * - /nakkda/count/reset                        → 오늘 조과 기록 전체 삭제(워치 '기록 초기화')
  * - /nakkda/screen/save, payload=이미지 바이트   → 워치 화면을 갤러리에 저장 + 오늘 메모에 첨부
- * - /nakkda/fishing/end                        → 오늘 메모에 조과 요약(수 + 그래프 이미지) 기록
+ * - /nakkda/fishing/end, payload=카운터 캡처   → 오늘 메모에 카운터 화면 + 조과 요약(수 + 그래프 이미지) 기록
  *
  * 세션이 실행 중이면 포그라운드 서비스(알림/TTS/위치)에 명령을 전달한다. 세션이 없으면
  * 포그라운드 서비스를 백그라운드에서 시작할 수 없으므로(안드로이드 제한), 워치 카운트를
@@ -38,7 +38,11 @@ class WearListenerService : WearableListenerService() {
             PATH_COUNT_ADD -> forward(CatchLogService.ACTION_ADD, parseIndex(event.data))
             PATH_COUNT_REMOVE -> forward(CatchLogService.ACTION_REMOVE, parseIndex(event.data))
             PATH_STOP_SOUND -> forward(CatchLogService.ACTION_STOP_SOUND, -1)
-            PATH_STATE_REQUEST -> CatchLogService.pushStateToWatch(this)
+            PATH_STATE_REQUEST -> {
+                CatchLogService.pushStateToWatch(this)
+                // 워치 앱 진입 때 설정도 다시 보내, 폰 기본값 변경(앱 업데이트)이 워치에 반영되게.
+                WatchSettings.push(this)
+            }
             PATH_CHART_REQUEST -> CatchLogService.pushChartStateToWatch(this)
             PATH_CAMERA_OPEN -> launchCamera()
             PATH_CAMERA_CLOSE ->
@@ -51,7 +55,7 @@ class WearListenerService : WearableListenerService() {
             PATH_SETTINGS_COLOR -> WatchSettings.setColorFromWatch(this, event.data)
             PATH_COUNT_RESET -> forward(CatchLogService.ACTION_CLEAR_ALL, -1)
             PATH_SCREEN_SAVE -> saveWatchScreen(event.data)
-            PATH_FISHING_END -> CatchSummary.write(this, CatchSummary.today())
+            PATH_FISHING_END -> CatchSummary.write(this, CatchSummary.today(), event.data)
         }
     }
 

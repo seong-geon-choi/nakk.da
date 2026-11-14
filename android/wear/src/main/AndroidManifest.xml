@@ -4,6 +4,8 @@
     <uses-permission android:name="android.permission.WAKE_LOCK"/>
     <!-- 카운트 시 진동(폰 '워치 설정'에서 켜면). -->
     <uses-permission android:name="android.permission.VIBRATE"/>
+    <!-- Ongoing Activity(watch face "in progress" icon) notification. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
 
     <application
         android:label="@string/app_name"
@@ -24,6 +26,7 @@
         <activity
             android:name=".WearMainActivity"
             android:exported="true"
+            android:launchMode="singleTask"
             android:theme="@style/WearAppTheme.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>

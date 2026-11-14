@@ -1,6 +1,12 @@
 package com.sgchoisg.nakkda
 
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.SharedPreferences
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -19,6 +25,10 @@ import android.view.PixelCopy
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.app.NotificationCompat
+import androidx.wear.ongoing.OngoingActivity
+import androidx.wear.ongoing.Status
 import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Spacer
@@ -82,6 +92,8 @@ import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material.MaterialTheme
@@ -152,11 +164,13 @@ class WearMainActivity : ComponentActivity() {
     private var brightOn = DEF_BRIGHT_ON      // 켜짐 밝기 %(0=시스템 밝기 따름)
     private var dimLevel = DEF_DIM_LEVEL      // 어두울 때 밝기 %
     private var dimIdleSec = DEF_DIM_IDLE_SEC // 어둡게 되기까지 초(0=어둡게 안 함)
-    private var keepOn = true                 // 화면 항상 켜두기
+    private var keepOn = false                // 화면 항상 켜두기(기본 끔 — 배터리)
     private var vibrate = false               // 카운트 시 진동
     // 요약 화면(AmbientOverlay) 시계·마지막 조과 경과 시간 표시.
     private var showClock by mutableStateOf(true)
     private var showElapsed by mutableStateOf(true)
+    // 절전 색상: 카운터 배경을 어둡게(OLED는 밝은 면적만큼 전력 소모).
+    private var ecoColors by mutableStateOf(false)
     // 마지막 조과 시각(epoch ms, 0=없음/모름). 폰이 오늘 메모 기준으로 push, +1은 즉시 반영.
     private var lastCatchAt by mutableStateOf(0L)
     // 요약 화면 표시용 현재 시각 — 1분마다(앰비언트에선 onUpdateAmbient로) 갱신.
@@ -187,13 +201,15 @@ class WearMainActivity : ComponentActivity() {
     private var animateFlip by mutableStateOf(false)
     // 색상 그리드 피커가 열린 영역(null=닫힘, 0=좌, 1=우).
     private var pickerSide by mutableStateOf<Int?>(null)
-    // 중앙 길게 누르기 메뉴(화면 저장 / 기록 초기화) + 초기화 확인 단계.
+    // 중앙 길게 누르기 메뉴(카운터 캡처 / 카운터 초기화 / 낚시 종료) + 초기화 확인 단계.
     private var menuOpen by mutableStateOf(false)
     private var confirmReset by mutableStateOf(false)
-    // 메뉴에 '기록 초기화'를 보일지(카운터=보임, 그래프=저장만).
+    // 메뉴에 '카운터 초기화'를 보일지(카운터=보임, 그래프=캡처만).
     private var menuAllowReset by mutableStateOf(true)
     // 짧은 안내 문구(저장·초기화 결과). 잠시 뒤 자동으로 사라짐.
     private var toast by mutableStateOf<String?>(null)
+    // 낚시 종료: 카운터 화면 캡처 대기(캡처 이미지를 요약과 함께 폰에 보냄).
+    private var endCapturePending by mutableStateOf(false)
     private val toastRunnable = Runnable { toast = null }
     // 즉시 전송용 연결 노드 캐시(매 탭마다 조회하지 않도록).
     private var cachedNodes: List<String> = emptyList()
@@ -227,13 +243,14 @@ class WearMainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         // 화면이 꺼져도 앱을 활성으로 유지(앰비언트) — 다시 켜면 카운터 화면이 그대로 유지된다.
         lifecycle.addObserver(ambientObserver)
-        // 갤럭시 워치는 화면이 꺼지면 타임아웃 후 서드파티 앱을 워치페이스로 강제 복귀시킨다
-        // (액티비티 Ambient 오프로드 미지원). 그래서 화면을 계속 켜두고, 유휴 시 창 밝기만
-        // 낮추는 '유사 AOD'(applyDim/wakeBright)로 카운터를 유지한다(배터리 완화).
-        // (폰 설정 '화면 항상 켜두기'를 끄면 해제 → 시스템 화면 시간 초과 후 워치페이스로 복귀.)
+        // 기본은 시스템 화면 시간 초과에 맡긴다(배터리 — 화면 켜둠은 시간당 약 30% 소모).
+        // AOD가 켜져 있으면 앰비언트 요약 화면, 꺼져 있으면 화면이 꺼지고, 워치페이스로 돌아가도
+        // '진행 중' 아이콘(Ongoing Activity)을 눌러 바로 돌아온다.
+        // 폰 설정 '화면 항상 켜두기'를 켜면 화면을 켜두고 유휴 시 창 밝기만 낮추는 '유사 AOD'로 동작.
         prefs = getSharedPreferences("wear_counter", Context.MODE_PRIVATE)
         loadSettings()
         applyKeepOn()
+        startOngoing()
         val startPage = prefs.getInt("start_page", 1).coerceIn(0, 2)
         setContent {
             MaterialTheme {
@@ -266,6 +283,7 @@ class WearMainActivity : ComponentActivity() {
                                     names = names,
                                     counts = counts,
                                     colorIdx = colorIdx,
+                                    eco = ecoColors,
                                     animate = animateFlip,
                                     onPlus = { i -> bump(i, 1, PATH_ADD) },
                                     onMinus = { i -> bump(i, -1, PATH_REMOVE) },
@@ -343,6 +361,22 @@ class WearMainActivity : ComponentActivity() {
                                 delay(60_000L - clockNow % 60_000L)
                             }
                         }
+                    }
+                    LaunchedEffect(endCapturePending) {
+                        if (!endCapturePending) return@LaunchedEffect
+                        wakeBright()
+                        if (pagerState.currentPage != 1) pagerState.scrollToPage(1)
+                        delay(350) // 메뉴가 사라진 카운터 화면이 그려질 때까지
+                        endCapturePending = false
+                        captureScreen(
+                            path = PATH_FISHING_END,
+                            okMsg = "조과 요약을 메모에 저장",
+                            // 캡처 실패해도 요약(그래프)은 저장.
+                            onFail = {
+                                sendToPhone(PATH_FISHING_END)
+                                showToast("조과 요약을 메모에 저장")
+                            },
+                        )
                     }
                     LaunchedEffect(pagerState) {
                         var prev = pagerState.currentPage
@@ -437,7 +471,8 @@ class WearMainActivity : ComponentActivity() {
         brightOn = prefs.getInt("bright_on", DEF_BRIGHT_ON).coerceIn(0, 100)
         dimLevel = prefs.getInt("dim_level", DEF_DIM_LEVEL).coerceIn(1, 100)
         dimIdleSec = prefs.getInt("dim_idle_sec", DEF_DIM_IDLE_SEC).coerceAtLeast(0)
-        keepOn = prefs.getBoolean("keep_on", true)
+        keepOn = prefs.getBoolean("keep_on", false)
+        ecoColors = prefs.getBoolean("eco_colors", false)
         vibrate = prefs.getBoolean("vibrate", false)
         showClock = prefs.getBoolean("show_clock", true)
         showElapsed = prefs.getBoolean("show_elapsed", true)
@@ -455,7 +490,7 @@ class WearMainActivity : ComponentActivity() {
         for (k in listOf("bright_on", "dim_level", "dim_idle_sec", "start_page", "color_0", "color_1")) {
             if (map.containsKey(k)) e.putInt(k, map.getInt(k))
         }
-        for (k in listOf("keep_on", "vibrate", "show_clock", "show_elapsed")) {
+        for (k in listOf("keep_on", "vibrate", "show_clock", "show_elapsed", "eco_colors")) {
             if (map.containsKey(k)) e.putBoolean(k, map.getBoolean(k))
         }
         e.apply()
@@ -502,20 +537,25 @@ class WearMainActivity : ComponentActivity() {
         dimHandler.postDelayed({ captureScreen() }, 300)
     }
 
-    private fun captureScreen() {
+    /** 지금 화면을 캡처해 path로 폰에 보낸다. 캡처 실패 시 onFail(기본: 실패 안내). */
+    private fun captureScreen(
+        path: String = PATH_SCREEN_SAVE,
+        okMsg: String = "폰 갤러리·메모에 저장",
+        onFail: () -> Unit = { showToast("저장 실패") },
+    ) {
         val view = window.decorView
-        if (view.width <= 0 || view.height <= 0) return
+        if (view.width <= 0 || view.height <= 0) { onFail(); return }
         val bmp = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
         try {
             PixelCopy.request(window, bmp, { result ->
                 if (result != PixelCopy.SUCCESS) {
-                    showToast("저장 실패")
+                    onFail()
                     return@request
                 }
-                Thread { sendScreenToPhone(encodeScreen(bmp)) }.start()
+                Thread { sendScreenToPhone(encodeScreen(bmp), path, okMsg) }.start()
             }, Handler(Looper.getMainLooper()))
         } catch (_: Exception) {
-            showToast("저장 실패")
+            onFail()
         }
     }
 
@@ -543,7 +583,7 @@ class WearMainActivity : ComponentActivity() {
         }.toByteArray()
     }
 
-    private fun sendScreenToPhone(bytes: ByteArray) {
+    private fun sendScreenToPhone(bytes: ByteArray, path: String, okMsg: String) {
         if (bytes.size > MAX_MESSAGE_BYTES) {
             runOnUiThread { showToast("저장 실패") }
             return
@@ -555,8 +595,8 @@ class WearMainActivity : ComponentActivity() {
                     return@addOnSuccessListener
                 }
                 cachedNodes = ns.map { it.id }
-                for (n in ns) messageClient.sendMessage(n.id, PATH_SCREEN_SAVE, bytes)
-                showToast("폰 갤러리·메모에 저장")
+                for (n in ns) messageClient.sendMessage(n.id, path, bytes)
+                showToast(okMsg)
             }
             .addOnFailureListener { showToast("폰 연결 안 됨") }
     }
@@ -570,7 +610,7 @@ class WearMainActivity : ComponentActivity() {
         lastCatchAt = 0L
         lastBumpAt = SystemClock.elapsedRealtime()
         sendToPhone(PATH_COUNT_RESET)
-        showToast("기록 초기화")
+        showToast("카운터 초기화")
     }
 
     /** 낚시 종료 → 폰이 오늘 메모에 조과 요약(수 + 그래프 이미지)을 기록. 조과 0이면 보내지 않음. */
@@ -581,8 +621,60 @@ class WearMainActivity : ComponentActivity() {
             showToast("조과 없음 · 요약 생략")
             return
         }
-        sendToPhone(PATH_FISHING_END)
-        showToast("조과 요약을 메모에 저장")
+        // 카운터 화면으로 이동해 캡처한 뒤, 그 이미지를 담아 요약 요청(아래 LaunchedEffect).
+        endCapturePending = true
+    }
+
+    private val notifPermission =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            if (granted) startOngoing()
+        }
+
+    /** 워치페이스에 '진행 중' 아이콘(Ongoing Activity) — 누르면 낚.다로 바로 복귀. 알림 권한 필요. */
+    private fun startOngoing() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            if (!prefs.getBoolean("notif_asked", false)) {
+                prefs.edit().putBoolean("notif_asked", true).apply()
+                notifPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+            }
+            return
+        }
+        try {
+            val nm = getSystemService(NotificationManager::class.java) ?: return
+            nm.createNotificationChannel(
+                NotificationChannel(CH_ONGOING, "낚시 중", NotificationManager.IMPORTANCE_LOW))
+            val pi = PendingIntent.getActivity(
+                this, 0,
+                Intent(this, WearMainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            val b = NotificationCompat.Builder(this, CH_ONGOING)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("낚.다")
+                .setContentText("낚시 중")
+                .setOngoing(true)
+                .setSilent(true)
+                .setCategory(NotificationCompat.CATEGORY_WORKOUT)
+                .setContentIntent(pi)
+            OngoingActivity.Builder(applicationContext, ONGOING_ID, b)
+                .setStaticIcon(R.mipmap.ic_launcher)
+                .setTouchIntent(pi)
+                .setStatus(Status.Builder().addTemplate("낚시 중").build())
+                .build()
+                .apply(applicationContext)
+            nm.notify(ONGOING_ID, b.build())
+        } catch (_: Exception) {}
+    }
+
+    override fun onDestroy() {
+        // 앱을 완전히 닫을 때만 '진행 중' 아이콘 제거(화면 꺼짐·워치페이스 복귀는 유지).
+        if (isFinishing) {
+            try { getSystemService(NotificationManager::class.java)?.cancel(ONGOING_ID) } catch (_: Exception) {}
+        }
+        super.onDestroy()
     }
 
     private fun showToast(msg: String) {
@@ -771,6 +863,8 @@ class WearMainActivity : ComponentActivity() {
         private const val PATH_COUNT_RESET = "/nakkda/count/reset"
         private const val PATH_SCREEN_SAVE = "/nakkda/screen/save"
         private const val PATH_FISHING_END = "/nakkda/fishing/end"
+        private const val CH_ONGOING = "nakkda_ongoing"
+        private const val ONGOING_ID = 1001
         // Data Layer 메시지 크기 한도(100KB)보다 약간 작게.
         private const val MAX_MESSAGE_BYTES = 95_000
         // 조작·push가 멈춘 뒤 이 시간이 지나야 권위값 반영을 시도(디바운스).
@@ -801,19 +895,27 @@ private fun ActionMenu(
         Modifier
             .fillMaxSize()
             .background(Color.Black.copy(alpha = 0.92f))
-            // 아래 카운터·페이지로 터치가 새지 않게 막는다.
-            .pointerInput(Unit) { detectTapGestures {} },
+            // 버튼 밖(빈 곳)을 누르면 닫힘 — 아래 카운터·페이지로 터치가 새지 않게도 막는다.
+            .pointerInput(Unit) { detectTapGestures { onDismiss() } },
         contentAlignment = Alignment.Center,
     ) {
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             if (!confirmReset) {
-                MenuButton("화면 저장", Color(0xFF1E88E5), onSave)
-                MenuButton("낚시 종료", Color(0xFF2E7D32), onEndFishing)
-                if (allowReset) MenuButton("기록 초기화", Color(0xFFC62828), onAskReset)
-                MenuButton("닫기", Color(0xFF455A64), onDismiss)
+                // 원형 화면에서 가장 넓은 가운데에 2행만 둔다(닫기 버튼 대신 빈 곳 탭).
+                // 1행: 캡처·초기화(카운터 화면), 그래프 화면에선 그래프 캡처만.
+                if (allowReset) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        MenuButton("카운터\n캡처", Color(0xFF1E88E5), onSave, width = 76.dp, height = 52.dp)
+                        MenuButton("카운터\n초기화", Color(0xFFC62828), onAskReset, width = 76.dp, height = 52.dp)
+                    }
+                } else {
+                    MenuButton("그래프 캡처", Color(0xFF1E88E5), onSave, width = 120.dp, height = 40.dp)
+                }
+                // 2행: 낚시 종료.
+                MenuButton("낚시 종료", Color(0xFF2E7D32), onEndFishing, width = 120.dp, height = 40.dp)
             } else {
                 Text(
                     "오늘 조과 기록을\n모두 삭제할까요?",
@@ -835,17 +937,31 @@ private fun ActionMenu(
 }
 
 @Composable
-private fun MenuButton(label: String, color: Color, onClick: () -> Unit) {
+private fun MenuButton(
+    label: String,
+    color: Color,
+    onClick: () -> Unit,
+    width: Dp = 132.dp,
+    height: Dp = 36.dp,
+    fontSize: TextUnit = 14.sp,
+) {
     Box(
         Modifier
-            .width(132.dp)
-            .height(36.dp)
+            .width(width)
+            .height(height)
             .clip(RoundedCornerShape(20.dp))
             .background(color)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
+        Text(
+            label,
+            color = Color.White,
+            fontSize = fontSize,
+            fontWeight = FontWeight.Bold,
+            textAlign = TextAlign.Center,
+            lineHeight = fontSize * 1.15f,
+        )
     }
 }
 
@@ -854,6 +970,7 @@ private fun CounterScreen(
     names: List<String>,
     counts: List<Int>,
     colorIdx: IntArray,
+    eco: Boolean,
     animate: Boolean,
     onPlus: (Int) -> Unit,
     onMinus: (Int) -> Unit,
@@ -878,6 +995,7 @@ private fun CounterScreen(
                 name = names[0],
                 count = counts.getOrElse(0) { 0 },
                 color = PALETTE[colorIdx.getOrElse(0) { 0 } % PALETTE.size],
+                eco = eco,
                 single = sides == 1,
                 animate = animate,
                 onPlus = { onPlus(0) },
@@ -890,6 +1008,7 @@ private fun CounterScreen(
                     name = names[1],
                     count = counts.getOrElse(1) { 0 },
                     color = PALETTE[colorIdx.getOrElse(1) { 1 } % PALETTE.size],
+                    eco = eco,
                     single = false,
                     animate = animate,
                     onPlus = { onPlus(1) },
@@ -898,7 +1017,7 @@ private fun CounterScreen(
                 )
             }
         }
-        // 정중앙 원형 영역 → 탭=재생 중 미디어 중지, 길게=메뉴(화면 저장/기록 초기화).
+        // 정중앙 원형 영역 → 탭=재생 중 미디어 중지, 길게=메뉴(카운터 캡처/초기화/낚시 종료).
         Box(
             Modifier.align(Alignment.Center).size(52.dp).clip(CircleShape).pointerInput(Unit) {
                 detectTapGestures(onTap = { onStop() }, onLongPress = { onMenu() })
@@ -913,6 +1032,7 @@ private fun CounterSide(
     name: String,
     count: Int,
     color: Color,
+    eco: Boolean,
     single: Boolean,
     animate: Boolean,
     onPlus: () -> Unit,
@@ -924,7 +1044,8 @@ private fun CounterSide(
     var plusMaxY by remember { mutableStateOf(Float.NaN) }
     Box(
         modifier
-            .background(color)
+            // 절전 색상이면 어종 색을 옅게 깔아(검정 위 22%) 구분만 유지하고 밝은 면적을 줄인다.
+            .background(if (eco) color.copy(alpha = 0.22f) else color)
             // 탭: 위~숫자영역 하단=+1 / 숫자영역 아래=−1, 길게누름=색상 순환.
             .pointerInput(Unit) {
                 detectTapGestures(
@@ -1129,7 +1250,8 @@ private fun CameraControls(onShoot: (Int) -> Unit, onFlip: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         Column(
-            Modifier.fillMaxSize().padding(vertical = 18.dp),
+            // 셔터를 아래쪽에 붙인다(하단 여백은 페이지 점만 피할 정도).
+            Modifier.fillMaxSize().padding(top = 18.dp, bottom = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
@@ -1143,7 +1265,7 @@ private fun CameraControls(onShoot: (Int) -> Unit, onFlip: () -> Unit) {
             // 셔터 버튼(아래)
             Box(
                 Modifier
-                    .size(96.dp)
+                    .size(77.dp) // 96dp에서 20% 축소
                     .clip(CircleShape)
                     .background(Color.White)
                     .pointerInput(Unit) {
@@ -1170,7 +1292,7 @@ private fun CameraControls(onShoot: (Int) -> Unit, onFlip: () -> Unit) {
                     },
                 contentAlignment = Alignment.Center,
             ) {
-                Box(Modifier.size(74.dp).clip(CircleShape).background(Color(0xFFD32F2F)))
+                Box(Modifier.size(59.dp).clip(CircleShape).background(Color(0xFFD32F2F)))
             }
         }
         // 길게 누르는 동안: 누적 초를 화면 가득 크게(애니메이션) 표시.

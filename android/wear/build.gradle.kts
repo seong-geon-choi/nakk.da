@@ -70,6 +70,8 @@ dependencies {
     implementation("androidx.wear.compose:compose-foundation:1.4.1")
     // 화면 꺼짐(앰비언트)에도 앱이 활성 상태로 유지되도록(워치페이스로 안 돌아감).
     implementation("androidx.wear:wear:1.3.0")
+    // Ongoing Activity: show an in-progress icon on the watch face to return to the app.
+    implementation("androidx.wear:wear-ongoing:1.0.0")
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.animation:animation")
     implementation("androidx.activity:activity-compose:1.9.3")

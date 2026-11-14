@@ -45,7 +45,8 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
   int _brightOn = 0;
   int _dimLevel = 10;
   int _dimIdleSec = 15;
-  bool _keepOn = true;
+  bool _keepOn = false;
+  bool _ecoColors = false;
   int _color0 = 0;
   int _color1 = 4;
   bool _vibrate = false;
@@ -66,7 +67,8 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
       _brightOn = (m['bright_on'] as int?) ?? 0;
       _dimLevel = (m['dim_level'] as int?) ?? 10;
       _dimIdleSec = (m['dim_idle_sec'] as int?) ?? 15;
-      _keepOn = (m['keep_on'] as bool?) ?? true;
+      _keepOn = (m['keep_on'] as bool?) ?? false;
+      _ecoColors = (m['eco_colors'] as bool?) ?? false;
       _color0 = (m['color_0'] as int?) ?? 0;
       _color1 = (m['color_1'] as int?) ?? 4;
       _vibrate = (m['vibrate'] as bool?) ?? false;
@@ -157,8 +159,10 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
                   secondary: const Icon(Icons.screen_lock_portrait_outlined),
                   title: const Text('화면 항상 켜두기'),
                   subtitle: Text(_keepOn
-                      ? '낚시 중 카운터 화면을 계속 표시합니다 (배터리 사용 증가)'
-                      : '워치 화면 시간이 지나면 꺼지고 워치페이스로 돌아갑니다'),
+                      ? '화면을 계속 켜두고, 일정 시간 조작이 없으면 어두운 요약 화면으로 바뀝니다 '
+                          '(배터리 소모 큼, 시간당 약 30%)'
+                      : '워치 화면 시간에 따라 꺼집니다(AOD면 요약 화면). '
+                          '워치페이스의 진행 중 아이콘으로 바로 돌아올 수 있습니다'),
                   value: _keepOn,
                   onChanged: (v) {
                     setState(() => _keepOn = v);
@@ -271,6 +275,16 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
                   subtitle: const Text('두 번째 어종'),
                   trailing: _colorDot(_color1),
                   onTap: () => _pickColor(1),
+                ),
+                SwitchListTile(
+                  secondary: const Icon(Icons.battery_saver_outlined),
+                  title: const Text('절전 색상'),
+                  subtitle: const Text('카운터 배경을 어둡게 해 화면 전력을 줄입니다'),
+                  value: _ecoColors,
+                  onChanged: (v) {
+                    setState(() => _ecoColors = v);
+                    _save({'eco_colors': v});
+                  },
                 ),
                 SwitchListTile(
                   secondary: const Icon(Icons.vibration),
