@@ -57,7 +57,10 @@ class _CameraLockHostState extends ConsumerState<_CameraLockHost> {
       final results = await Navigator.of(context).push<List<ShotResult>>(
         MaterialPageRoute(
             builder: (_) => CameraRulerScreen(
-                initialFront: widget.selfie, standalone: true)),
+                initialFront: widget.selfie,
+                standalone: true,
+                // 워치에서 연 카메라(셀카 인자)면 워치로 미리보기 전송.
+                watchPreview: widget.selfie)),
       );
       for (final r in results ?? const <ShotResult>[]) {
         await _queuePhoto(r);

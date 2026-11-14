@@ -28,7 +28,7 @@ const _kDimIdleOptions = <int, String>{
   15: '15초',
   30: '30초',
   60: '1분',
-  0: '어둡게 안 함',
+  0: '바꾸지 않음',
 };
 
 /// 폰에서 워치 낚.다 앱의 화면·카운터 설정을 관리한다.
@@ -136,7 +136,6 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final dimEnabled = _keepOn && _dimIdleSec > 0;
     return Scaffold(
       appBar: AppBar(title: const Text('워치 앱 설정')),
       body: _loading
@@ -155,84 +154,99 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
                   ),
                 ),
                 const _Header('화면'),
-                SwitchListTile(
-                  secondary: const Icon(Icons.screen_lock_portrait_outlined),
-                  title: const Text('화면 항상 켜두기'),
-                  subtitle: Text(_keepOn
-                      ? '화면을 계속 켜두고, 일정 시간 조작이 없으면 어두운 요약 화면으로 바뀝니다 '
-                          '(배터리 소모 큼, 시간당 약 30%)'
-                      : '워치 화면 시간에 따라 꺼집니다(AOD면 요약 화면). '
-                          '워치페이스의 진행 중 아이콘으로 바로 돌아올 수 있습니다'),
-                  value: _keepOn,
+                // 화면 모드: 절전(시스템 화면 시간에 따라 꺼짐) / 계속 표시(켜둔 채 요약 화면으로).
+                // 제목 아래로 선택지를 들여써 한 메뉴의 설정임을 드러낸다.
+                const ListTile(
+                  leading: Icon(Icons.screen_lock_portrait_outlined),
+                  title: Text('화면 모드'),
+                ),
+                RadioGroup<bool>(
+                  groupValue: _keepOn,
                   onChanged: (v) {
+                    if (v == null) return;
                     setState(() => _keepOn = v);
                     _save({'keep_on': v});
                   },
+                  child: const Column(
+                    children: [
+                      RadioListTile<bool>(
+                        contentPadding: EdgeInsets.only(left: 32, right: 16),
+                        title: Text('절전 (추천)'),
+                        subtitle: Text('조작하지 않으면 화면이 꺼집니다. 손목을 들면 다시 켜집니다.'),
+                        value: false,
+                      ),
+                      RadioListTile<bool>(
+                        contentPadding: EdgeInsets.only(left: 32, right: 16),
+                        title: Text('계속 표시'),
+                        subtitle: Text('화면을 끄지 않고, 잠시 뒤 어두운 요약 화면(시계·조과 수)으로 '
+                            '바뀝니다. 배터리 사용 많음.'),
+                        value: true,
+                      ),
+                    ],
+                  ),
                 ),
+                // '계속 표시'일 때만 세부 설정.
+                if (_keepOn) ...[
+                  ListTile(
+                    contentPadding: const EdgeInsets.only(left: 80, right: 16),
+                    title: const Text('요약 화면으로 바뀌기까지'),
+                    trailing: DropdownButton<int>(
+                      value: _dimIdleSec,
+                      onChanged: (v) {
+                        if (v == null) return;
+                        setState(() => _dimIdleSec = v);
+                        _save({'dim_idle_sec': v});
+                      },
+                      items: [
+                        for (final e in _kDimIdleOptions.entries)
+                          DropdownMenuItem(value: e.key, child: Text(e.value)),
+                      ],
+                    ),
+                  ),
+                  if (_dimIdleSec > 0) ...[
+                    ListTile(
+                      contentPadding: const EdgeInsets.only(left: 80, right: 16),
+                      title: Text('요약 화면 밝기 $_dimLevel%'),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(left: 64),
+                      child: Slider(
+                        value: _dimLevel.toDouble(),
+                        min: 1,
+                        max: 50,
+                        divisions: 49,
+                        label: '$_dimLevel%',
+                        onChanged: (v) => setState(() => _dimLevel = v.round()),
+                        onChangeEnd: (v) => _save({'dim_level': v.round()}),
+                      ),
+                    ),
+                  ],
+                ],
+                // 화면 밝기: 워치 설정 따름 / 직접 지정(화면 모드와 별개).
                 SwitchListTile(
-                  secondary: const Icon(Icons.brightness_auto_outlined),
-                  title: const Text('시스템 밝기 따름'),
-                  subtitle: const Text('끄면 앱 화면 밝기를 직접 지정합니다'),
-                  value: _brightOn == 0,
+                  secondary: const Icon(Icons.brightness_6_outlined),
+                  title: const Text('화면 밝기 직접 지정'),
+                  subtitle: const Text('끄면 워치 밝기 설정을 따릅니다'),
+                  value: _brightOn > 0,
                   onChanged: (v) {
-                    final next = v ? 0 : 70;
+                    final next = v ? 70 : 0;
                     setState(() => _brightOn = next);
                     _save({'bright_on': next});
                   },
                 ),
-                if (_brightOn > 0) ...[
-                  ListTile(
-                    leading: const Icon(Icons.brightness_6_outlined),
-                    title: Text('화면 밝기 $_brightOn%'),
+                if (_brightOn > 0)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 56),
+                    child: Slider(
+                      value: _brightOn.toDouble(),
+                      min: 10,
+                      max: 100,
+                      divisions: 9,
+                      label: '$_brightOn%',
+                      onChanged: (v) => setState(() => _brightOn = v.round()),
+                      onChangeEnd: (v) => _save({'bright_on': v.round()}),
+                    ),
                   ),
-                  Slider(
-                    value: _brightOn.toDouble(),
-                    min: 10,
-                    max: 100,
-                    divisions: 9,
-                    label: '$_brightOn%',
-                    onChanged: (v) => setState(() => _brightOn = v.round()),
-                    onChangeEnd: (v) => _save({'bright_on': v.round()}),
-                  ),
-                ],
-                ListTile(
-                  enabled: _keepOn,
-                  leading: const Icon(Icons.timer_outlined),
-                  title: const Text('어둡게 되기까지'),
-                  subtitle: Text(_keepOn
-                      ? '조작이 없으면 화면을 어둡게 해 배터리를 아낍니다'
-                      : '화면 항상 켜두기를 켜야 사용할 수 있습니다'),
-                  trailing: DropdownButton<int>(
-                    value: _dimIdleSec,
-                    onChanged: _keepOn
-                        ? (v) {
-                            if (v == null) return;
-                            setState(() => _dimIdleSec = v);
-                            _save({'dim_idle_sec': v});
-                          }
-                        : null,
-                    items: [
-                      for (final e in _kDimIdleOptions.entries)
-                        DropdownMenuItem(value: e.key, child: Text(e.value)),
-                    ],
-                  ),
-                ),
-                ListTile(
-                  enabled: dimEnabled,
-                  leading: const Icon(Icons.brightness_low_outlined),
-                  title: Text('어두울 때 밝기 $_dimLevel%'),
-                ),
-                Slider(
-                  value: _dimLevel.toDouble(),
-                  min: 1,
-                  max: 50,
-                  divisions: 49,
-                  label: '$_dimLevel%',
-                  onChanged: dimEnabled
-                      ? (v) => setState(() => _dimLevel = v.round())
-                      : null,
-                  onChangeEnd: (v) => _save({'dim_level': v.round()}),
-                ),
                 const _Header('요약 화면'),
                 const Padding(
                   padding: EdgeInsets.fromLTRB(16, 0, 16, 4),

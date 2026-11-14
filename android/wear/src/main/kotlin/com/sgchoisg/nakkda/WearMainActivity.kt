@@ -9,6 +9,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.SharedPreferences
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.PorterDuff
@@ -86,6 +87,10 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.Image
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.layout.boundsInParent
@@ -102,6 +107,7 @@ import com.google.android.gms.wearable.DataClient
 import com.google.android.gms.wearable.DataEvent
 import com.google.android.gms.wearable.DataMap
 import com.google.android.gms.wearable.DataMapItem
+import com.google.android.gms.wearable.MessageClient
 import com.google.android.gms.wearable.Wearable
 import androidx.wear.ambient.AmbientLifecycleObserver
 import kotlinx.coroutines.delay
@@ -208,6 +214,29 @@ class WearMainActivity : ComponentActivity() {
     private var menuAllowReset by mutableStateOf(true)
     // 짧은 안내 문구(저장·초기화 결과). 잠시 뒤 자동으로 사라짐.
     private var toast by mutableStateOf<String?>(null)
+    // 다른 페이지로 이동 요청(예: 폰 카메라 닫힘 → 카운터). Compose에서 처리 후 null로.
+    private var pageRequest by mutableStateOf<Int?>(null)
+    // 폰 카메라 미리보기 최신 프레임(폰이 초당 약 4장 JPEG로 보냄). null=아직 없음.
+    private var previewFrame by mutableStateOf<ImageBitmap?>(null)
+    // 카메라 미리보기 중 화면 켜둠 상한(조작 없으면 2분 뒤 해제 → 화면 꺼지면 미리보기도 멈춤).
+    private val cameraIdleRunnable = Runnable { applyKeepOn() }
+    private val messageListener = MessageClient.OnMessageReceivedListener { ev ->
+        when (ev.path) {
+            PATH_CAMERA_FRAME -> {
+                val bmp = try { BitmapFactory.decodeByteArray(ev.data, 0, ev.data.size) } catch (_: Exception) { null }
+                if (bmp != null) runOnUiThread { if (cameraLaunched) previewFrame = bmp.asImageBitmap() }
+            }
+            // 폰에서 카메라를 닫음(뒤로가기·카운터로 등) → 카운터(홈) 화면으로 돌아감.
+            PATH_CAMERA_CLOSED -> runOnUiThread {
+                if (cameraLaunched) {
+                    cameraLaunched = false
+                    previewFrame = null
+                    pageRequest = 1
+                    showToast("폰 카메라 닫힘")
+                }
+            }
+        }
+    }
     // 낚시 종료: 카운터 화면 캡처 대기(캡처 이미지를 요약과 함께 폰에 보냄).
     private var endCapturePending by mutableStateOf(false)
     private val toastRunnable = Runnable { toast = null }
@@ -314,6 +343,7 @@ class WearMainActivity : ComponentActivity() {
                             }
                             else -> CameraScreen(
                                 launched = cameraLaunched,
+                                frame = previewFrame,
                                 onLaunch = { cameraLaunched = true; sendCameraOpen() },
                                 onCancel = { scope.launch { pagerState.animateScrollToPage(1) } },
                                 onShoot = { delaySec -> sendCameraShoot(delaySec) },
@@ -378,6 +408,23 @@ class WearMainActivity : ComponentActivity() {
                             },
                         )
                     }
+                    // 카메라 페이지에서 폰 카메라 실행 중엔 미리보기를 보도록 화면을 켜둔다(최대 2분 무조작).
+                    val cameraActive = cameraLaunched && pagerState.currentPage == 2
+                    LaunchedEffect(cameraActive) {
+                        if (cameraActive) {
+                            keepOnForCamera()
+                        } else {
+                            dimHandler.removeCallbacks(cameraIdleRunnable)
+                            applyKeepOn()
+                            previewFrame = null
+                        }
+                    }
+                    LaunchedEffect(pageRequest) {
+                        val target = pageRequest ?: return@LaunchedEffect
+                        // 키(pageRequest)를 먼저 비우면 이 효과가 취소돼 스크롤이 안 된다 → 이동 후 비움.
+                        pagerState.animateScrollToPage(target)
+                        pageRequest = null
+                    }
                     LaunchedEffect(pagerState) {
                         var prev = pagerState.currentPage
                         snapshotFlow { pagerState.currentPage }.collect { page ->
@@ -400,6 +447,13 @@ class WearMainActivity : ComponentActivity() {
         super.onResume()
         wakeBright() // 화면 밝게 + 유휴(어둡게) 타이머 시작
         dataClient.addListener(dataListener)
+        messageClient.addListener(messageListener)
+        // 화면이 다시 켜졌고 폰 카메라가 열려 있으면 미리보기 재개.
+        if (cameraLaunched) {
+            // 꺼지기 전 마지막 프레임을 지워 '연결 끊김'으로 오인 표시되지 않게.
+            previewFrame = null
+            sendToPhone(PATH_CAMERA_PREVIEW, byteArrayOf(1))
+        }
         // 연결 노드 캐시 갱신(전송 지연 축소) + 진입 시 폰에 최신 어종·조과 상태 요청.
         // (폰에서 어종을 바꾼 뒤 앱을 안 열어 캐시된 state가 낡았을 수 있으므로 한 번 당겨온다.)
         Wearable.getNodeClient(this).connectedNodes.addOnSuccessListener { ns ->
@@ -435,12 +489,23 @@ class WearMainActivity : ComponentActivity() {
         dataClient.removeListener(dataListener)
         reconcileHandler.removeCallbacks(reconcileRunnable)
         dimHandler.removeCallbacks(dimRunnable)
+        messageClient.removeListener(messageListener)
+        // 화면이 꺼지면(앱 비가시) 폰 미리보기 전송 중지 — 배터리·블루투스 절약.
+        if (cameraLaunched) sendToPhone(PATH_CAMERA_PREVIEW, byteArrayOf(0))
     }
 
     // 모든 터치·키 입력에서 호출됨 — 밝기 복원 + 유휴 타이머 재시작.
     override fun onUserInteraction() {
         super.onUserInteraction()
         wakeBright()
+        if (cameraLaunched) keepOnForCamera()
+    }
+
+    /** 카메라 미리보기 중 화면 켜둠 — 조작할 때마다 2분 연장, 이후 원래 설정으로. */
+    private fun keepOnForCamera() {
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        dimHandler.removeCallbacks(cameraIdleRunnable)
+        dimHandler.postDelayed(cameraIdleRunnable, CAMERA_IDLE_MS)
     }
 
     /** 창 밝기를 낮추거나(어둡게) 기본값으로 되돌린다(창 단위라 시스템 설정은 불변). */
@@ -858,6 +923,10 @@ class WearMainActivity : ComponentActivity() {
         private const val PATH_CAMERA_CLOSE = "/nakkda/camera/close"
         private const val PATH_CAMERA_SHOOT = "/nakkda/camera/shoot"
         private const val PATH_CAMERA_FLIP = "/nakkda/camera/flip"
+        private const val PATH_CAMERA_PREVIEW = "/nakkda/camera/preview" // payload 1=전송, 0=중지
+        private const val PATH_CAMERA_FRAME = "/nakkda/camera/frame"     // 폰→워치 미리보기 JPEG
+        private const val PATH_CAMERA_CLOSED = "/nakkda/camera/closed"   // 폰→워치 카메라 닫힘
+        private const val CAMERA_IDLE_MS = 120_000L
         private const val PATH_SETTINGS = "/nakkda/settings"
         private const val PATH_SETTINGS_COLOR = "/nakkda/settings/color"
         private const val PATH_COUNT_RESET = "/nakkda/count/reset"
@@ -1197,6 +1266,7 @@ private fun ColorPicker(
 @Composable
 private fun CameraScreen(
     launched: Boolean,
+    frame: ImageBitmap?,
     onLaunch: () -> Unit,
     onCancel: () -> Unit,
     onShoot: (Int) -> Unit,
@@ -1222,14 +1292,14 @@ private fun CameraScreen(
             }
         }
     } else {
-        CameraControls(onShoot = onShoot, onFlip = onFlip)
+        CameraControls(frame = frame, onShoot = onShoot, onFlip = onFlip)
     }
 }
 
 /** 폰 카메라 원격 조작 — 셔터(탭=즉시, 길게=누른 초만큼 타이머) + 상하 스와이프 전/후면 전환. */
 @OptIn(ExperimentalAnimationApi::class)
 @Composable
-private fun CameraControls(onShoot: (Int) -> Unit, onFlip: () -> Unit) {
+private fun CameraControls(frame: ImageBitmap?, onShoot: (Int) -> Unit, onFlip: () -> Unit) {
     val scope = rememberCoroutineScope()
     var heldSec by remember { mutableStateOf(0) }
     var pressing by remember { mutableStateOf(false) }
@@ -1249,6 +1319,35 @@ private fun CameraControls(onShoot: (Int) -> Unit, onFlip: () -> Unit) {
             },
         contentAlignment = Alignment.Center,
     ) {
+        // 폰 카메라 미리보기(저화질·초당 약 4장)를 배경으로.
+        // 3초 넘게 새 프레임이 없으면(폰 꺼짐·블루투스 끊김) 흐리게 + 안내.
+        var stale by remember { mutableStateOf(false) }
+        LaunchedEffect(frame) {
+            stale = false
+            if (frame != null) {
+                kotlinx.coroutines.delay(3_000L) // 3초
+                stale = true
+            }
+        }
+        if (frame != null) {
+            Image(
+                bitmap = frame,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                alpha = if (stale) 0.35f else 1f,
+                modifier = Modifier.fillMaxSize(),
+            )
+            if (stale) {
+                Text(
+                    "미리보기 연결 끊김",
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    modifier = Modifier
+                        .background(Color(0x99000000), RoundedCornerShape(10.dp))
+                        .padding(horizontal = 10.dp, vertical = 4.dp),
+                )
+            }
+        }
         Column(
             // 셔터를 아래쪽에 붙인다(하단 여백은 페이지 점만 피할 정도).
             Modifier.fillMaxSize().padding(top = 18.dp, bottom = 12.dp),
@@ -1258,9 +1357,13 @@ private fun CameraControls(onShoot: (Int) -> Unit, onFlip: () -> Unit) {
             // 설명(위)
             Text(
                 "탭=즉시 · 길게=타이머\n상하 스와이프=전/후면",
-                color = Color.White.copy(alpha = 0.7f),
+                color = Color.White.copy(alpha = 0.85f),
                 fontSize = 10.sp,
                 textAlign = TextAlign.Center,
+                // 미리보기 위에서도 읽히게 반투명 배경.
+                modifier = Modifier
+                    .background(Color(0x66000000), RoundedCornerShape(8.dp))
+                    .padding(horizontal = 6.dp, vertical = 2.dp),
             )
             // 셔터 버튼(아래)
             Box(

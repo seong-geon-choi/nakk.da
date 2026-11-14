@@ -47,6 +47,10 @@ class WearListenerService : WearableListenerService() {
             PATH_CAMERA_OPEN -> launchCamera()
             PATH_CAMERA_CLOSE ->
                 sendBroadcast(Intent(ACTION_CLOSE_CAMERA).setPackage(packageName))
+            // 워치 화면 켜짐/꺼짐에 따라 미리보기 전송 재개/중지(payload 1/0).
+            PATH_CAMERA_PREVIEW -> sendBroadcast(
+                Intent(ACTION_CAMERA_PREVIEW).setPackage(packageName)
+                    .putExtra("on", event.data.firstOrNull() != 0.toByte()))
             PATH_CAMERA_SHOOT -> sendBroadcast(
                 Intent(ACTION_CAMERA_SHOOT).setPackage(packageName)
                     .putExtra("delay", parseIndex(event.data)))
@@ -221,6 +225,7 @@ class WearListenerService : WearableListenerService() {
         private const val PATH_CAMERA_CLOSE = "/nakkda/camera/close"
         private const val PATH_CAMERA_SHOOT = "/nakkda/camera/shoot"
         private const val PATH_CAMERA_FLIP = "/nakkda/camera/flip"
+        private const val PATH_CAMERA_PREVIEW = "/nakkda/camera/preview"
         private const val PATH_SETTINGS_COLOR = "/nakkda/settings/color"
         private const val PATH_COUNT_RESET = "/nakkda/count/reset"
         private const val PATH_SCREEN_SAVE = "/nakkda/screen/save"
@@ -233,5 +238,6 @@ class WearListenerService : WearableListenerService() {
         const val ACTION_CLOSE_CAMERA = "com.sgchoisg.nakkda.CLOSE_CAMERA"
         const val ACTION_CAMERA_SHOOT = "com.sgchoisg.nakkda.CAMERA_SHOOT"
         const val ACTION_CAMERA_FLIP = "com.sgchoisg.nakkda.CAMERA_FLIP"
+        const val ACTION_CAMERA_PREVIEW = "com.sgchoisg.nakkda.CAMERA_PREVIEW"
     }
 }

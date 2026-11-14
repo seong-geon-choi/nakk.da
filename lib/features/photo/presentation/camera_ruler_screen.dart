@@ -27,8 +27,13 @@ class CameraRulerScreen extends ConsumerStatefulWidget {
   final bool initialFront; // true면 전면(셀카) 카메라로 시작(워치 셀카 호출)
   // true면 독립 실행(흔들기·워치·카운터→카메라): '카운터로' 버튼 노출. 메모 첨부는 false.
   final bool standalone;
+  // true면 워치에서 연 카메라: 저화질 미리보기 프레임을 워치로 보낸다(사진 모드에서만).
+  final bool watchPreview;
   const CameraRulerScreen(
-      {super.key, this.initialFront = false, this.standalone = false});
+      {super.key,
+      this.initialFront = false,
+      this.standalone = false,
+      this.watchPreview = false});
 
   @override
   ConsumerState<CameraRulerScreen> createState() => _CameraRulerScreenState();
@@ -46,6 +51,11 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   // 워치 원격 조작 채널(네이티브 CameraLockActivity → remoteShoot/remoteFlip).
   static const _remoteChannel = MethodChannel('nakkda/cameraLock');
   int? _countdown; // 워치 셔터 셀프타이머 남은 초(화면 표시용). null=비표시.
+  // 워치 미리보기: 워치 화면이 켜져 있는 동안만 전송(워치가 remotePreview로 on/off).
+  bool _watchPreviewOn = true;
+  bool _frameBusy = false; // 이전 프레임 변환·전송 중이면 건너뜀
+  DateTime _lastFrameAt = DateTime.fromMillisecondsSinceEpoch(0);
+  static const _kFrameInterval = Duration(milliseconds: 250); // 초당 약 4장
   double _minZoom = 1.0;
   double _maxZoom = 1.0;
   double _currentZoom = 1.0;
@@ -315,6 +325,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
             _error = null;
             _permissionDenied = false;
           });
+          _syncWatchStream();
           return; // 성공
         } catch (e) {
           if (attempt < 3) {
@@ -373,8 +384,51 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       case 'remoteFlip':
         await _flipCamera();
         break;
+      case 'remotePreview':
+        _watchPreviewOn = call.arguments != false;
+        _syncWatchStream();
+        break;
     }
     return null;
+  }
+
+  /// 워치 미리보기 프레임 스트림을 상태(워치 화면 켜짐·사진 모드)에 맞춰 켜고 끈다.
+  void _syncWatchStream() {
+    final ctrl = _ctrl;
+    if (!widget.watchPreview || ctrl == null || !ctrl.value.isInitialized) return;
+    final want = _watchPreviewOn && !_isVideoMode;
+    if (want && !ctrl.value.isStreamingImages) {
+      ctrl.startImageStream(_onPreviewFrame).catchError((_) {});
+    } else if (!want && ctrl.value.isStreamingImages) {
+      ctrl.stopImageStream().catchError((_) {});
+    }
+  }
+
+  /// 초당 약 4장만 골라 YUV 평면을 네이티브로 넘긴다(축소·JPEG·워치 전송은 네이티브).
+  void _onPreviewFrame(CameraImage img) {
+    final now = DateTime.now();
+    if (_frameBusy || now.difference(_lastFrameAt) < _kFrameInterval) return;
+    if (img.planes.length < 3) return;
+    _frameBusy = true;
+    _lastFrameAt = now;
+    final p = img.planes;
+    // 저장 사진과 같은 규약으로 회전: 센서 방향(세로 정립) + 기기 가로 거치 회전
+    // (전면은 부호 반전), 좌우 반전은 '셀카 반전 저장' 설정을 따른다(_capture와 동일).
+    var extra = rotateDegreesForTurns(_uiQuarterTurns);
+    if (_useFrontCamera) extra = (360 - extra) % 360;
+    final sensor = _ctrl?.description.sensorOrientation ?? 0;
+    _remoteChannel.invokeMethod('previewFrame', {
+      'width': img.width,
+      'height': img.height,
+      'y': p[0].bytes,
+      'u': p[1].bytes,
+      'v': p[2].bytes,
+      'yRowStride': p[0].bytesPerRow,
+      'uvRowStride': p[1].bytesPerRow,
+      'uvPixelStride': p[1].bytesPerPixel ?? 1,
+      'rotation': (sensor + extra) % 360,
+      'front': _useFrontCamera && _mirrorSelfie,
+    }).catchError((_) => null).whenComplete(() => _frameBusy = false);
   }
 
   /// 워치 셔터: [delaySec]초 카운트다운을 화면에 표시한 뒤 촬영(0이면 즉시).

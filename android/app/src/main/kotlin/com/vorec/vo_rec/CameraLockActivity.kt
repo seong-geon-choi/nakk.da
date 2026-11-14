@@ -10,6 +10,7 @@ import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.Executors
 
 /**
  * 흔들기 → 카메라 전용 액티비티. 잠금화면 위에 카메라만 노출한다.
@@ -25,6 +26,8 @@ import io.flutter.plugin.common.MethodChannel
 class CameraLockActivity : FlutterActivity() {
 
     private var methodChannel: MethodChannel? = null
+    // 워치 미리보기 프레임 변환·전송(메인 스레드 밖에서, 한 번에 하나씩).
+    private val previewExecutor = Executors.newSingleThreadExecutor()
 
     // 워치 카메라 조작 브로드캐스트 수신기 — 닫기/셔터/전후면 전환을 Dart로 전달.
     private val cameraReceiver = object : BroadcastReceiver() {
@@ -39,6 +42,10 @@ class CameraLockActivity : FlutterActivity() {
                 }
                 WearListenerService.ACTION_CAMERA_FLIP ->
                     runOnUiThread { methodChannel?.invokeMethod("remoteFlip", null) }
+                WearListenerService.ACTION_CAMERA_PREVIEW -> {
+                    val on = intent.getBooleanExtra("on", true)
+                    runOnUiThread { methodChannel?.invokeMethod("remotePreview", on) }
+                }
             }
         }
     }
@@ -55,6 +62,7 @@ class CameraLockActivity : FlutterActivity() {
             addAction(WearListenerService.ACTION_CLOSE_CAMERA)
             addAction(WearListenerService.ACTION_CAMERA_SHOOT)
             addAction(WearListenerService.ACTION_CAMERA_FLIP)
+            addAction(WearListenerService.ACTION_CAMERA_PREVIEW)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(cameraReceiver, filter, RECEIVER_NOT_EXPORTED)
@@ -79,8 +87,23 @@ class CameraLockActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        // 워치에서 연 카메라면, 어떻게 닫혔든(뒤로가기·카운터로·워치 닫기) 워치에 알려
+        // 멈춘 미리보기 대신 실행 확인 화면으로 돌아가게 한다.
+        if (intent?.getBooleanExtra("selfie", false) == true) {
+            val ctx = applicationContext
+            Thread {
+                try {
+                    val nodes = com.google.android.gms.tasks.Tasks.await(
+                        com.google.android.gms.wearable.Wearable.getNodeClient(ctx).connectedNodes,
+                        2, java.util.concurrent.TimeUnit.SECONDS)
+                    val mc = com.google.android.gms.wearable.Wearable.getMessageClient(ctx)
+                    for (n in nodes) mc.sendMessage(n.id, "/nakkda/camera/closed", ByteArray(0))
+                } catch (_: Exception) {}
+            }.start()
+        }
         try { unregisterReceiver(cameraReceiver) } catch (_: Exception) {}
         methodChannel = null
+        previewExecutor.shutdown()
         super.onDestroy()
     }
 
@@ -95,6 +118,27 @@ class CameraLockActivity : FlutterActivity() {
                         "finish" -> {
                             runOnUiThread { finish() }
                             result.success(null)
+                        }
+                        // 워치 미리보기 프레임(YUV 평면) → 축소 JPEG로 워치 전송. 끝나면 응답(백프레셔).
+                        "previewFrame" -> {
+                            val a = call.arguments as? Map<*, *>
+                            if (a == null) { result.success(null); return@setMethodCallHandler }
+                            val ctx = applicationContext
+                            previewExecutor.execute {
+                                try {
+                                    WatchPreview.send(
+                                        ctx,
+                                        (a["width"] as Number).toInt(), (a["height"] as Number).toInt(),
+                                        a["y"] as ByteArray, a["u"] as ByteArray, a["v"] as ByteArray,
+                                        (a["yRowStride"] as Number).toInt(),
+                                        (a["uvRowStride"] as Number).toInt(),
+                                        (a["uvPixelStride"] as Number).toInt(),
+                                        (a["rotation"] as Number).toInt(),
+                                        a["front"] as? Boolean ?: false,
+                                    )
+                                } catch (_: Exception) {}
+                                runOnUiThread { result.success(null) }
+                            }
                         }
                         "openCounter" -> {
                             runOnUiThread { openCounterAndFinish() }
