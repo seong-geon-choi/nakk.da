@@ -2,10 +2,20 @@ package com.sgchoisg.nakkda
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.view.PixelCopy
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -42,6 +52,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -64,6 +75,7 @@ import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.input.rotary.onRotaryScrollEvent
 import androidx.compose.ui.layout.boundsInParent
@@ -80,7 +92,12 @@ import com.google.android.gms.wearable.DataMap
 import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.Wearable
 import androidx.wear.ambient.AmbientLifecycleObserver
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.io.ByteArrayOutputStream
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import kotlin.math.cos
 
 /** 좌/우 영역 배경색 팔레트(16색). 영역을 길게 누르면 그리드 피커에서 선택. */
@@ -131,6 +148,19 @@ class WearMainActivity : ComponentActivity() {
     private var ambient by mutableStateOf(false)
     // 유사 AOD 표시 상태 — true면 어두운 오버레이(AmbientOverlay)로 카운트만 희미하게.
     private var dimmed by mutableStateOf(false)
+    // 폰에서 관리하는 워치 설정(/nakkda/settings). 값은 prefs에 저장돼 오프라인에도 유지.
+    private var brightOn = DEF_BRIGHT_ON      // 켜짐 밝기 %(0=시스템 밝기 따름)
+    private var dimLevel = DEF_DIM_LEVEL      // 어두울 때 밝기 %
+    private var dimIdleSec = DEF_DIM_IDLE_SEC // 어둡게 되기까지 초(0=어둡게 안 함)
+    private var keepOn = true                 // 화면 항상 켜두기
+    private var vibrate = false               // 카운트 시 진동
+    // 요약 화면(AmbientOverlay) 시계·마지막 조과 경과 시간 표시.
+    private var showClock by mutableStateOf(true)
+    private var showElapsed by mutableStateOf(true)
+    // 마지막 조과 시각(epoch ms, 0=없음/모름). 폰이 오늘 메모 기준으로 push, +1은 즉시 반영.
+    private var lastCatchAt by mutableStateOf(0L)
+    // 요약 화면 표시용 현재 시각 — 1분마다(앰비언트에선 onUpdateAmbient로) 갱신.
+    private var clockNow by mutableStateOf(System.currentTimeMillis())
 
     private val ambientObserver by lazy {
         AmbientLifecycleObserver(
@@ -145,6 +175,11 @@ class WearMainActivity : ComponentActivity() {
                 override fun onExitAmbient() {
                     ambient = false
                 }
+
+                // 앰비언트 중엔 코루틴 타이머가 멈출 수 있어 시스템의 1분 갱신 신호로 시계를 맞춘다.
+                override fun onUpdateAmbient() {
+                    clockNow = System.currentTimeMillis()
+                }
             },
         )
     }
@@ -152,6 +187,14 @@ class WearMainActivity : ComponentActivity() {
     private var animateFlip by mutableStateOf(false)
     // 색상 그리드 피커가 열린 영역(null=닫힘, 0=좌, 1=우).
     private var pickerSide by mutableStateOf<Int?>(null)
+    // 중앙 길게 누르기 메뉴(화면 저장 / 기록 초기화) + 초기화 확인 단계.
+    private var menuOpen by mutableStateOf(false)
+    private var confirmReset by mutableStateOf(false)
+    // 메뉴에 '기록 초기화'를 보일지(카운터=보임, 그래프=저장만).
+    private var menuAllowReset by mutableStateOf(true)
+    // 짧은 안내 문구(저장·초기화 결과). 잠시 뒤 자동으로 사라짐.
+    private var toast by mutableStateOf<String?>(null)
+    private val toastRunnable = Runnable { toast = null }
     // 즉시 전송용 연결 노드 캐시(매 탭마다 조회하지 않도록).
     private var cachedNodes: List<String> = emptyList()
     // 마지막 로컬 조작 시각 — 직후엔 폰 push로 숫자를 덮지 않아 깜빡임을 막는다.
@@ -172,6 +215,7 @@ class WearMainActivity : ComponentActivity() {
             when (event.dataItem.uri.path) {
                 PATH_STATE -> applyData(DataMapItem.fromDataItem(event.dataItem).dataMap)
                 PATH_CHART -> applyChart(DataMapItem.fromDataItem(event.dataItem).dataMap)
+                PATH_SETTINGS -> applySettings(DataMapItem.fromDataItem(event.dataItem).dataMap)
             }
         }
         buffer.release()
@@ -186,24 +230,37 @@ class WearMainActivity : ComponentActivity() {
         // 갤럭시 워치는 화면이 꺼지면 타임아웃 후 서드파티 앱을 워치페이스로 강제 복귀시킨다
         // (액티비티 Ambient 오프로드 미지원). 그래서 화면을 계속 켜두고, 유휴 시 창 밝기만
         // 낮추는 '유사 AOD'(applyDim/wakeBright)로 카운터를 유지한다(배터리 완화).
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // (폰 설정 '화면 항상 켜두기'를 끄면 해제 → 시스템 화면 시간 초과 후 워치페이스로 복귀.)
         prefs = getSharedPreferences("wear_counter", Context.MODE_PRIVATE)
-        colorIdx = intArrayOf(prefs.getInt("color_0", 0), prefs.getInt("color_1", 4))
+        loadSettings()
+        applyKeepOn()
+        val startPage = prefs.getInt("start_page", 1).coerceIn(0, 2)
         setContent {
             MaterialTheme {
                 Box(Modifier.fillMaxSize().background(Color.Black)) {
                     // 0=조과 그래프(왼쪽), 1=카운터(시작·가운데), 2=카메라(오른쪽).
-                    val pagerState = rememberPagerState(initialPage = 1, pageCount = { 3 })
+                    val pagerState = rememberPagerState(initialPage = startPage, pageCount = { 3 })
                     val scope = rememberCoroutineScope()
                     HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
                         when (page) {
-                            0 -> ChartScreen(
-                                names = chartNames,
-                                hours = chartHours,
-                                tideMins = tideMins,
-                                tideLevels = tideLevels,
-                                colorIdx = colorIdx,
-                            )
+                            // 그래프 화면 길게 누르기 → 저장 메뉴(손가락에 가려 즉시 저장 결과가 안 보여 한 단계 둠).
+                            0 -> Box(
+                                Modifier.fillMaxSize().pointerInput(Unit) {
+                                    detectTapGestures(onLongPress = {
+                                        menuAllowReset = false
+                                        confirmReset = false
+                                        menuOpen = true
+                                    })
+                                },
+                            ) {
+                                ChartScreen(
+                                    names = chartNames,
+                                    hours = chartHours,
+                                    tideMins = tideMins,
+                                    tideLevels = tideLevels,
+                                    colorIdx = colorIdx,
+                                )
+                            }
                             1 -> Box(Modifier.fillMaxSize()) {
                                 CounterScreen(
                                     names = names,
@@ -213,6 +270,11 @@ class WearMainActivity : ComponentActivity() {
                                     onPlus = { i -> bump(i, 1, PATH_ADD) },
                                     onMinus = { i -> bump(i, -1, PATH_REMOVE) },
                                     onStop = { sendStop() },
+                                    onMenu = {
+                                        menuAllowReset = true
+                                        confirmReset = false
+                                        menuOpen = true
+                                    },
                                     onPickColor = { side -> pickerSide = side },
                                 )
                                 val side = pickerSide
@@ -242,9 +304,45 @@ class WearMainActivity : ComponentActivity() {
                         }
                     }
                     PageDots(3, pagerState.currentPage, Modifier.align(Alignment.BottomCenter))
+                    if (menuOpen) {
+                        ActionMenu(
+                            allowReset = menuAllowReset,
+                            confirmReset = confirmReset,
+                            onSave = { saveScreen() },
+                            onAskReset = { confirmReset = true },
+                            onEndFishing = { endFishing() },
+                            onConfirmReset = { resetCounts() },
+                            onDismiss = { menuOpen = false; confirmReset = false },
+                        )
+                    }
+                    toast?.let { msg ->
+                        Text(
+                            msg,
+                            color = Color.White,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier
+                                .align(Alignment.Center)
+                                .background(Color(0xE6000000), RoundedCornerShape(14.dp))
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                        )
+                    }
                     // 앰비언트(화면 꺼짐): 밝은 UI 대신 저전력 AoD를 덮어 표시(앱은 유지).
                     if (ambient || dimmed) {
-                        AmbientOverlay(names = names, counts = counts)
+                        AmbientOverlay(
+                            names = names,
+                            counts = counts,
+                            now = clockNow,
+                            showClock = showClock,
+                            lastCatchAt = if (showElapsed) lastCatchAt else 0L,
+                        )
+                        // 표시되는 동안 분이 바뀔 때마다 갱신(표시 시작 시 즉시 1회).
+                        LaunchedEffect(Unit) {
+                            while (true) {
+                                clockNow = System.currentTimeMillis()
+                                delay(60_000L - clockNow % 60_000L)
+                            }
+                        }
                     }
                     LaunchedEffect(pagerState) {
                         var prev = pagerState.currentPage
@@ -279,13 +377,22 @@ class WearMainActivity : ComponentActivity() {
         }
         // 진입 시 최신값 즉시 반영.
         dataClient.dataItems.addOnSuccessListener { items ->
+            var phoneKnowsColors = false
             for (item in items) {
                 when (item.uri.path) {
                     PATH_STATE -> applyData(DataMapItem.fromDataItem(item).dataMap)
                     PATH_CHART -> applyChart(DataMapItem.fromDataItem(item).dataMap)
+                    PATH_SETTINGS -> {
+                        val m = DataMapItem.fromDataItem(item).dataMap
+                        phoneKnowsColors = m.containsKey("color_0")
+                        applySettings(m)
+                    }
                 }
             }
             items.release()
+            // 폰이 아직 색을 모르면 워치의 현재 색을 알려 폰 설정 화면과 맞춘다
+            // (안 그러면 폰에서 다른 설정을 바꿀 때 워치 색이 기본값으로 덮인다).
+            if (!phoneKnowsColors) { sendColor(0); sendColor(1) }
         }
     }
 
@@ -304,8 +411,11 @@ class WearMainActivity : ComponentActivity() {
 
     /** 창 밝기를 낮추거나(어둡게) 기본값으로 되돌린다(창 단위라 시스템 설정은 불변). */
     private fun applyDim(dim: Boolean) {
-        val target =
-            if (dim) DIM_LEVEL else WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        val target = when {
+            dim -> dimLevel / 100f
+            brightOn > 0 -> brightOn / 100f
+            else -> WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+        }
         val lp = window.attributes
         if (lp.screenBrightness != target) {
             lp.screenBrightness = target
@@ -313,19 +423,182 @@ class WearMainActivity : ComponentActivity() {
         }
     }
 
-    /** 밝기를 원래대로 복원하고 유휴 타이머를 재시작(DIM_IDLE_MS 후 다시 어둡게). */
+    /** 밝기를 원래대로 복원하고 유휴 타이머를 재시작(dimIdleSec 후 다시 어둡게).
+     *  화면 항상 켜두기가 꺼져 있거나 시간이 0이면 어둡게 하지 않는다(시스템 시간 초과에 맡김). */
     private fun wakeBright() {
         dimmed = false
         applyDim(false)
         dimHandler.removeCallbacks(dimRunnable)
-        dimHandler.postDelayed(dimRunnable, DIM_IDLE_MS)
+        if (keepOn && dimIdleSec > 0) dimHandler.postDelayed(dimRunnable, dimIdleSec * 1000L)
+    }
+
+    /** prefs에서 워치 설정을 읽어 필드에 반영. */
+    private fun loadSettings() {
+        brightOn = prefs.getInt("bright_on", DEF_BRIGHT_ON).coerceIn(0, 100)
+        dimLevel = prefs.getInt("dim_level", DEF_DIM_LEVEL).coerceIn(1, 100)
+        dimIdleSec = prefs.getInt("dim_idle_sec", DEF_DIM_IDLE_SEC).coerceAtLeast(0)
+        keepOn = prefs.getBoolean("keep_on", true)
+        vibrate = prefs.getBoolean("vibrate", false)
+        showClock = prefs.getBoolean("show_clock", true)
+        showElapsed = prefs.getBoolean("show_elapsed", true)
+        colorIdx = intArrayOf(prefs.getInt("color_0", 0), prefs.getInt("color_1", 4))
+    }
+
+    private fun applyKeepOn() {
+        if (keepOn) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
+
+    /** 폰이 보낸 설정(/nakkda/settings)을 저장하고 즉시 적용. 없는 키는 기존값 유지. */
+    private fun applySettings(map: DataMap) {
+        val e = prefs.edit()
+        for (k in listOf("bright_on", "dim_level", "dim_idle_sec", "start_page", "color_0", "color_1")) {
+            if (map.containsKey(k)) e.putInt(k, map.getInt(k))
+        }
+        for (k in listOf("keep_on", "vibrate", "show_clock", "show_elapsed")) {
+            if (map.containsKey(k)) e.putBoolean(k, map.getBoolean(k))
+        }
+        e.apply()
+        runOnUiThread {
+            loadSettings()
+            applyKeepOn()
+            // 요약 화면(어둠/앰비언트) 중이면 깨우지 않고 그대로 설정만 반영.
+            // 단, 바뀐 설정이 어둡게 하기를 끈 경우엔 어둠 상태를 유지할 수 없어 밝힌다.
+            when {
+                ambient -> {}
+                dimmed && keepOn && dimIdleSec > 0 -> applyDim(true)
+                else -> wakeBright()
+            }
+        }
+    }
+
+    /** 카운트 시 진동(설정 켜짐일 때만). +1은 짧게 한 번, −1은 두 번. */
+    private fun vibrateCount(plus: Boolean) {
+        if (!vibrate) return
+        val v: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Vibrator::class.java)
+        }
+        val effect = if (plus) {
+            VibrationEffect.createOneShot(40, VibrationEffect.DEFAULT_AMPLITUDE)
+        } else {
+            VibrationEffect.createWaveform(longArrayOf(0, 40, 90, 40), -1)
+        }
+        try { v?.vibrate(effect) } catch (_: Exception) {}
+    }
+
+    /** 영역 색을 폰에 알려 폰 설정과 동기화. */
+    private fun sendColor(side: Int) {
+        val idx = colorIdx.getOrElse(side) { return }
+        sendToPhone(PATH_SETTINGS_COLOR, "$side,$idx".toByteArray())
+    }
+
+    /** 메뉴를 닫고, 메뉴가 사라진 화면이 그려진 뒤 지금 화면을 캡처해 폰으로 보낸다. */
+    private fun saveScreen() {
+        menuOpen = false
+        confirmReset = false
+        dimHandler.postDelayed({ captureScreen() }, 300)
+    }
+
+    private fun captureScreen() {
+        val view = window.decorView
+        if (view.width <= 0 || view.height <= 0) return
+        val bmp = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
+        try {
+            PixelCopy.request(window, bmp, { result ->
+                if (result != PixelCopy.SUCCESS) {
+                    showToast("저장 실패")
+                    return@request
+                }
+                Thread { sendScreenToPhone(encodeScreen(bmp)) }.start()
+            }, Handler(Looper.getMainLooper()))
+        } catch (_: Exception) {
+            showToast("저장 실패")
+        }
+    }
+
+    /** 원형 워치면 화면과 같게 원 밖을 투명하게 잘라낸다(PNG 알파로 보존). */
+    private fun toCircle(src: Bitmap): Bitmap {
+        val size = minOf(src.width, src.height)
+        val out = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(out)
+        val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+        canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
+        paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+        canvas.drawBitmap(src, (size - src.width) / 2f, (size - src.height) / 2f, paint)
+        return out
+    }
+
+    /** 메시지 한도(약 100KB) 안에 들도록 PNG, 크면 JPEG로 인코딩. */
+    private fun encodeScreen(raw: Bitmap): ByteArray {
+        val bmp = if (resources.configuration.isScreenRound) toCircle(raw) else raw
+        val png = ByteArrayOutputStream().also {
+            bmp.compress(Bitmap.CompressFormat.PNG, 100, it)
+        }.toByteArray()
+        if (png.size <= MAX_MESSAGE_BYTES) return png
+        return ByteArrayOutputStream().also {
+            bmp.compress(Bitmap.CompressFormat.JPEG, 85, it)
+        }.toByteArray()
+    }
+
+    private fun sendScreenToPhone(bytes: ByteArray) {
+        if (bytes.size > MAX_MESSAGE_BYTES) {
+            runOnUiThread { showToast("저장 실패") }
+            return
+        }
+        Wearable.getNodeClient(this).connectedNodes
+            .addOnSuccessListener { ns ->
+                if (ns.isEmpty()) {
+                    showToast("폰 연결 안 됨")
+                    return@addOnSuccessListener
+                }
+                cachedNodes = ns.map { it.id }
+                for (n in ns) messageClient.sendMessage(n.id, PATH_SCREEN_SAVE, bytes)
+                showToast("폰 갤러리·메모에 저장")
+            }
+            .addOnFailureListener { showToast("폰 연결 안 됨") }
+    }
+
+    /** 오늘 조과 기록 전체 삭제 요청. 워치 숫자는 바로 0으로(폰 권위값이 곧 따라옴). */
+    private fun resetCounts() {
+        menuOpen = false
+        confirmReset = false
+        counts = counts.map { 0 }
+        pendingCounts = null
+        lastCatchAt = 0L
+        lastBumpAt = SystemClock.elapsedRealtime()
+        sendToPhone(PATH_COUNT_RESET)
+        showToast("기록 초기화")
+    }
+
+    /** 낚시 종료 → 폰이 오늘 메모에 조과 요약(수 + 그래프 이미지)을 기록. 조과 0이면 보내지 않음. */
+    private fun endFishing() {
+        menuOpen = false
+        confirmReset = false
+        if (counts.sum() <= 0) {
+            showToast("조과 없음 · 요약 생략")
+            return
+        }
+        sendToPhone(PATH_FISHING_END)
+        showToast("조과 요약을 메모에 저장")
+    }
+
+    private fun showToast(msg: String) {
+        toast = msg
+        dimHandler.removeCallbacks(toastRunnable)
+        dimHandler.postDelayed(toastRunnable, 1800)
     }
 
     private fun applyData(map: DataMap) {
         val n = map.getStringArrayList("names") ?: arrayListOf()
         val c = map.getIntegerArrayList("counts") ?: arrayListOf()
+        // 구버전 폰은 키가 없음 → 0(경과 시간 숨김).
+        val last = map.getLong("last_catch_at", 0L)
         runOnUiThread {
             names = n.toList()
+            lastCatchAt = last
             // 권위값은 바로 덮지 않고 보류 → 조용해지면(디바운스) 최종값만 반영.
             pendingCounts = c.toList()
             scheduleReconcile()
@@ -406,6 +679,8 @@ class WearMainActivity : ComponentActivity() {
         // bump 이전에 받아둔 권위값은 폐기 — 이걸 남겨두면 폰 push가 늦게 올 때
         // 오래된 값으로 되돌아간다(되돌아감 버그). 이후 새로 도착한 push만 신뢰한다.
         pendingCounts = null
+        if (delta > 0) lastCatchAt = System.currentTimeMillis()
+        vibrateCount(delta > 0)
         send(path, index)
         scheduleReconcile() // 조작 중엔 권위값 반영을 계속 뒤로 미룬다.
     }
@@ -476,6 +751,7 @@ class WearMainActivity : ComponentActivity() {
     /** 현재 영역 색을 prefs에 저장(피커 닫을 때 확정). */
     private fun persistColor(side: Int) {
         prefs.edit().putInt("color_$side", colorIdx.getOrElse(side) { 0 }).apply()
+        sendColor(side)
     }
 
     companion object {
@@ -490,16 +766,86 @@ class WearMainActivity : ComponentActivity() {
         private const val PATH_CAMERA_CLOSE = "/nakkda/camera/close"
         private const val PATH_CAMERA_SHOOT = "/nakkda/camera/shoot"
         private const val PATH_CAMERA_FLIP = "/nakkda/camera/flip"
+        private const val PATH_SETTINGS = "/nakkda/settings"
+        private const val PATH_SETTINGS_COLOR = "/nakkda/settings/color"
+        private const val PATH_COUNT_RESET = "/nakkda/count/reset"
+        private const val PATH_SCREEN_SAVE = "/nakkda/screen/save"
+        private const val PATH_FISHING_END = "/nakkda/fishing/end"
+        // Data Layer 메시지 크기 한도(100KB)보다 약간 작게.
+        private const val MAX_MESSAGE_BYTES = 95_000
         // 조작·push가 멈춘 뒤 이 시간이 지나야 권위값 반영을 시도(디바운스).
         private const val RECONCILE_MS = 700L
         // 낙관적 값과 불일치가 이 시간 이상 지속되면(명령 유실 등) 한 번 강제 보정.
         private const val MAX_RECONCILE_MS = 2500L
         // 직전 조작과 간격이 이보다 짧으면 연타로 보고 플립을 생략(스냅).
         private const val FLIP_GAP_MS = 320L
-        // 유사 AOD: 이 시간 동안 조작이 없으면 화면을 어둡게(창 밝기 낮춤).
-        private const val DIM_IDLE_MS = 15000L
-        // 어두울 때의 창 밝기(0~1). 희미하게 유지해 글랜서블하면서 배터리 절감(조정 가능).
-        private const val DIM_LEVEL = 0.1f
+        // 워치 설정 기본값(폰 WatchSettings와 동일). 유사 AOD: 조작이 없으면 이 시간 후 어둡게.
+        private const val DEF_BRIGHT_ON = 0       // 0=시스템 밝기 따름
+        private const val DEF_DIM_LEVEL = 10      // 어두울 때 밝기 10%
+        private const val DEF_DIM_IDLE_SEC = 15
+    }
+}
+
+/** 중앙 길게 누르기 메뉴. 초기화는 확인 단계를 한 번 더 거친다(되돌릴 수 없음). */
+@Composable
+private fun ActionMenu(
+    allowReset: Boolean,
+    confirmReset: Boolean,
+    onSave: () -> Unit,
+    onAskReset: () -> Unit,
+    onEndFishing: () -> Unit,
+    onConfirmReset: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Box(
+        Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.92f))
+            // 아래 카운터·페이지로 터치가 새지 않게 막는다.
+            .pointerInput(Unit) { detectTapGestures {} },
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            if (!confirmReset) {
+                MenuButton("화면 저장", Color(0xFF1E88E5), onSave)
+                MenuButton("낚시 종료", Color(0xFF2E7D32), onEndFishing)
+                if (allowReset) MenuButton("기록 초기화", Color(0xFFC62828), onAskReset)
+                MenuButton("닫기", Color(0xFF455A64), onDismiss)
+            } else {
+                Text(
+                    "오늘 조과 기록을\n모두 삭제할까요?",
+                    color = Color.White,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    "되돌릴 수 없습니다",
+                    color = Color.White.copy(alpha = 0.6f),
+                    fontSize = 11.sp,
+                )
+                MenuButton("삭제", Color(0xFFC62828), onConfirmReset)
+                MenuButton("취소", Color(0xFF455A64), onDismiss)
+            }
+        }
+    }
+}
+
+@Composable
+private fun MenuButton(label: String, color: Color, onClick: () -> Unit) {
+    Box(
+        Modifier
+            .width(132.dp)
+            .height(36.dp)
+            .clip(RoundedCornerShape(20.dp))
+            .background(color)
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -512,6 +858,7 @@ private fun CounterScreen(
     onPlus: (Int) -> Unit,
     onMinus: (Int) -> Unit,
     onStop: () -> Unit,
+    onMenu: () -> Unit,
     onPickColor: (Int) -> Unit,
 ) {
     Box(Modifier.fillMaxSize().background(Color.Black)) {
@@ -551,12 +898,11 @@ private fun CounterScreen(
                 )
             }
         }
-        // 정중앙 원형 영역 → 재생 중 미디어 중지(좌/우 탭 위에 오버레이).
+        // 정중앙 원형 영역 → 탭=재생 중 미디어 중지, 길게=메뉴(화면 저장/기록 초기화).
         Box(
-            Modifier.align(Alignment.Center).size(52.dp).clip(CircleShape).clickable(
-                interactionSource = remember { MutableInteractionSource() },
-                indication = null,
-            ) { onStop() },
+            Modifier.align(Alignment.Center).size(52.dp).clip(CircleShape).pointerInput(Unit) {
+                detectTapGestures(onTap = { onStop() }, onLongPress = { onMenu() })
+            },
         )
     }
 }
@@ -870,23 +1216,52 @@ private fun PillButton(label: String, color: Color, onClick: () -> Unit) {
     }
 }
 
-/** 앰비언트(화면 꺼짐) AoD — 검은 배경에 어종별 조과 수만 흐리게 표시(저전력·번인 방지). */
+/** '방금 / N분 전 / N시간 M분 전'. */
+private fun elapsedText(now: Long, at: Long): String {
+    val min = ((now - at).coerceAtLeast(0L) / 60_000L).toInt()
+    return when {
+        min < 1 -> "방금"
+        min < 60 -> "${min}분 전"
+        min % 60 == 0 -> "${min / 60}시간 전"
+        else -> "${min / 60}시간 ${min % 60}분 전"
+    }
+}
+
+/** 앰비언트(화면 꺼짐)·어둠 요약 화면 — 위 시계, 가운데 조과 수, 아래 마지막 조과 경과를 흐리게(저전력·번인 방지). */
 @Composable
-private fun AmbientOverlay(names: List<String>, counts: List<Int>) {
+private fun AmbientOverlay(
+    names: List<String>,
+    counts: List<Int>,
+    now: Long,
+    showClock: Boolean,
+    lastCatchAt: Long,
+) {
+    val context = LocalContext.current
     Box(
         Modifier
             .fillMaxSize()
             .background(Color.Black)
             // 어둠 상태의 첫 입력은 '깨우기'로만 소비(밑의 카운터 오증가 방지).
             .pointerInput(Unit) { detectTapGestures {} },
-        contentAlignment = Alignment.Center,
     ) {
         val dim = Color.White.copy(alpha = 0.6f)
-        if (names.isEmpty()) {
-            Text("낚.다", color = dim, fontSize = 18.sp)
-            return@Box
+        // 시계: 화면 최상단 중앙.
+        if (showClock) {
+            val pattern = if (android.text.format.DateFormat.is24HourFormat(context)) "HH:mm" else "h:mm"
+            Text(
+                SimpleDateFormat(pattern, Locale.getDefault()).format(Date(now)),
+                color = dim,
+                fontSize = 14.sp,
+                modifier = Modifier.align(Alignment.TopCenter).padding(top = 8.dp),
+            )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+        // 조과 수: 정중앙.
+        if (names.isEmpty()) {
+            Text("낚.다", color = dim, fontSize = 18.sp, modifier = Modifier.align(Alignment.Center))
+        } else Row(
+            Modifier.align(Alignment.Center),
+            horizontalArrangement = Arrangement.spacedBy(24.dp),
+        ) {
             for (i in names.indices.take(2)) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
@@ -903,6 +1278,15 @@ private fun AmbientOverlay(names: List<String>, counts: List<Int>) {
                     )
                 }
             }
+        }
+        // 마지막 조과 경과: 아래쪽 중앙.
+        if (lastCatchAt > 0L) {
+            Text(
+                elapsedText(now, lastCatchAt),
+                color = dim.copy(alpha = 0.45f),
+                fontSize = 12.sp,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 14.dp),
+            )
         }
     }
 }

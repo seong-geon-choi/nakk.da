@@ -83,6 +83,8 @@ class CatchLogService : Service() {
         const val ACTION_REMOVE = "com.sgchoisg.nakkda.REMOVE_CATCH"
         // 어종 무관: 그날 가장 최근에 추가된 조과 1건을 제거.
         const val ACTION_REMOVE_LAST = "com.sgchoisg.nakkda.REMOVE_LAST_CATCH"
+        // 워치 '기록 초기화': 오늘 조과(🎣) 기록 전체 삭제.
+        const val ACTION_CLEAR_ALL = "com.sgchoisg.nakkda.CLEAR_ALL_CATCH"
         const val ACTION_STOP = "com.sgchoisg.nakkda.STOP_CATCH"
         // 재생 중인 추임새/TTS 효과음만 즉시 중지(세션·카운트는 그대로).
         const val ACTION_STOP_SOUND = "com.sgchoisg.nakkda.STOP_SOUND"
@@ -220,11 +222,36 @@ class CatchLogService : Service() {
                 val req = PutDataMapRequest.create(PATH_WATCH_COUNT).apply {
                     dataMap.putStringArrayList("names", ArrayList(names))
                     dataMap.putIntegerArrayList("counts", countList)
+                    // 워치 요약 화면 '마지막 조과 N분 전'용(0=오늘 조과 없음).
+                    dataMap.putLong("last_catch_at", lastCatchAtMillis(context))
                     // 같은 값이어도 아이템이 갱신되도록 타임스탬프를 포함(동기화 트리거).
                     dataMap.putLong("ts", System.currentTimeMillis())
                 }.asPutDataRequest().setUrgent()
                 Wearable.getDataClient(context).putDataItem(req)
             } catch (_: Exception) {}
+        }
+
+        /** 오늘 MD 파일에서 '- 🎣' 항목이 있는 가장 늦은 블록의 헤더 시각(epoch ms). 없으면 0. */
+        private fun lastCatchAtMillis(context: Context): Long {
+            val txt = readMd(context) ?: return 0L
+            val header = Regex("""^###\s+(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})""")
+            val fmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+            var last = 0L
+            for (seg in txt.split("\n---\n")) {
+                var at = 0L
+                var hasCatch = false
+                for (line in seg.lineSequence()) {
+                    val t = line.trim()
+                    val m = header.find(t)
+                    if (m != null) {
+                        at = try { fmt.parse(m.groupValues[1])?.time ?: 0L } catch (_: Exception) { 0L }
+                    } else if (t.startsWith("- 🎣 ")) {
+                        hasCatch = true
+                    }
+                }
+                if (hasCatch && at > last) last = at
+            }
+            return last
         }
 
         /** 오늘 날짜 문자열(yyyy-MM-dd). 조위 저장/검증·그래프 집계 공용. */
@@ -236,8 +263,8 @@ class CatchLogService : Service() {
          * 같은 블록의 "- 🎣 어종" 1건을 해당 시(hour) 버킷에 +1 집계한다.
          * 반환: 어종명 → IntArray(24)(인덱스=시).
          */
-        fun loadHourlyBySpecies(context: Context): Map<String, IntArray> {
-            val txt = readMd(context) ?: return emptyMap()
+        fun loadHourlyBySpecies(context: Context, date: String = todayStr()): Map<String, IntArray> {
+            val txt = readMd(context, date) ?: return emptyMap()
             val out = HashMap<String, IntArray>()
             val headerTime = Regex("""^###\s+\d{4}-\d{2}-\d{2}\s+(\d{2}):\d{2}:\d{2}""")
             for (seg in txt.split("\n---\n")) {
@@ -257,11 +284,44 @@ class CatchLogService : Service() {
         }
 
         /** 저장된 오늘 조위 극값(날짜 일치 시에만). 없거나 다른 날짜면 null. */
-        private fun readTideToday(context: Context): JSONObject? = try {
+        private fun readTideToday(context: Context, date: String = todayStr()): JSONObject? = try {
             val raw = prefsOf(context).getString(PREFS_TIDE_TODAY, null)
             val obj = if (raw != null) JSONObject(raw) else null
-            if (obj?.optString("date") == todayStr()) obj else null
+            if (obj?.optString("date") == date) obj else null
         } catch (_: Exception) { null }
+
+        /**
+         * 그날 만조/간조 (분, cm) 목록(시간순).
+         * 1순위: 카운터 세션 시작 때 저장한 값(그 날짜 것만).
+         * 2순위: 그날 메모 '현황' 항목의 숨김 주석 `[//]: # (tides:간조 00:32 144,만조 06:14 775,...)`
+         *        — 워치만으로 기록해 세션을 시작하지 않은 날도 조위를 그릴 수 있게.
+         */
+        fun loadTidePoints(context: Context, date: String = todayStr()): List<Pair<Int, Int>> {
+            val out = ArrayList<Pair<Int, Int>>()
+            readTideToday(context, date)?.optJSONArray("points")?.let { pts ->
+                for (j in 0 until pts.length()) {
+                    val p = pts.optJSONObject(j) ?: continue
+                    val mm = parseHHmm(p.optString("t")) ?: continue
+                    out.add(mm to p.optInt("l"))
+                }
+            }
+            if (out.isEmpty()) {
+                val txt = readMd(context, date)
+                val m = txt?.let {
+                    Regex("""^\[//]: # \(tides:(.*)\)\s*$""", RegexOption.MULTILINE).findAll(it).lastOrNull()
+                }
+                m?.groupValues?.get(1)?.split(",")?.forEach { item ->
+                    // "간조 00:32 144" — 수위 없는 항목(구버전)은 건너뜀.
+                    val parts = item.trim().split(" ")
+                    if (parts.size < 3) return@forEach
+                    val mm = parseHHmm(parts[1]) ?: return@forEach
+                    val lv = parts[2].toIntOrNull() ?: return@forEach
+                    out.add(mm to lv)
+                }
+            }
+            out.sortBy { it.first }
+            return out
+        }
 
         private fun parseHHmm(s: String?): Int? {
             val p = (s ?: return null).split(":")
@@ -283,13 +343,7 @@ class CatchLogService : Service() {
                 val hourly = loadHourlyBySpecies(context)
                 val tideMin = ArrayList<Int>()
                 val tideLevel = ArrayList<Int>()
-                readTideToday(context)?.optJSONArray("points")?.let { pts ->
-                    for (j in 0 until pts.length()) {
-                        val p = pts.optJSONObject(j) ?: continue
-                        val mm = parseHHmm(p.optString("t")) ?: continue
-                        tideMin.add(mm); tideLevel.add(p.optInt("l"))
-                    }
-                }
+                for ((mm, lv) in loadTidePoints(context)) { tideMin.add(mm); tideLevel.add(lv) }
                 val req = PutDataMapRequest.create(PATH_WATCH_CHART).apply {
                     dataMap.putStringArrayList("names", ArrayList(names))
                     for (i in names.indices) {
@@ -455,8 +509,8 @@ class CatchLogService : Service() {
 
         private fun isSaf(p: String) = p.startsWith("content://")
         private fun todayStr() = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
-        private fun filename() = "${todayStr()}.md"
-        private fun fileHeader() = "# ${todayStr()}\n"
+        private fun filename(date: String = todayStr()) = "$date.md"
+        internal fun fileHeader(date: String = todayStr()) = "# $date\n"
         private fun fmtCoord(v: Double) = String.format(Locale.US, "%.4f", v)
 
         /** Dart MdSerializer.serializeEntry와 동일 형식의 조과 항목(🎣). */
@@ -470,33 +524,33 @@ class CatchLogService : Service() {
         private fun safTree(context: Context, uri: String): DocumentFile? =
             try { DocumentFile.fromTreeUri(context, Uri.parse(uri)) } catch (_: Exception) { null }
 
-        private fun readMd(context: Context): String? {
+        internal fun readMd(context: Context, date: String = todayStr()): String? {
             val sp = savePath(context)
             if (sp.isEmpty()) return null
             return try {
                 if (isSaf(sp)) {
-                    val f = safTree(context, sp)?.findFile(filename()) ?: return null
+                    val f = safTree(context, sp)?.findFile(filename(date)) ?: return null
                     context.contentResolver.openInputStream(f.uri)
                         ?.use { it.bufferedReader(Charsets.UTF_8).readText() }
                 } else {
-                    val f = File("$sp/${filename()}")
+                    val f = File("$sp/${filename(date)}")
                     if (f.exists()) f.readText(Charsets.UTF_8) else null
                 }
             } catch (_: Exception) { null }
         }
 
-        private fun writeMd(context: Context, content: String) {
+        internal fun writeMd(context: Context, content: String, date: String = todayStr()) {
             val sp = savePath(context)
             if (sp.isEmpty()) return
             try {
                 if (isSaf(sp)) {
                     val tree = safTree(context, sp) ?: return
-                    val f = tree.findFile(filename())
-                        ?: tree.createFile("text/markdown", filename()) ?: return
+                    val f = tree.findFile(filename(date))
+                        ?: tree.createFile("text/markdown", filename(date)) ?: return
                     context.contentResolver.openOutputStream(f.uri, "wt")
                         ?.use { it.write(content.toByteArray(Charsets.UTF_8)) }
                 } else {
-                    File("$sp/${filename()}").writeText(content, Charsets.UTF_8)
+                    File("$sp/${filename(date)}").writeText(content, Charsets.UTF_8)
                 }
             } catch (_: Exception) {}
         }
@@ -548,6 +602,40 @@ class CatchLogService : Service() {
                 segs.removeAt(removeAt)
                 writeMd(context, segs.joinToString("\n---\n"))
             }
+        }
+
+        /**
+         * 오늘 파일의 조과 기록(- 🎣 줄)을 전부 삭제. 조과 줄만 있던 항목은 통째로 지우고,
+         * 사용자가 사진·글을 덧붙인 항목은 🎣 줄만 지워 나머지 내용은 보존한다.
+         */
+        fun clearAllCatchesFromFile(context: Context) {
+            val txt = readMd(context) ?: return
+            val segs = txt.split("\n---\n")
+            val out = ArrayList<String>(segs.size)
+            out.add(segs[0])
+            for (i in 1 until segs.size) {
+                val seg = segs[i]
+                if (seg.lineSequence().none { it.trim().startsWith("- 🎣 ") }) {
+                    out.add(seg)
+                    continue
+                }
+                val kept = seg.lines().filterNot { it.trim().startsWith("- 🎣 ") }
+                val hasContent = kept.any { l ->
+                    val t = l.trim()
+                    t.isNotEmpty() && !t.startsWith("### ")
+                }
+                if (hasContent) out.add(kept.joinToString("\n"))
+            }
+            if (out != segs) writeMd(context, out.joinToString("\n---\n"))
+        }
+
+        /** 오늘 파일에 사진 항목(![](경로))을 추가 — Dart MdSerializer와 같은 형식. */
+        fun appendPhotoToFile(context: Context, path: String, lat: Double?, lng: Double?) {
+            val ts = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
+            val header = if (lat != null && lng != null)
+                "### $ts | 🛰 ${fmtCoord(lat)}, ${fmtCoord(lng)}" else "### $ts"
+            val existing = readMd(context) ?: fileHeader()
+            writeMd(context, existing + "\n---\n\n$header\n![]($path)\n")
         }
 
         /** 그날 파일의 어종별 조과 수(- 🎣 어종 줄 집계). */
@@ -831,6 +919,14 @@ class CatchLogService : Service() {
             }
             ACTION_REMOVE_LAST -> {
                 removeLastAnyCatch()
+                return START_STICKY
+            }
+            ACTION_CLEAR_ALL -> {
+                io.execute {
+                    clearAllCatchesFromFile(this)
+                    sendCountsChanged()
+                    updateNotification()
+                }
                 return START_STICKY
             }
             ACTION_STOP_SOUND -> {

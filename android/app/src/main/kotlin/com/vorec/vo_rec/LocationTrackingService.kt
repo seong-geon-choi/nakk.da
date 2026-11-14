@@ -265,6 +265,9 @@ class LocationTrackingService : Service() {
         }
     }
 
+    // 기록을 시작한 날짜 — 자정 자동 종료 시 '어제' 메모에 조과 요약을 넣기 위해 보관.
+    private var trackDate = CatchSummary.today()
+
     override fun onCreate() {
         super.onCreate()
         sensorManager = getSystemService(SENSOR_SERVICE) as? SensorManager
@@ -323,6 +326,10 @@ class LocationTrackingService : Service() {
         try { unregisterReceiver(dateChangedReceiver) } catch (_: Exception) {}
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(PREFS_ACTIVE_KEY, false).apply()
+        // 경로 기록 종료 = 낚시 종료로 보고 그날 메모에 조과 요약 기록(조과 0이면 생략).
+        val ctx = applicationContext
+        val date = trackDate
+        Thread { try { CatchSummary.write(ctx, date) } catch (_: Exception) {} }.start()
         super.onDestroy()
     }
 

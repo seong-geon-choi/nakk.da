@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'settings_provider.dart';
 import '../../backup/presentation/backup_provider.dart';
 import 'watermark_settings_screen.dart';
+import 'watch_settings_screen.dart';
 import '../../map/presentation/map_screen.dart';
 import '../../species_ai/presentation/species_test_screen.dart';
 import '../../permission/presentation/permission_provider.dart';
@@ -396,6 +397,18 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               subtitle: const Text('홈 화면 아이콘으로 카운터를 바로 열기'),
               trailing: const Icon(Icons.add),
               onTap: () => _createCounterShortcut(context),
+            ),
+
+            const SizedBox(height: 16),
+            const _SectionHeader(label: '워치'),
+            ListTile(
+              leading: const Icon(Icons.watch_outlined),
+              title: const Text('워치 앱 설정'),
+              subtitle: const Text('밝기·화면 켜짐·카운터 색상·진동·시작 화면'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () => Navigator.of(context).push(MaterialPageRoute(
+                builder: (_) => const WatchSettingsScreen(),
+              )),
             ),
 
             const SizedBox(height: 16),

@@ -6,6 +6,9 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.os.Build
 import android.provider.Settings
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import androidx.core.app.NotificationCompat
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.WearableListenerService
@@ -18,6 +21,10 @@ import com.google.android.gms.wearable.WearableListenerService
  * - /nakkda/count/stop                        → 재생 중인 추임새/TTS 중지
  * - /nakkda/count/request                      → 현재 어종·조과 상태를 워치로 즉시 push
  * - /nakkda/chart/request                      → 그래프(시간당 조과+조위) 데이터를 워치로 push
+ * - /nakkda/settings/color, payload="side,idx"  → 워치에서 바꾼 카운터 색을 폰 설정에 반영
+ * - /nakkda/count/reset                        → 오늘 조과 기록 전체 삭제(워치 '기록 초기화')
+ * - /nakkda/screen/save, payload=이미지 바이트   → 워치 화면을 갤러리에 저장 + 오늘 메모에 첨부
+ * - /nakkda/fishing/end                        → 오늘 메모에 조과 요약(수 + 그래프 이미지) 기록
  *
  * 세션이 실행 중이면 포그라운드 서비스(알림/TTS/위치)에 명령을 전달한다. 세션이 없으면
  * 포그라운드 서비스를 백그라운드에서 시작할 수 없으므로(안드로이드 제한), 워치 카운트를
@@ -41,6 +48,10 @@ class WearListenerService : WearableListenerService() {
                     .putExtra("delay", parseIndex(event.data)))
             PATH_CAMERA_FLIP ->
                 sendBroadcast(Intent(ACTION_CAMERA_FLIP).setPackage(packageName))
+            PATH_SETTINGS_COLOR -> WatchSettings.setColorFromWatch(this, event.data)
+            PATH_COUNT_RESET -> forward(CatchLogService.ACTION_CLEAR_ALL, -1)
+            PATH_SCREEN_SAVE -> saveWatchScreen(event.data)
+            PATH_FISHING_END -> CatchSummary.write(this, CatchSummary.today())
         }
     }
 
@@ -89,6 +100,10 @@ class WearListenerService : WearableListenerService() {
             when (action) {
                 CatchLogService.ACTION_ADD, CatchLogService.ACTION_REMOVE ->
                     recordWithoutSession(action, speciesIndex)
+                CatchLogService.ACTION_CLEAR_ALL -> {
+                    CatchLogService.clearAllCatchesFromFile(this)
+                    notifyCountsChanged()
+                }
             }
             return
         }
@@ -128,13 +143,34 @@ class WearListenerService : WearableListenerService() {
             CatchLogService.ACTION_REMOVE ->
                 CatchLogService.removeLastCatchFromFile(this, species)
         }
-        // 카운터 화면이 떠 있으면 즉시 갱신 + 워치로 최신 수 반영.
+        notifyCountsChanged()
+        postRecordedNotification()
+    }
+
+    /** 카운터·지도 화면이 떠 있으면 즉시 갱신 + 워치로 최신 수 반영. */
+    private fun notifyCountsChanged() {
         try {
             sendBroadcast(
                 Intent(CatchLogService.ACTION_COUNTS_CHANGED).setPackage(packageName))
         } catch (_: Exception) {}
         CatchLogService.pushStateToWatch(this)
-        postRecordedNotification()
+    }
+
+    /**
+     * 워치 화면 캡처를 갤러리(DCIM/nakkda)에 저장하고, 그 경로를 오늘 메모에 사진 항목으로 추가.
+     * (onMessageReceived는 백그라운드 스레드라 파일·위치 조회를 동기로 해도 된다.)
+     */
+    private fun saveWatchScreen(bytes: ByteArray?) {
+        if (bytes == null || bytes.isEmpty()) return
+        val isPng = bytes.size > 4 && bytes[0] == 0x89.toByte() && bytes[1] == 'P'.code.toByte()
+        val mime = if (isPng) "image/png" else "image/jpeg"
+        val ext = if (isPng) ".png" else ".jpg"
+        val ts = SimpleDateFormat("yyyyMMdd_HHmmss_SSS", Locale.US).format(Date())
+        val path = CatchSummary.saveImageToGallery(this, bytes, mime, "NAKKDA_WATCH_$ts$ext") ?: return
+        val loc = CatchLogService.lastLocationBlocking(this)
+        CatchLogService.appendPhotoToFile(this, path, loc?.first, loc?.second)
+        // 지도 등 열린 화면이 오늘 파일을 다시 읽도록 갱신 신호.
+        notifyCountsChanged()
     }
 
     /** '워치에서 기록됨 — 탭하면 카운터 열기' 알림(일반 알림이라 백그라운드에서도 가능). */
@@ -181,6 +217,10 @@ class WearListenerService : WearableListenerService() {
         private const val PATH_CAMERA_CLOSE = "/nakkda/camera/close"
         private const val PATH_CAMERA_SHOOT = "/nakkda/camera/shoot"
         private const val PATH_CAMERA_FLIP = "/nakkda/camera/flip"
+        private const val PATH_SETTINGS_COLOR = "/nakkda/settings/color"
+        private const val PATH_COUNT_RESET = "/nakkda/count/reset"
+        private const val PATH_SCREEN_SAVE = "/nakkda/screen/save"
+        private const val PATH_FISHING_END = "/nakkda/fishing/end"
         private const val CHANNEL_ID = "nakkda_watch_record"
         private const val NOTIF_ID = 1009
         private const val CAMERA_CHANNEL_ID = "nakkda_watch_camera"

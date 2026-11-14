@@ -778,6 +778,21 @@ class MainActivity : FlutterActivity() {
             }
         }
 
+        // ── 워치 앱 설정 채널 (밝기·화면 켜짐·색상·진동·시작 화면) ────────
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.sgchoisg.nakkda/watch")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "getWatchSettings" -> result.success(WatchSettings.get(this))
+                    "setWatchSettings" -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val values = (call.arguments as? Map<String, Any?>) ?: emptyMap()
+                        WatchSettings.set(this, values)
+                        result.success(null)
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+
         // ── 블루투스 리모컨 채널 (조과 카운트 키 매핑/캡처) ────────
         // 조과 집계 변경 이벤트(네이티브→Flutter) 전달 채널.
         catchEventsChannel = MethodChannel(
