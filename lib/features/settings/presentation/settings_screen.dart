@@ -118,6 +118,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             // ── 어종 섹션 ─────────────────────────────
             const _SectionHeader(label: '어종'),
             SwitchListTile(
+              contentPadding: _kNoChevronPadding,
               secondary: const Icon(Icons.cloud_upload_outlined),
               title: const Text('AI 학습용 사진 제공'),
               subtitle: const Text(
@@ -166,11 +167,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   builder: (_) => const WatermarkSettingsScreen(),
                 ),
               ),
-              trailing: Switch(
-                value: settings.watermark.enabled,
-                onChanged: (v) => ref
-                    .read(settingsProvider.notifier)
-                    .updateWatermark(settings.watermark.copyWith(enabled: v)),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Switch(
+                    value: settings.watermark.enabled,
+                    onChanged: (v) => ref
+                        .read(settingsProvider.notifier)
+                        .updateWatermark(settings.watermark.copyWith(enabled: v)),
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
               ),
             ),
 
@@ -193,11 +200,17 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               title: const Text('경로 기록'),
               subtitle: Text(
                   '정지·조업 ${settings.trackingIntervalMeters}m · 이동 속도가 빠를수록 간격 자동 확대'),
-              trailing: Switch(
-                value: settings.showTrackingButton,
-                onChanged: (v) => ref
-                    .read(settingsProvider.notifier)
-                    .updateShowTrackingButton(v),
+              trailing: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Switch(
+                    value: settings.showTrackingButton,
+                    onChanged: (v) => ref
+                        .read(settingsProvider.notifier)
+                        .updateShowTrackingButton(v),
+                  ),
+                  const Icon(Icons.chevron_right),
+                ],
               ),
               onTap: () => Navigator.of(context).push(
                 MaterialPageRoute(builder: (_) => const _TrackingIntervalSubScreen()),
@@ -281,6 +294,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             // (저장 위치 변경은 '권한 점검' 화면으로 이동)
             const _SectionHeader(label: '고급'),
             SwitchListTile(
+              contentPadding: _kNoChevronPadding,
               secondary: const Icon(Icons.add_location_alt_outlined),
               title: const Text('현장 정보 추가 버튼 표시'),
               subtitle: const Text('메인 화면 하단에 현장 정보 추가 버튼을 표시합니다'),
@@ -330,6 +344,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
               onTap: () => _editCatchQuickSpecies(context, ref),
             ),
             SwitchListTile(
+              contentPadding: _kNoChevronPadding,
               secondary: const Icon(Icons.play_circle_outline),
               title: const Text('앱 실행 시 카운터 자동 시작'),
               subtitle: const Text(
@@ -2161,6 +2176,7 @@ class _DevMenuSubScreen extends ConsumerWidget {
         padding: EdgeInsets.only(bottom: MediaQuery.of(context).padding.bottom),
         children: [
           SwitchListTile(
+            contentPadding: _kNoChevronPadding,
             secondary: const Icon(Icons.ads_click_outlined),
             title: const Text('광고 노출'),
             subtitle: const Text('끄면 목록·통계 하단의 광고 영역이 숨겨집니다'),
@@ -2175,25 +2191,31 @@ class _DevMenuSubScreen extends ConsumerWidget {
             subtitle: const Text('탭하여 반경·시간대·지점 등 상세 설정'),
             onTap: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => const _CommuteSettingsScreen())),
-            trailing: Switch(
-              value: commuteOn,
-              onChanged: (v) async {
-                if (v) {
-                  // 이미 승인된 권한은 다시 묻지 않음(경로기록과 위치 권한 공유)
-                  if (!await Permission.locationWhenInUse.isGranted) {
-                    // 백그라운드 위치 사용 전 명시적 공개+동의(정책 요건).
-                    if (!context.mounted ||
-                        !await ensureLocationDisclosure(context)) {
-                      return;
+            trailing: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Switch(
+                  value: commuteOn,
+                  onChanged: (v) async {
+                    if (v) {
+                      // 이미 승인된 권한은 다시 묻지 않음(경로기록과 위치 권한 공유)
+                      if (!await Permission.locationWhenInUse.isGranted) {
+                        // 백그라운드 위치 사용 전 명시적 공개+동의(정책 요건).
+                        if (!context.mounted ||
+                            !await ensureLocationDisclosure(context)) {
+                          return;
+                        }
+                        await Permission.locationWhenInUse.request();
+                      }
+                      if (!await Permission.notification.isGranted) {
+                        await Permission.notification.request();
+                      }
                     }
-                    await Permission.locationWhenInUse.request();
-                  }
-                  if (!await Permission.notification.isGranted) {
-                    await Permission.notification.request();
-                  }
-                }
-                await notifier.updateCommuteEnabled(v);
-              },
+                    await notifier.updateCommuteEnabled(v);
+                  },
+                ),
+                const Icon(Icons.chevron_right),
+              ],
             ),
           ),
           const Divider(),
@@ -2527,6 +2549,10 @@ class _SupportItem extends StatelessWidget {
     );
   }
 }
+
+/// 하위 메뉴가 없는 토글 행: '>'(24dp) 자리만큼 오른쪽을 비워
+/// 하위 메뉴가 있는 행(토글 + '>')과 토글 위치를 맞춘다(M3 기본 끝 여백 24 + 24).
+const _kNoChevronPadding = EdgeInsetsDirectional.only(start: 16, end: 48);
 
 ListTileThemeData _subtitleTheme(BuildContext ctx) => ListTileThemeData(
   subtitleTextStyle: TextStyle(
