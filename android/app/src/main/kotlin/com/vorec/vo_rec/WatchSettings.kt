@@ -21,6 +21,8 @@ object WatchSettings {
         "dim_level" to 30,     // 어두울 때 밝기 %(1~50, 체감 기준)
         "dim_idle_sec" to 15,  // 어둡게 되기까지 초(0=어둡게 안 함)
         "start_page" to 1,     // 시작 화면(0=그래프, 1=카운터, 2=카메라)
+        "cam_keep_sec" to 120, // 카메라 화면 켜짐 유지(조작 없을 때, 초)
+        "rec_leave" to 0,      // 녹화 중 워치 앱/카메라 화면을 벗어나면(0=정지·저장, 1=계속 녹화)
     )
     private val BOOL_DEFAULTS = linkedMapOf(
         "keep_on" to false,    // 화면 항상 켜두기(기본 끔 — 켜두면 시간당 약 30% 배터리 소모)
@@ -28,6 +30,7 @@ object WatchSettings {
         "show_clock" to true,  // 요약 화면에 시계 표시
         "show_elapsed" to true, // 요약 화면에 마지막 조과 경과 시간 표시
         "eco_colors" to false, // 카운터 절전 색상(배경 어둡게)
+        "cam_preview" to true, // 워치에 폰 카메라 미리보기 전송
     )
     private val COLOR_KEYS = listOf("color_0", "color_1")
 

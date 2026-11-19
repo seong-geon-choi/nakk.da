@@ -56,6 +56,18 @@ class WearListenerService : WearableListenerService() {
                     .putExtra("delay", parseIndex(event.data)))
             PATH_CAMERA_FLIP ->
                 sendBroadcast(Intent(ACTION_CAMERA_FLIP).setPackage(packageName))
+            // 사진/동영상 모드 전환(payload 1=동영상, 0=사진).
+            PATH_CAMERA_MODE -> sendBroadcast(
+                Intent(ACTION_CAMERA_MODE).setPackage(packageName)
+                    .putExtra("video", event.data.firstOrNull() == 1.toByte()))
+            // 녹화 시작("start,지연초")/정지("stop").
+            PATH_CAMERA_RECORD -> {
+                val parts = String(event.data).split(",")
+                sendBroadcast(
+                    Intent(ACTION_CAMERA_RECORD).setPackage(packageName)
+                        .putExtra("start", parts.getOrNull(0) == "start")
+                        .putExtra("delay", parts.getOrNull(1)?.toIntOrNull() ?: 0))
+            }
             PATH_SETTINGS_COLOR -> WatchSettings.setColorFromWatch(this, event.data)
             PATH_COUNT_RESET -> forward(CatchLogService.ACTION_CLEAR_ALL, -1)
             PATH_SCREEN_SAVE -> saveWatchScreen(event.data)
@@ -226,6 +238,8 @@ class WearListenerService : WearableListenerService() {
         private const val PATH_CAMERA_SHOOT = "/nakkda/camera/shoot"
         private const val PATH_CAMERA_FLIP = "/nakkda/camera/flip"
         private const val PATH_CAMERA_PREVIEW = "/nakkda/camera/preview"
+        private const val PATH_CAMERA_MODE = "/nakkda/camera/mode"
+        private const val PATH_CAMERA_RECORD = "/nakkda/camera/record"
         private const val PATH_SETTINGS_COLOR = "/nakkda/settings/color"
         private const val PATH_COUNT_RESET = "/nakkda/count/reset"
         private const val PATH_SCREEN_SAVE = "/nakkda/screen/save"
@@ -239,5 +253,7 @@ class WearListenerService : WearableListenerService() {
         const val ACTION_CAMERA_SHOOT = "com.sgchoisg.nakkda.CAMERA_SHOOT"
         const val ACTION_CAMERA_FLIP = "com.sgchoisg.nakkda.CAMERA_FLIP"
         const val ACTION_CAMERA_PREVIEW = "com.sgchoisg.nakkda.CAMERA_PREVIEW"
+        const val ACTION_CAMERA_MODE = "com.sgchoisg.nakkda.CAMERA_MODE"
+        const val ACTION_CAMERA_RECORD = "com.sgchoisg.nakkda.CAMERA_RECORD"
     }
 }

@@ -59,7 +59,11 @@ object CatchSummary {
             hourly.keys.filter { it !in species }.sorted()
         val counts = names.map { n -> hourly[n]?.sum() ?: 0 }
         val total = counts.sum()
-        if (total <= 0) return false
+        if (total <= 0) {
+            // 조과 0(예: 카운터 초기화 뒤 낚시 종료)이면 남아 있던 옛 요약만 정리.
+            clear(context, date)
+            return false
+        }
 
         val (firstAt, lastAt) = catchTimeRange(txt) ?: return false
         val tide = CatchLogService.loadTidePoints(context, date)
@@ -78,20 +82,7 @@ object CatchSummary {
 
         // 기존 요약 항목(카운터 캡처는 새 캡처가 있을 때만) 제거(이미지도 삭제) 후 끝에 새로 추가.
         val segs = txt.split("\n---\n").toMutableList()
-        val iter = segs.listIterator()
-        iter.next() // 파일 헤더 영역은 유지
-        while (iter.hasNext()) {
-            val seg = iter.next()
-            val isOld = seg.lineSequence().any { l ->
-                val t = l.trim()
-                t.startsWith(MARK) || (counterPath != null && t.startsWith(MARK_COUNTER))
-            }
-            if (isOld) {
-                Regex("""^!\[\]\((.+)\)$""", RegexOption.MULTILINE).find(seg)
-                    ?.let { m -> deleteImage(context, m.groupValues[1]) }
-                iter.remove()
-            }
-        }
+        removeSummaries(context, segs, withCounter = counterPath != null)
         // 오늘이면 지금, 지난 날짜(자정 종료)면 마지막 조과 시각을 항목 시각으로.
         val ts = if (date == today())
             SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date())
@@ -113,6 +104,43 @@ object CatchSummary {
                 Intent(CatchLogService.ACTION_COUNTS_CHANGED).setPackage(context.packageName))
         } catch (_: Exception) {}
         return true
+    }
+
+    /**
+     * 그날 메모에서 조과 요약·워치 카운터 항목을 지운다(이미지도 삭제).
+     * 카운터 초기화·조과 0 낚시 종료 때 — 조과가 없는데 옛 요약이 남지 않게.
+     */
+    @Synchronized
+    fun clear(context: Context, date: String) {
+        val txt = CatchLogService.readMd(context, date) ?: return
+        val segs = txt.split("\n---\n").toMutableList()
+        if (!removeSummaries(context, segs, withCounter = true)) return
+        CatchLogService.writeMd(context, segs.joinToString("\n---\n"), date)
+        try {
+            context.sendBroadcast(
+                Intent(CatchLogService.ACTION_COUNTS_CHANGED).setPackage(context.packageName))
+        } catch (_: Exception) {}
+    }
+
+    /** segs에서 요약(withCounter면 카운터 캡처 포함) 항목과 그 이미지를 제거. 지웠으면 true. */
+    private fun removeSummaries(context: Context, segs: MutableList<String>, withCounter: Boolean): Boolean {
+        var removed = false
+        val iter = segs.listIterator()
+        iter.next() // 파일 헤더 영역은 유지
+        while (iter.hasNext()) {
+            val seg = iter.next()
+            val isOld = seg.lineSequence().any { l ->
+                val t = l.trim()
+                t.startsWith(MARK) || (withCounter && t.startsWith(MARK_COUNTER))
+            }
+            if (isOld) {
+                Regex("""^!\[\]\((.+)\)$""", RegexOption.MULTILINE).find(seg)
+                    ?.let { m -> deleteImage(context, m.groupValues[1]) }
+                iter.remove()
+                removed = true
+            }
+        }
+        return removed
     }
 
     /** 어종 i의 색 — 좌/우(0,1)는 워치 카운터 색, 그 외는 기본 색. */

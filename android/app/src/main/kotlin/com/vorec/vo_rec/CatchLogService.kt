@@ -642,6 +642,8 @@ class CatchLogService : Service() {
                 if (hasContent) out.add(kept.joinToString("\n"))
             }
             if (out != segs) writeMd(context, out.joinToString("\n---\n"))
+            // 조과를 모두 지웠으니 오늘의 조과 요약·카운터 캡처도 함께 정리.
+            CatchSummary.clear(context, CatchSummary.today())
         }
 
         /** 오늘 파일에 사진 항목(![](경로))을 추가 — Dart MdSerializer와 같은 형식. */

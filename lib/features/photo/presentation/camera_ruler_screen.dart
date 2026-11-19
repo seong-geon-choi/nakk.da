@@ -27,12 +27,15 @@ class CameraRulerScreen extends ConsumerStatefulWidget {
   final bool initialFront; // true면 전면(셀카) 카메라로 시작(워치 셀카 호출)
   // true면 독립 실행(흔들기·워치·카운터→카메라): '카운터로' 버튼 노출. 메모 첨부는 false.
   final bool standalone;
-  // true면 워치에서 연 카메라: 저화질 미리보기 프레임을 워치로 보낸다(사진 모드에서만).
+  // true면 워치에서 연 카메라: 모드·녹화 상태를 워치에 알리고, 워치의 모드 전환·녹화를 받는다.
+  final bool watchRemote;
+  // true면 저화질 미리보기 프레임을 워치로 보낸다(사진·동영상 모두, 폰의 워치 설정으로 끌 수 있음).
   final bool watchPreview;
   const CameraRulerScreen(
       {super.key,
       this.initialFront = false,
       this.standalone = false,
+      this.watchRemote = false,
       this.watchPreview = false});
 
   @override
@@ -326,6 +329,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
             _permissionDenied = false;
           });
           _syncWatchStream();
+          _reportState();
           return; // 성공
         } catch (e) {
           if (attempt < 3) {
@@ -350,6 +354,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
 
   Future<void> _switchMode(bool toVideo) async {
     if (_isRecording) return;
+    _reportState(busy: true, video: toVideo); // 워치: 전환 중 표시
     final oldCtrl = _ctrl;
     setState(() {
       _isVideoMode = toVideo;
@@ -357,6 +362,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     });
     await oldCtrl?.dispose();
     await _initCamera();
+    if (_ctrl == null) _reportState(); // 초기화 실패 시에도 워치의 '전환 중' 해제
     _showToast(toVideo ? '동영상 모드' : '사진 모드');
   }
 
@@ -388,15 +394,64 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
         _watchPreviewOn = call.arguments != false;
         _syncWatchStream();
         break;
+      case 'remoteMode':
+        final toVideo = call.arguments == true;
+        if (_isRecording || _countdown != null || toVideo == _isVideoMode) {
+          _reportState(); // 바꿀 수 없거나 이미 그 모드면 현재 상태만 다시 알림
+        } else {
+          await _switchMode(toVideo);
+        }
+        break;
+      case 'remoteRecord':
+        final args = call.arguments;
+        final start = args is Map && args['start'] == true;
+        final delay = (args is Map && args['delay'] is int) ? args['delay'] as int : 0;
+        if (start) {
+          await _remoteRecordStart(delay);
+        } else {
+          await _stopRecording();
+        }
+        break;
+      // 워치에서 카메라 닫기: 녹화 중이면 정지·저장한 뒤 닫는다(찍어 둔 결과도 함께 반환).
+      case 'remoteClose':
+        if (_isRecording) await _stopRecording();
+        _finishWithCaptured();
+        break;
     }
     return null;
   }
 
-  /// 워치 미리보기 프레임 스트림을 상태(워치 화면 켜짐·사진 모드)에 맞춰 켜고 끈다.
+  /// 워치에 현재 카메라 상태(동영상 모드·녹화 중·전환 중)를 알린다.
+  void _reportState({bool busy = false, bool? video}) {
+    if (!widget.watchRemote) return;
+    _remoteChannel.invokeMethod('cameraState', {
+      'video': video ?? _isVideoMode,
+      'recording': _isRecording,
+      'busy': busy,
+    }).catchError((_) => null);
+  }
+
+  /// 워치 녹화 시작: 동영상 모드가 아니면 먼저 전환, [delaySec]초 카운트다운 뒤 녹화.
+  Future<void> _remoteRecordStart(int delaySec) async {
+    if (_isRecording || _countdown != null) return;
+    if (!_isVideoMode) await _switchMode(true);
+    for (var s = delaySec; s > 0; s--) {
+      if (!mounted) return;
+      setState(() => _countdown = s);
+      await Future.delayed(const Duration(seconds: 1));
+    }
+    if (!mounted) return;
+    if (_countdown != null) setState(() => _countdown = null);
+    await _startRecording();
+  }
+
+  /// 워치 미리보기 프레임 스트림을 워치 화면 켜짐에 맞춰 켜고 끈다.
+  /// 녹화 중에는 녹화와 함께 시작한 스트림을 유지한다(중간에 켜고 끌 수 없음).
   void _syncWatchStream() {
     final ctrl = _ctrl;
     if (!widget.watchPreview || ctrl == null || !ctrl.value.isInitialized) return;
-    final want = _watchPreviewOn && !_isVideoMode;
+    if (ctrl.value.isRecordingVideo) return;
+    final want = _watchPreviewOn;
     if (want && !ctrl.value.isStreamingImages) {
       ctrl.startImageStream(_onPreviewFrame).catchError((_) {});
     } else if (!want && ctrl.value.isStreamingImages) {
@@ -406,6 +461,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
 
   /// 초당 약 4장만 골라 YUV 평면을 네이티브로 넘긴다(축소·JPEG·워치 전송은 네이티브).
   void _onPreviewFrame(CameraImage img) {
+    if (!_watchPreviewOn) return; // 녹화 중 워치 화면이 꺼졌으면 보내지 않음
     final now = DateTime.now();
     if (_frameBusy || now.difference(_lastFrameAt) < _kFrameInterval) return;
     if (img.planes.length < 3) return;
@@ -614,7 +670,10 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     final ctrl = _ctrl;
     if (ctrl == null || !ctrl.value.isInitialized || _isRecording) return;
     try {
-      await ctrl.startVideoRecording();
+      // 워치 미리보기: 녹화와 함께 프레임을 받는다(동시 지원 기기만 — 아니면 프레임 없이 녹화).
+      if (ctrl.value.isStreamingImages) await ctrl.stopImageStream();
+      await ctrl.startVideoRecording(
+          onAvailable: widget.watchPreview ? _onPreviewFrame : null);
       setState(() {
         _isRecording = true;
         _recordSeconds = 0;
@@ -622,8 +681,11 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() => _recordSeconds++);
       });
+      _reportState();
     } catch (e) {
       _showToast('녹화 오류: $e');
+      _syncWatchStream();
+      _reportState();
     }
   }
 
@@ -635,18 +697,29 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     try {
       final file = await ctrl.stopVideoRecording();
       if (mounted) setState(() => _isRecording = false);
+      _reportState();
       if (!mounted) return;
       final savedPath = await _saveVideo(file.path);
       final gps = await _captureGps();
       if (!mounted) return;
+      final r = (path: savedPath ?? file.path, isVideo: true, gps: gps);
+      if (widget.watchRemote) {
+        // 워치 원격 세션: 사진처럼 대기열에 저장하고 카메라는 유지(연속 촬영).
+        await _queuePhotoLocal(r);
+        if (!mounted) return;
+        _showToast('녹화 저장됨');
+        _syncWatchStream(); // 녹화와 함께 멈춘 미리보기 재개
+        return;
+      }
       // 동영상은 한 번 녹화로 끝 — 누적 목록에 더해 바로 반환(팝업 없음).
-      _captured.add((path: savedPath ?? file.path, isVideo: true, gps: gps));
+      _captured.add(r);
       _finishWithCaptured();
     } catch (e) {
       if (mounted) {
         setState(() => _isRecording = false);
         _showToast('저장 오류: $e');
       }
+      _reportState();
     }
   }
 

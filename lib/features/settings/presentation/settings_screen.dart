@@ -419,7 +419,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
             ListTile(
               leading: const Icon(Icons.watch_outlined),
               title: const Text('워치 앱 설정'),
-              subtitle: const Text('밝기·화면 켜짐·카운터 색상·진동·시작 화면'),
+              subtitle: const Text('밝기·화면 켜짐·카운터 색상·진동·시작 화면·카메라'),
               trailing: const Icon(Icons.chevron_right),
               onTap: () => Navigator.of(context).push(MaterialPageRoute(
                 builder: (_) => const WatchSettingsScreen(),

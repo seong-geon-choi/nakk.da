@@ -31,6 +31,15 @@ const _kDimIdleOptions = <int, String>{
   0: '바꾸지 않음',
 };
 
+// 카메라 화면 켜짐 유지 시간(초).
+const _kCamKeepOptions = <int, String>{
+  30: '30초',
+  60: '1분',
+  120: '2분',
+  300: '5분',
+  600: '10분',
+};
+
 /// 폰에서 워치 낚.다 앱의 화면·카운터 설정을 관리한다.
 /// 워치 시스템 설정(전체 밝기 등)이 아니라, 워치 앱이 떠 있는 동안의 동작만 바꾼다.
 class WatchSettingsScreen extends StatefulWidget {
@@ -53,6 +62,9 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
   int _startPage = 1;
   bool _showClock = true;
   bool _showElapsed = true;
+  bool _camPreview = true;
+  int _camKeepSec = 120;
+  int _recLeave = 0;
 
   @override
   void initState() {
@@ -76,6 +88,10 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
       _showClock = (m['show_clock'] as bool?) ?? true;
       _showElapsed = (m['show_elapsed'] as bool?) ?? true;
       if (!_kDimIdleOptions.containsKey(_dimIdleSec)) _dimIdleSec = 15;
+      _camPreview = (m['cam_preview'] as bool?) ?? true;
+      _camKeepSec = (m['cam_keep_sec'] as int?) ?? 120;
+      if (!_kCamKeepOptions.containsKey(_camKeepSec)) _camKeepSec = 120;
+      _recLeave = (m['rec_leave'] as int?) ?? 0;
       _loading = false;
     });
   }
@@ -326,6 +342,63 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
                       setState(() => _startPage = v);
                       _save({'start_page': v});
                     },
+                  ),
+                ),
+                const _Header('카메라 (폰 카메라 원격 촬영)'),
+                SwitchListTile(
+                  secondary: const Icon(Icons.preview_outlined),
+                  title: const Text('워치에 미리보기 표시'),
+                  subtitle: const Text('구도 확인용(초당 약 4장). 끄면 배터리·블루투스 절약'),
+                  value: _camPreview,
+                  onChanged: (v) {
+                    setState(() => _camPreview = v);
+                    _save({'cam_preview': v});
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.timer_outlined),
+                  title: const Text('화면 켜짐 유지'),
+                  subtitle: const Text('카메라 화면에서 조작이 없을 때(녹화는 화면이 꺼져도 계속)'),
+                  trailing: DropdownButton<int>(
+                    value: _camKeepSec,
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => _camKeepSec = v);
+                      _save({'cam_keep_sec': v});
+                    },
+                    items: [
+                      for (final e in _kCamKeepOptions.entries)
+                        DropdownMenuItem(value: e.key, child: Text(e.value)),
+                    ],
+                  ),
+                ),
+                const ListTile(
+                  leading: Icon(Icons.videocam_outlined),
+                  title: Text('녹화 중 카메라 화면을 벗어나면'),
+                  subtitle: Text('워치 홈·뒤로 버튼이나 다른 페이지로 넘길 때'),
+                ),
+                RadioGroup<int>(
+                  groupValue: _recLeave,
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => _recLeave = v);
+                    _save({'rec_leave': v});
+                  },
+                  child: const Column(
+                    children: [
+                      RadioListTile<int>(
+                        contentPadding: EdgeInsets.only(left: 32, right: 16),
+                        value: 0,
+                        title: Text('녹화 정지 후 저장'),
+                        subtitle: Text('저장하고 폰 카메라를 닫습니다'),
+                      ),
+                      RadioListTile<int>(
+                        contentPadding: EdgeInsets.only(left: 32, right: 16),
+                        value: 1,
+                        title: Text('계속 녹화'),
+                        subtitle: Text('카메라 페이지로 돌아와 정지할 수 있습니다'),
+                      ),
+                    ],
                   ),
                 ),
               ],

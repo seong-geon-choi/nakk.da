@@ -33,7 +33,26 @@ class CameraLockActivity : FlutterActivity() {
     private val cameraReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             when (intent?.action) {
-                WearListenerService.ACTION_CLOSE_CAMERA -> finish()
+                // 닫기: 녹화 중이면 Dart가 정지·저장 후 스스로 닫는다. Dart가 응답 못 하면 바로 닫음.
+                WearListenerService.ACTION_CLOSE_CAMERA -> runOnUiThread {
+                    val ch = methodChannel
+                    if (ch == null) { finish(); return@runOnUiThread }
+                    ch.invokeMethod("remoteClose", null, object : MethodChannel.Result {
+                        override fun success(r: Any?) {}
+                        override fun error(c: String, m: String?, d: Any?) { finish() }
+                        override fun notImplemented() { finish() }
+                    })
+                }
+                WearListenerService.ACTION_CAMERA_MODE -> {
+                    val video = intent.getBooleanExtra("video", false)
+                    runOnUiThread { methodChannel?.invokeMethod("remoteMode", video) }
+                }
+                WearListenerService.ACTION_CAMERA_RECORD -> {
+                    val args = mapOf(
+                        "start" to intent.getBooleanExtra("start", false),
+                        "delay" to intent.getIntExtra("delay", 0))
+                    runOnUiThread { methodChannel?.invokeMethod("remoteRecord", args) }
+                }
                 WearListenerService.ACTION_CAMERA_SHOOT -> {
                     val delay = intent.getIntExtra("delay", 0)
                     runOnUiThread {
@@ -53,8 +72,12 @@ class CameraLockActivity : FlutterActivity() {
     override fun getDartEntrypointFunctionName(): String = "cameraLockMain"
 
     /** 셀카(전면) 모드로 열지 여부를 Dart 진입점 인자로 전달(워치 호출 시 "selfie"). */
-    override fun getDartEntrypointArgs(): List<String> =
-        if (intent?.getBooleanExtra("selfie", false) == true) listOf("selfie") else emptyList()
+    override fun getDartEntrypointArgs(): List<String> {
+        if (intent?.getBooleanExtra("selfie", false) != true) return emptyList()
+        // 워치 미리보기를 끈 설정이면 프레임 전송을 하지 않도록 함께 알린다.
+        val preview = WatchSettings.get(this)["cam_preview"] as? Boolean ?: true
+        return if (preview) listOf("selfie") else listOf("selfie", "nopreview")
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // 워치 카메라 조작(닫기/셔터/전후면) 수신.
@@ -63,6 +86,8 @@ class CameraLockActivity : FlutterActivity() {
             addAction(WearListenerService.ACTION_CAMERA_SHOOT)
             addAction(WearListenerService.ACTION_CAMERA_FLIP)
             addAction(WearListenerService.ACTION_CAMERA_PREVIEW)
+            addAction(WearListenerService.ACTION_CAMERA_MODE)
+            addAction(WearListenerService.ACTION_CAMERA_RECORD)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(cameraReceiver, filter, RECEIVER_NOT_EXPORTED)
@@ -90,16 +115,7 @@ class CameraLockActivity : FlutterActivity() {
         // 워치에서 연 카메라면, 어떻게 닫혔든(뒤로가기·카운터로·워치 닫기) 워치에 알려
         // 멈춘 미리보기 대신 실행 확인 화면으로 돌아가게 한다.
         if (intent?.getBooleanExtra("selfie", false) == true) {
-            val ctx = applicationContext
-            Thread {
-                try {
-                    val nodes = com.google.android.gms.tasks.Tasks.await(
-                        com.google.android.gms.wearable.Wearable.getNodeClient(ctx).connectedNodes,
-                        2, java.util.concurrent.TimeUnit.SECONDS)
-                    val mc = com.google.android.gms.wearable.Wearable.getMessageClient(ctx)
-                    for (n in nodes) mc.sendMessage(n.id, "/nakkda/camera/closed", ByteArray(0))
-                } catch (_: Exception) {}
-            }.start()
+            sendToWatch("/nakkda/camera/closed", ByteArray(0))
         }
         try { unregisterReceiver(cameraReceiver) } catch (_: Exception) {}
         methodChannel = null
@@ -140,6 +156,14 @@ class CameraLockActivity : FlutterActivity() {
                                 runOnUiThread { result.success(null) }
                             }
                         }
+                        // 카메라 상태(모드·녹화·전환 중)를 워치에 알림 — payload "video,recording,busy"(1/0).
+                        "cameraState" -> {
+                            val a = call.arguments as? Map<*, *>
+                            fun b(k: String) = if (a?.get(k) == true) "1" else "0"
+                            sendToWatch("/nakkda/camera/state",
+                                "${b("video")},${b("recording")},${b("busy")}".toByteArray())
+                            result.success(null)
+                        }
                         "openCounter" -> {
                             runOnUiThread { openCounterAndFinish() }
                             result.success(null)
@@ -148,6 +172,20 @@ class CameraLockActivity : FlutterActivity() {
                     }
                 }
             }
+    }
+
+    /** 연결된 워치에 메시지 전송(백그라운드 스레드). */
+    private fun sendToWatch(path: String, data: ByteArray) {
+        val ctx = applicationContext
+        Thread {
+            try {
+                val nodes = com.google.android.gms.tasks.Tasks.await(
+                    com.google.android.gms.wearable.Wearable.getNodeClient(ctx).connectedNodes,
+                    2, java.util.concurrent.TimeUnit.SECONDS)
+                val mc = com.google.android.gms.wearable.Wearable.getMessageClient(ctx)
+                for (n in nodes) mc.sendMessage(n.id, path, data)
+            } catch (_: Exception) {}
+        }.start()
     }
 
     /** 카메라를 닫고 조과 카운터 화면을 연다(세션 시작). 이미 떠 있으면 재사용. */

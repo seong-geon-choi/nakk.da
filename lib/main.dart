@@ -12,7 +12,10 @@ import 'features/species_ai/data/model_update_service.dart';
 @pragma('vm:entry-point')
 void cameraLockMain(List<String> args) {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(ProviderScope(child: CameraLockApp(selfie: args.contains('selfie'))));
+  runApp(ProviderScope(
+      child: CameraLockApp(
+          selfie: args.contains('selfie'),
+          preview: !args.contains('nopreview'))));
 }
 
 void main() async {

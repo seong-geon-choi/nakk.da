@@ -17,14 +17,15 @@ import 'camera_ruler_screen.dart';
 /// 등록을 처리한다(음성 결과 전달과 동일한 패턴).
 class CameraLockApp extends StatelessWidget {
   final bool selfie; // 워치 호출 시 전면(셀카) 카메라로 시작
-  const CameraLockApp({super.key, this.selfie = false});
+  final bool preview; // 워치 미리보기 전송(폰의 워치 설정)
+  const CameraLockApp({super.key, this.selfie = false, this.preview = true});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
       theme: ThemeData(colorSchemeSeed: Colors.blue, useMaterial3: true),
-      home: _CameraLockHost(selfie: selfie),
+      home: _CameraLockHost(selfie: selfie, preview: preview),
     );
   }
 }
@@ -34,7 +35,8 @@ const String kPendingShakePhotosKey = 'pending_shake_photos';
 
 class _CameraLockHost extends ConsumerStatefulWidget {
   final bool selfie;
-  const _CameraLockHost({this.selfie = false});
+  final bool preview;
+  const _CameraLockHost({this.selfie = false, this.preview = true});
 
   @override
   ConsumerState<_CameraLockHost> createState() => _CameraLockHostState();
@@ -59,8 +61,9 @@ class _CameraLockHostState extends ConsumerState<_CameraLockHost> {
             builder: (_) => CameraRulerScreen(
                 initialFront: widget.selfie,
                 standalone: true,
-                // 워치에서 연 카메라(셀카 인자)면 워치로 미리보기 전송.
-                watchPreview: widget.selfie)),
+                // 워치에서 연 카메라(셀카 인자)면 워치 원격 조작 + (설정 시) 미리보기 전송.
+                watchRemote: widget.selfie,
+                watchPreview: widget.selfie && widget.preview)),
       );
       for (final r in results ?? const <ShotResult>[]) {
         await _queuePhoto(r);
