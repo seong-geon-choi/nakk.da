@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'saf_image.dart';
 import 'video_player_widget.dart';
+import 'video_trim_screen.dart';
 
 /// 갤러리 항목: 사진/동영상 경로와 종류.
 class MediaGalleryItem {
@@ -32,6 +33,7 @@ class MediaGalleryScreen extends StatefulWidget {
 class _MediaGalleryScreenState extends State<MediaGalleryScreen> {
   late final PageController _pageController;
   late int _index;
+  int _edits = 0; // 자르기로 원본이 바뀌면 증가 → 영상 페이지 다시 로드
 
   @override
   void initState() {
@@ -59,6 +61,24 @@ class _MediaGalleryScreenState extends State<MediaGalleryScreen> {
           style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w500),
         ),
         centerTitle: true,
+        actions: [
+          if (widget.items[_index].isVideo)
+            IconButton(
+              tooltip: '자르기',
+              icon: const Icon(Icons.content_cut),
+              onPressed: () async {
+                final changed = await Navigator.of(context).push<bool>(
+                  MaterialPageRoute(
+                    builder: (_) => VideoTrimScreen(
+                      videoPath: resolveVideoPath(
+                          widget.items[_index].path, widget.savePath),
+                    ),
+                  ),
+                );
+                if (changed == true && mounted) setState(() => _edits++);
+              },
+            ),
+        ],
       ),
       extendBodyBehindAppBar: true,
       body: PageView.builder(
@@ -69,6 +89,7 @@ class _MediaGalleryScreenState extends State<MediaGalleryScreen> {
           final item = widget.items[i];
           if (item.isVideo) {
             return _GalleryVideoPage(
+              key: ValueKey('${item.path}#$_edits'),
               videoPath: resolveVideoPath(item.path, widget.savePath),
               active: i == _index,
             );
@@ -139,7 +160,8 @@ class _GalleryPhotoPageState extends State<_GalleryPhotoPage> {
 class _GalleryVideoPage extends StatefulWidget {
   final String videoPath; // 절대 경로 또는 content:// (이미 resolve된 값)
   final bool active;
-  const _GalleryVideoPage({required this.videoPath, required this.active});
+  const _GalleryVideoPage(
+      {super.key, required this.videoPath, required this.active});
 
   @override
   State<_GalleryVideoPage> createState() => _GalleryVideoPageState();

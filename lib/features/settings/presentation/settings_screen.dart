@@ -19,6 +19,7 @@ import '../../../core/utils/media_scanner.dart';
 import '../../../core/services/tracking_service.dart';
 import '../../../core/services/bt_remote_service.dart';
 import '../../../core/services/catch_log_service.dart';
+import '../../../core/services/video_tools.dart';
 import '../../permission/presentation/permission_center.dart';
 import '../../permission/presentation/permission_items.dart';
 
@@ -34,6 +35,9 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   // 블루투스 버튼 연동 / 조과 효과(음성) 사용여부 — 메뉴명 옆 스위치용(BtRemoteService 기반).
   bool _btEnabled = false;
   bool _soundEnabled = false;
+  // 동영상 모드(일반/블랙박스)와 블랙박스 저장 길이(분) — 네이티브 설정(워치와 동기화).
+  bool _blackbox = false;
+  int _bbMinutes = 2;
 
   @override
   void initState() {
@@ -45,10 +49,13 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
   Future<void> _loadToggleStates() async {
     final bt = await BtRemoteService.getEnabled();
     final snd = await BtRemoteService.getSoundEnabled();
+    final video = await VideoTools.settings();
     if (!mounted) return;
     setState(() {
       _btEnabled = bt;
       _soundEnabled = snd;
+      _blackbox = video.blackbox;
+      _bbMinutes = video.minutes;
     });
   }
 
@@ -179,6 +186,23 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen>
                   const Icon(Icons.chevron_right),
                 ],
               ),
+            ),
+
+            // ── 동영상 섹션 ──────────────────────────
+            const _SectionHeader(label: '동영상'),
+            ListTile(
+              leading: const Icon(Icons.videocam_outlined),
+              title: const Text('동영상 모드'),
+              subtitle: Text(_blackbox
+                  ? '블랙박스 · 저장 버튼을 누르면 최근 $_bbMinutes분 저장(녹화는 계속)'
+                  : '동영상 · 블랙박스 모드로 바꾸면 녹화를 계속하다 최근 영상만 저장할 수 있습니다'),
+              trailing: const Icon(Icons.chevron_right),
+              onTap: () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const _VideoModeSubScreen()),
+                );
+                _loadToggleStates(); // 하위 화면에서 바꾼 값 반영
+              },
             ),
 
             // ── 빠른 실행 섹션 ──────────────────────
@@ -792,6 +816,104 @@ String _quickLaunchModeLabel(QuickLaunchMode mode) {
   switch (mode) {
     case QuickLaunchMode.shake:  return '화면 흔들기';
     case QuickLaunchMode.none:   return '사용 안 함';
+  }
+}
+
+/// 동영상 모드 선택(동영상 / 블랙박스)과 블랙박스 저장 길이.
+/// 저장 길이는 블랙박스를 골랐을 때만 활성화된다.
+class _VideoModeSubScreen extends StatefulWidget {
+  const _VideoModeSubScreen();
+
+  @override
+  State<_VideoModeSubScreen> createState() => _VideoModeSubScreenState();
+}
+
+class _VideoModeSubScreenState extends State<_VideoModeSubScreen> {
+  bool? _blackbox; // null=불러오는 중
+  int _minutes = 2;
+
+  @override
+  void initState() {
+    super.initState();
+    VideoTools.settings().then((v) {
+      if (mounted) {
+        setState(() {
+          _blackbox = v.blackbox;
+          _minutes = v.minutes;
+        });
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final bb = _blackbox;
+    return Scaffold(
+      appBar: AppBar(title: const Text('동영상 모드')),
+      body: bb == null
+          ? const Center(child: CircularProgressIndicator())
+          : ListTileTheme(
+              data: _subtitleTheme(context),
+              child: ListView(
+                padding: EdgeInsets.only(
+                    bottom: MediaQuery.of(context).padding.bottom),
+                children: [
+                  RadioGroup<bool>(
+                    groupValue: bb,
+                    onChanged: (v) {
+                      if (v == null) return;
+                      setState(() => _blackbox = v);
+                      VideoTools.setSettings(blackbox: v);
+                    },
+                    child: const Column(
+                      children: [
+                        RadioListTile<bool>(
+                          secondary: Icon(Icons.videocam_outlined),
+                          title: Text('동영상'),
+                          subtitle: Text('녹화 시작부터 정지까지 저장합니다'),
+                          value: false,
+                        ),
+                        RadioListTile<bool>(
+                          secondary: Icon(Icons.fiber_smart_record_outlined),
+                          title: Text('블랙박스'),
+                          subtitle: Text(
+                              '녹화를 계속하다 저장 버튼을 누르면 최근 영상만 저장하고 녹화는 이어집니다. '
+                              '■ 버튼으로 끝냅니다'),
+                          value: true,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const Divider(height: 1),
+                  ListTile(
+                    enabled: bb,
+                    leading: const Icon(Icons.timer_outlined),
+                    title: const Text('블랙박스 저장 길이'),
+                    subtitle: Text(bb
+                        ? '저장 버튼을 누르면 최근 $_minutes분을 남깁니다'
+                        : '블랙박스를 선택하면 설정할 수 있습니다'),
+                    trailing: DropdownButton<int>(
+                      value: _minutes,
+                      underline: const SizedBox.shrink(),
+                      items: const [
+                        DropdownMenuItem(value: 1, child: Text('1분')),
+                        DropdownMenuItem(value: 2, child: Text('2분')),
+                        DropdownMenuItem(value: 3, child: Text('3분')),
+                        DropdownMenuItem(value: 5, child: Text('5분')),
+                      ],
+                      onChanged: !bb
+                          ? null
+                          : (v) {
+                              if (v == null) return;
+                              setState(() => _minutes = v);
+                              VideoTools.setSettings(minutes: v);
+                            },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+    );
   }
 }
 

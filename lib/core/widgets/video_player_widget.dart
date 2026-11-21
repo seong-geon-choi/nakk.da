@@ -6,6 +6,10 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:video_player/video_player.dart';
 import 'package:video_thumbnail/video_thumbnail.dart';
 import '../../features/settings/presentation/settings_provider.dart';
+import '../services/video_tools.dart';
+
+/// 영상 파일이 수정(자르기로 원본 바꾸기)되면 증가 — 썸네일을 다시 만든다.
+final videoEdits = ValueNotifier<int>(0);
 
 /// 상대경로(videos/filename) 또는 절대경로를 받아 썸네일 표시 + 전체화면 재생.
 class VideoPlayerWidget extends ConsumerStatefulWidget {
@@ -26,14 +30,31 @@ class VideoPlayerWidget extends ConsumerStatefulWidget {
 }
 
 class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
-  late final Future<Uint8List?> _thumbnailFuture;
+  late Future<Uint8List?> _thumbnailFuture;
+  late Future<int?> _durationFuture; // 재생 시간(ms) — 썸네일 좌측 하단 표시
 
   @override
   void initState() {
     super.initState();
+    _loadThumbnail();
+    videoEdits.addListener(_onVideoEdited);
+  }
+
+  void _loadThumbnail() {
     final absPath = resolveVideoPath(widget.videoPath,
         ref.read(settingsProvider).valueOrNull?.savePath ?? '');
     _thumbnailFuture = _getThumbnail(absPath);
+    _durationFuture = VideoTools.durationMs(absPath);
+  }
+
+  void _onVideoEdited() {
+    if (mounted) setState(_loadThumbnail);
+  }
+
+  @override
+  void dispose() {
+    videoEdits.removeListener(_onVideoEdited);
+    super.dispose();
   }
 
   @override
@@ -88,6 +109,34 @@ class _VideoPlayerWidgetState extends ConsumerState<VideoPlayerWidget> {
               shape: BoxShape.circle,
             ),
             child: const Icon(Icons.play_arrow, color: Colors.white, size: 32),
+          ),
+          Positioned(
+            left: 6,
+            bottom: 6,
+            child: FutureBuilder<int?>(
+              future: _durationFuture,
+              builder: (context, snap) {
+                final ms = snap.data;
+                if (ms == null || ms <= 0) return const SizedBox.shrink();
+                final s = (ms / 1000).round();
+                final h = s ~/ 3600, m = (s % 3600) ~/ 60, sec = s % 60;
+                final txt = h > 0
+                    ? '$h:${m.toString().padLeft(2, '0')}:${sec.toString().padLeft(2, '0')}'
+                    : '$m:${sec.toString().padLeft(2, '0')}';
+                return Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: Colors.black54,
+                    borderRadius: BorderRadius.circular(4),
+                  ),
+                  child: Text(txt,
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600)),
+                );
+              },
+            ),
           ),
         ],
       ),

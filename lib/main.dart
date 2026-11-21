@@ -15,7 +15,8 @@ void cameraLockMain(List<String> args) {
   runApp(ProviderScope(
       child: CameraLockApp(
           selfie: args.contains('selfie'),
-          preview: !args.contains('nopreview'))));
+          preview: !args.contains('nopreview'),
+          autoRecord: args.contains('autorecord'))));
 }
 
 void main() async {

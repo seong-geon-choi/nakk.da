@@ -23,6 +23,9 @@ object WatchSettings {
         "start_page" to 1,     // 시작 화면(0=그래프, 1=카운터, 2=카메라)
         "cam_keep_sec" to 120, // 카메라 화면 켜짐 유지(조작 없을 때, 초)
         "rec_leave" to 0,      // 녹화 중 워치 앱/카메라 화면을 벗어나면(0=정지·저장, 1=계속 녹화)
+        "rec_gesture" to 1,    // 손목 제스처 녹화 시작/정지(0=끔, 1=두 번 비틀기, 2=두 번 털기)
+        "video_mode" to 0,     // 폰 동영상 모드(0=일반, 1=블랙박스) — 블랙박스면 워치 손목 제스처 끔
+        "bb_min" to 2,         // 블랙박스 저장 길이(분)
     )
     private val BOOL_DEFAULTS = linkedMapOf(
         "keep_on" to false,    // 화면 항상 켜두기(기본 끔 — 켜두면 시간당 약 30% 배터리 소모)

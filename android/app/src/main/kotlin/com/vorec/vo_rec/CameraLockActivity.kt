@@ -45,11 +45,16 @@ class CameraLockActivity : FlutterActivity() {
                 }
                 WearListenerService.ACTION_CAMERA_MODE -> {
                     val video = intent.getBooleanExtra("video", false)
-                    runOnUiThread { methodChannel?.invokeMethod("remoteMode", video) }
+                    if (intent.getBooleanExtra("blackbox", false)) {
+                        runOnUiThread { methodChannel?.invokeMethod("remoteBlackbox", null) }
+                    } else {
+                        runOnUiThread { methodChannel?.invokeMethod("remoteMode", video) }
+                    }
                 }
                 WearListenerService.ACTION_CAMERA_RECORD -> {
                     val args = mapOf(
                         "start" to intent.getBooleanExtra("start", false),
+                        "end" to intent.getBooleanExtra("end", false),
                         "delay" to intent.getIntExtra("delay", 0))
                     runOnUiThread { methodChannel?.invokeMethod("remoteRecord", args) }
                 }
@@ -76,10 +81,15 @@ class CameraLockActivity : FlutterActivity() {
         if (intent?.getBooleanExtra("selfie", false) != true) return emptyList()
         // 워치 미리보기를 끈 설정이면 프레임 전송을 하지 않도록 함께 알린다.
         val preview = WatchSettings.get(this)["cam_preview"] as? Boolean ?: true
-        return if (preview) listOf("selfie") else listOf("selfie", "nopreview")
+        val args = mutableListOf("selfie")
+        if (!preview) args.add("nopreview")
+        // 워치 빠른 녹화로 열렸으면 동영상 모드로 시작해 바로 녹화.
+        if (intent?.getBooleanExtra("autoRecord", false) == true) args.add("autorecord")
+        return args
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        current = this
         // 워치 카메라 조작(닫기/셔터/전후면) 수신.
         val filter = IntentFilter().apply {
             addAction(WearListenerService.ACTION_CLOSE_CAMERA)
@@ -112,9 +122,12 @@ class CameraLockActivity : FlutterActivity() {
     }
 
     override fun onDestroy() {
+        // 새 카메라 액티비티로 교체되며 닫히는 경우(워치에서 다시 실행)는 '닫힘'이 아니다.
+        val replaced = current !== this
+        if (!replaced) current = null
         // 워치에서 연 카메라면, 어떻게 닫혔든(뒤로가기·카운터로·워치 닫기) 워치에 알려
         // 멈춘 미리보기 대신 실행 확인 화면으로 돌아가게 한다.
-        if (intent?.getBooleanExtra("selfie", false) == true) {
+        if (!replaced && intent?.getBooleanExtra("selfie", false) == true) {
             sendToWatch("/nakkda/camera/closed", ByteArray(0))
         }
         try { unregisterReceiver(cameraReceiver) } catch (_: Exception) {}
@@ -125,6 +138,7 @@ class CameraLockActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        VideoTools.attach(this, flutterEngine.dartExecutor.binaryMessenger)
         // Dart↔네이티브 채널: Dart→네이티브 "finish"(촬영/취소 완료 시 닫기),
         // 네이티브→Dart "remoteShoot"/"remoteFlip"(워치 셔터/전환) 전달용.
         methodChannel = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "nakkda/cameraLock")
@@ -156,12 +170,17 @@ class CameraLockActivity : FlutterActivity() {
                                 runOnUiThread { result.success(null) }
                             }
                         }
-                        // 카메라 상태(모드·녹화·전환 중)를 워치에 알림 — payload "video,recording,busy"(1/0).
+                        // 카메라 상태(모드·녹화·전환 중·블랙박스)를 워치에 알림 — payload "video,recording,busy,blackbox"(1/0).
                         "cameraState" -> {
                             val a = call.arguments as? Map<*, *>
                             fun b(k: String) = if (a?.get(k) == true) "1" else "0"
                             sendToWatch("/nakkda/camera/state",
-                                "${b("video")},${b("recording")},${b("busy")}".toByteArray())
+                                "${b("video")},${b("recording")},${b("busy")},${b("blackbox")}".toByteArray())
+                            result.success(null)
+                        }
+                        // 블랙박스 저장 완료 → 워치 진동.
+                        "bbSaved" -> {
+                            sendToWatch("/nakkda/camera/saved", ByteArray(0))
                             result.success(null)
                         }
                         "openCounter" -> {
@@ -186,6 +205,11 @@ class CameraLockActivity : FlutterActivity() {
                 for (n in nodes) mc.sendMessage(n.id, path, data)
             } catch (_: Exception) {}
         }.start()
+    }
+
+    companion object {
+        /** 떠 있는 카메라 액티비티(없으면 null) — 워치 녹화 요청 시 새로 열지 판단용. */
+        @Volatile var current: CameraLockActivity? = null
     }
 
     /** 카메라를 닫고 조과 카운터 화면을 연다(세션 시작). 이미 떠 있으면 재사용. */

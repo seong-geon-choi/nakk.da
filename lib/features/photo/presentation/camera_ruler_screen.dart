@@ -15,10 +15,17 @@ import '../../settings/presentation/settings_provider.dart';
 import '../../location/presentation/location_provider.dart';
 import '../../../core/utils/watermark.dart';
 import '../../../core/utils/media_scanner.dart';
+import '../../../core/services/video_tools.dart';
 
 /// 촬영 대기열 prefs 키 — camera_lock_host.dart의 kPendingShakePhotosKey와 동일해야 한다
 /// (원격 촬영이 흔들기 촬영과 같은 큐를 쓰도록).
 const _kPendingShakePhotosKey = 'pending_shake_photos';
+
+/// 독립 카메라를 마지막에 동영상 모드로 썼는지(다시 열 때 그 모드로).
+const _kLastVideoModeKey = 'camera_last_video';
+
+/// 워치에서 연 카메라를 마지막에 전면으로 썼는지(없으면 전면으로 시작).
+const _kLastFrontKey = 'camera_last_front';
 
 /// 한 번의 촬영 결과(경로·동영상여부·GPS). 화면은 여러 장을 모아 목록으로 반환한다.
 typedef ShotResult = ({String path, bool isVideo, ({double lat, double lng})? gps});
@@ -31,12 +38,15 @@ class CameraRulerScreen extends ConsumerStatefulWidget {
   final bool watchRemote;
   // true면 저화질 미리보기 프레임을 워치로 보낸다(사진·동영상 모두, 폰의 워치 설정으로 끌 수 있음).
   final bool watchPreview;
+  // true면 동영상 모드로 열고 카메라가 준비되는 즉시 녹화 시작(워치 빠른 녹화).
+  final bool autoRecord;
   const CameraRulerScreen(
       {super.key,
       this.initialFront = false,
       this.standalone = false,
       this.watchRemote = false,
-      this.watchPreview = false});
+      this.watchPreview = false,
+      this.autoRecord = false});
 
   @override
   ConsumerState<CameraRulerScreen> createState() => _CameraRulerScreenState();
@@ -76,10 +86,24 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
 
   // 동영상 모드
   bool _isVideoMode = false;
+  bool _autoRecordPending = false; // 첫 초기화 성공 시 자동 녹화 시작(1회)
   bool _isRecording = false;
   int _recordSeconds = 0;
   Timer? _recordTimer;
   ResolutionPreset _videoResolution = ResolutionPreset.high; // 720p
+
+  // 블랙박스: 녹화를 조각 파일로 이어 가다가 '저장'을 누르면 마지막 N분만 잘라 저장하고
+  // 녹화는 계속한다. 다음 저장은 직전 저장 이후만 담는다(같은 장면 중복 저장 방지).
+  bool _blackbox = false;
+  int _bbMinutes = 2;
+  final List<String> _bbSegs = []; // 끝난 조각(시간순, 최근 것만 유지)
+  DateTime? _bbSince; // 다음 저장에 담을 수 있는 가장 이른 시각
+  Timer? _bbSegTimer;
+  bool _bbBusy = false; // 조각 교체 중
+  bool _bbSaving = false; // 잘라 저장 중(버튼 표시용)
+  Timer? _dimTimer; // 조작 없으면 창 밝기를 최저로
+  static const _kDimBrightness = 0.03;
+  bool get _bbRecording => _blackbox && _isRecording;
 
   // 화면은 세로 고정, 기기 방향에 따라 컨트롤만 회전
   int _uiQuarterTurns = 0; // 0=세로, 1/3=가로
@@ -98,6 +122,8 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   void initState() {
     super.initState();
     _useFrontCamera = widget.initialFront; // 워치 셀카 호출이면 전면으로 시작
+    _isVideoMode = widget.autoRecord; // 빠른 녹화면 처음부터 동영상 모드로 초기화
+    _autoRecordPending = widget.autoRecord;
     _remoteChannel.setMethodCallHandler(_onRemote); // 워치 셔터/전환 수신
     WidgetsBinding.instance.addObserver(this);
     // 레이아웃이 화면과 같이 돌지 않도록 세로로 고정
@@ -213,9 +239,19 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   Future<void> _loadPrefsAndInit() async {
     final prefs = await SharedPreferences.getInstance();
     final saved = prefs.getString('video_resolution') ?? '720p';
+    final video = await VideoTools.settings();
+    // 독립 카메라(워치·흔들기·카운터→카메라)는 마지막에 쓰던 사진/동영상 모드로 연다.
+    final lastVideo =
+        widget.standalone && (prefs.getBool(_kLastVideoModeKey) ?? false);
+    // 워치 카메라는 마지막에 쓰던 렌즈(전면/후면)로 연다.
+    final lastFront = widget.watchRemote ? prefs.getBool(_kLastFrontKey) : null;
     if (mounted) {
       setState(() {
+        if (lastVideo) _isVideoMode = true;
+        if (lastFront != null) _useFrontCamera = lastFront;
         _videoResolution = saved == '1080p' ? ResolutionPreset.veryHigh : ResolutionPreset.high;
+        _blackbox = video.blackbox;
+        _bbMinutes = video.minutes;
       });
     }
     await _initCamera();
@@ -225,6 +261,12 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   void dispose() {
     _toastTimer?.cancel();
     _recordTimer?.cancel();
+    _bbSegTimer?.cancel();
+    _dimTimer?.cancel();
+    if (_bbRecording) VideoTools.screen(keepOn: false);
+    for (final p in _bbSegs) {
+      _deleteQuiet(p);
+    }
     _accelSub?.cancel();
     _remoteChannel.setMethodCallHandler(null);
     // 화면 방향 잠금 해제 (앱 기본값 복구)
@@ -255,7 +297,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       // 알림창 내림·홈버튼 등으로 화면을 벗어나면 카메라 리소스를 해제한다.
       final ctrl = _ctrl;
       if (ctrl == null || !ctrl.value.isInitialized) return;
-      if (_isRecording) _stopRecording();
+      if (_isRecording) _blackbox ? _bbEnd() : _stopRecording();
       ctrl.dispose();
       _ctrl = null;
     } else if (state == AppLifecycleState.resumed) {
@@ -328,8 +370,14 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
             _error = null;
             _permissionDenied = false;
           });
-          _syncWatchStream();
-          _reportState();
+          // 빠른 녹화: 미리보기 스트림을 따로 켜지 않고 바로 녹화(녹화가 프레임을 함께 받음).
+          if (_autoRecordPending && _isVideoMode) {
+            _autoRecordPending = false;
+            _startRecording();
+          } else {
+            _syncWatchStream();
+            _reportState();
+          }
           return; // 성공
         } catch (e) {
           if (attempt < 3) {
@@ -360,6 +408,10 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       _isVideoMode = toVideo;
       _ctrl = null;
     });
+    if (widget.standalone) {
+      SharedPreferences.getInstance()
+          .then((p) => p.setBool(_kLastVideoModeKey, toVideo));
+    }
     await oldCtrl?.dispose();
     await _initCamera();
     if (_ctrl == null) _reportState(); // 초기화 실패 시에도 워치의 '전환 중' 해제
@@ -376,6 +428,11 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
     });
     await oldCtrl?.dispose();
     await _initCamera(); // 전면 미지원이면 내부에서 후면으로 폴백하며 상태 복구
+    if (widget.watchRemote) {
+      final front = _useFrontCamera;
+      SharedPreferences.getInstance()
+          .then((p) => p.setBool(_kLastFrontKey, front));
+    }
     if (mounted) _showToast(_useFrontCamera ? '전면 카메라' : '후면 카메라');
   }
 
@@ -402,19 +459,30 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
           await _switchMode(toVideo);
         }
         break;
+      // 워치에서 동영상 탭을 다시 누름: 동영상 ↔ 블랙박스 전환.
+      case 'remoteBlackbox':
+        if (_isRecording || _countdown != null || !_isVideoMode) {
+          _reportState();
+        } else {
+          await _toggleBlackbox();
+        }
+        break;
       case 'remoteRecord':
         final args = call.arguments;
         final start = args is Map && args['start'] == true;
         final delay = (args is Map && args['delay'] is int) ? args['delay'] as int : 0;
-        if (start) {
+        if (args is Map && args['end'] == true) {
+          await _bbEnd(); // 워치 ■: 블랙박스 끝내기(저장 안 함)
+        } else if (start) {
           await _remoteRecordStart(delay);
         } else {
-          await _stopRecording();
+          _blackbox ? await _bbSave() : await _stopRecording();
         }
         break;
       // 워치에서 카메라 닫기: 녹화 중이면 정지·저장한 뒤 닫는다(찍어 둔 결과도 함께 반환).
+      // 블랙박스는 저장하지 않고 끝낸다(저장은 저장 버튼으로만).
       case 'remoteClose':
-        if (_isRecording) await _stopRecording();
+        if (_isRecording) _blackbox ? await _bbEnd() : await _stopRecording();
         _finishWithCaptured();
         break;
     }
@@ -428,6 +496,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       'video': video ?? _isVideoMode,
       'recording': _isRecording,
       'busy': busy,
+      'blackbox': _blackbox,
     }).catchError((_) => null);
   }
 
@@ -669,6 +738,14 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
   Future<void> _startRecording() async {
     final ctrl = _ctrl;
     if (ctrl == null || !ctrl.value.isInitialized || _isRecording) return;
+    if (_blackbox) {
+      final st = await VideoTools.status();
+      if (st.freeBytes < 2 * 1024 * 1024 * 1024) {
+        _showToast('저장 공간이 2GB 미만이라 블랙박스를 시작할 수 없습니다');
+        _reportState();
+        return;
+      }
+    }
     try {
       // 워치 미리보기: 녹화와 함께 프레임을 받는다(동시 지원 기기만 — 아니면 프레임 없이 녹화).
       if (ctrl.value.isStreamingImages) await ctrl.stopImageStream();
@@ -680,7 +757,13 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       });
       _recordTimer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) setState(() => _recordSeconds++);
+        if (_bbRecording && _recordSeconds % 60 == 0) _bbCheckBattery();
       });
+      if (_blackbox) {
+        _bbSince = DateTime.now();
+        _bbArmSegTimer();
+        _bbScreen();
+      }
       _reportState();
     } catch (e) {
       _showToast('녹화 오류: $e');
@@ -721,6 +804,147 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
       }
       _reportState();
     }
+  }
+
+  // ── 블랙박스 ──────────────────────────────────────────────
+
+  /// 조각 길이: 저장 길이 이상이어야 '끝난 조각 1개 + 현재 조각'으로 N분을 덮는다.
+  Duration get _bbSegLen => Duration(minutes: math.max(5, _bbMinutes));
+
+  void _bbArmSegTimer() {
+    _bbSegTimer?.cancel();
+    _bbSegTimer = Timer(_bbSegLen, _bbRotate);
+  }
+
+  /// 현재 조각을 닫고 곧바로 새 조각 녹화를 시작한다(약 1초 공백). 실패하면 블랙박스 종료.
+  Future<bool> _bbRotate() async {
+    final ctrl = _ctrl;
+    if (ctrl == null || !_bbRecording || _bbBusy) return false;
+    _bbBusy = true;
+    _bbSegTimer?.cancel();
+    try {
+      final f = await ctrl.stopVideoRecording();
+      _bbSegs.add(f.path);
+      await ctrl.startVideoRecording(
+          onAvailable: widget.watchPreview ? _onPreviewFrame : null);
+      // 끝난 조각 1개(≥N분)와 현재 조각이면 충분 — 더 오래된 것은 지운다.
+      // 저장 중에는 잘라 붙이는 조각을 지우지 않는다(저장이 끝나면 직접 정리).
+      while (!_bbSaving && _bbSegs.length > 1) {
+        _deleteQuiet(_bbSegs.removeAt(0));
+      }
+      _bbArmSegTimer();
+      _bbBusy = false;
+      return true;
+    } catch (e) {
+      _bbBusy = false;
+      await _bbEnd();
+      if (mounted) _showToast('블랙박스 오류: $e');
+      return false;
+    }
+  }
+
+  /// 저장: 직전 저장(또는 시작) 이후 최대 N분을 잘라 저장하고 녹화는 계속한다.
+  Future<void> _bbSave() async {
+    if (!_bbRecording || _bbBusy || _bbSaving) return;
+    final now = DateTime.now();
+    final keepMs = math.min(
+        _bbMinutes * 60000, now.difference(_bbSince ?? now).inMilliseconds);
+    if (keepMs < 1000) {
+      _showToast('저장할 새 영상이 없습니다');
+      return;
+    }
+    setState(() => _bbSaving = true);
+    _reportState(busy: true); // 워치: 저장 중
+    try {
+      if (!await _bbRotate()) return;
+      final segs = List<String>.of(_bbSegs);
+      _bbSince = now;
+      final tmp = await getTemporaryDirectory();
+      final out = '${tmp.path}/bb_${now.millisecondsSinceEpoch}.mp4';
+      final ms = await VideoTools.trimTail(segs, keepMs, out);
+      // 저장 시점 이전 조각은 다음 저장에 쓰이지 않는다.
+      for (final p in segs) {
+        _bbSegs.remove(p);
+        _deleteQuiet(p);
+      }
+      final savedPath = await _saveVideo(out);
+      final gps = await _captureGps();
+      final r = (path: savedPath ?? out, isVideo: true, gps: gps);
+      if (widget.watchRemote) {
+        await _queuePhotoLocal(r);
+        if (savedPath != null) _deleteQuiet(out);
+      } else {
+        _captured.add(r);
+      }
+      if (mounted) _showToast('${_fmtDuration(ms)} 영상 저장됨');
+      if (widget.watchRemote) {
+        _remoteChannel.invokeMethod('bbSaved').catchError((_) => null);
+      }
+    } catch (e) {
+      if (mounted) _showToast('저장 오류: $e');
+    } finally {
+      if (mounted) setState(() => _bbSaving = false);
+      _reportState();
+    }
+  }
+
+  /// 블랙박스 끝내기: 저장하지 않고 녹화를 멈추고 조각을 지운다.
+  Future<void> _bbEnd() async {
+    if (!_isRecording) return;
+    _bbSegTimer?.cancel();
+    _recordTimer?.cancel();
+    _recordTimer = null;
+    _dimTimer?.cancel();
+    VideoTools.screen(keepOn: false);
+    if (mounted) setState(() => _isRecording = false);
+    try {
+      final f = await _ctrl?.stopVideoRecording();
+      if (f != null) _deleteQuiet(f.path);
+    } catch (_) {}
+    for (final p in _bbSegs) {
+      _deleteQuiet(p);
+    }
+    _bbSegs.clear();
+    _reportState();
+    _syncWatchStream();
+  }
+
+  /// 배터리 10% 이하: 마지막 구간을 저장하고 끝낸다.
+  Future<void> _bbCheckBattery() async {
+    final st = await VideoTools.status();
+    if (st.battery > 10 || !_bbRecording) return;
+    await _bbSave();
+    await _bbEnd();
+    if (mounted) _showToast('배터리 부족으로 블랙박스를 종료했습니다');
+  }
+
+  /// 화면 켜짐 유지 + 10초간 조작이 없으면 창 밝기를 최저로(버튼은 보이게).
+  void _bbScreen() {
+    _dimTimer?.cancel();
+    VideoTools.screen(keepOn: true);
+    _dimTimer = Timer(const Duration(seconds: 10), () {
+      if (_bbRecording) {
+        VideoTools.screen(keepOn: true, brightness: _kDimBrightness);
+      }
+    });
+  }
+
+  Future<void> _toggleBlackbox() async {
+    if (_isRecording) return;
+    final next = !_blackbox;
+    setState(() => _blackbox = next);
+    _reportState();
+    await VideoTools.setSettings(blackbox: next);
+    _showToast(next ? '블랙박스: 저장 시 최근 $_bbMinutes분' : '동영상');
+  }
+
+  void _deleteQuiet(String path) {
+    File(path).delete().catchError((_) => File(path));
+  }
+
+  String _fmtDuration(int ms) {
+    final s = (ms / 1000).round();
+    return s >= 60 ? '${s ~/ 60}분 ${s % 60}초' : '$s초';
   }
 
   Future<String?> _saveVideo(String tempPath) async {
@@ -801,7 +1025,12 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
 
     return Scaffold(
       backgroundColor: Colors.black,
-      body: Stack(
+      body: Listener(
+        // 블랙박스 녹화 중 화면을 만지면 밝기 복구(10초 뒤 다시 최저).
+        onPointerDown: (_) {
+          if (_bbRecording) _bbScreen();
+        },
+        child: Stack(
         fit: StackFit.expand,
         children: [
           GestureDetector(
@@ -900,7 +1129,9 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                         const Icon(Icons.circle, color: Colors.red, size: 10),
                         const SizedBox(width: 6),
                         Text(
-                          'REC  $_timerLabel',
+                          _blackbox
+                              ? '블랙박스  $_timerLabel · 저장 시 최근 $_bbMinutes분'
+                              : 'REC  $_timerLabel',
                           style: const TextStyle(
                             color: Colors.white, fontSize: 13, fontWeight: FontWeight.bold),
                         ),
@@ -949,6 +1180,27 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                       ),
                     ),
                   const Spacer(),
+                  // 동영상 모드: 일반/블랙박스 전환 버튼(녹화 중엔 위쪽 녹화 표시와 겹치므로 숨김)
+                  if (_isVideoMode && !_isRecording)
+                    GestureDetector(
+                      onTap: _isRecording ? null : _toggleBlackbox,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        margin: const EdgeInsets.only(right: 8),
+                        decoration: BoxDecoration(
+                          color: Colors.black54,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: _rot(Text(
+                          _blackbox ? '블랙박스 $_bbMinutes분' : '동영상',
+                          style: TextStyle(
+                            color: _isRecording ? Colors.white60 : Colors.white,
+                            fontSize: 13,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        )),
+                      ),
+                    ),
                   // 동영상 모드: 해상도 버튼
                   if (_isVideoMode)
                     GestureDetector(
@@ -1091,10 +1343,35 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                       ],
                     ),
                     const SizedBox(height: 8),
-                    // 촬영 버튼
+                    // 촬영 버튼(블랙박스 녹화 중: 가운데=저장, 왼쪽=끝내기)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 92,
+                          child: _bbRecording
+                              ? Center(
+                                  child: GestureDetector(
+                                    onTap: _bbSaving ? null : _bbEnd,
+                                    child: Container(
+                                      width: 48,
+                                      height: 48,
+                                      decoration: const BoxDecoration(
+                                        color: Color(0x99000000),
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: _rot(const Icon(Icons.stop,
+                                          color: Colors.white, size: 26)),
+                                    ),
+                                  ),
+                                )
+                              : null,
+                        ),
                     GestureDetector(
                       onTap: _isVideoMode
-                          ? (_isRecording ? _stopRecording : _startRecording)
+                          ? (_isRecording
+                              ? (_blackbox ? _bbSave : _stopRecording)
+                              : _startRecording)
                           : (_capturing ? null : _capture),
                       child: Container(
                         width: 68,
@@ -1105,16 +1382,46 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                           border: Border.all(color: Colors.grey.shade400, width: 4),
                         ),
                         child: Center(
-                          child: _isVideoMode
+                          child: _bbRecording
+                              ? (_bbSaving
+                                  ? const Padding(
+                                      padding: EdgeInsets.all(18),
+                                      child: CircularProgressIndicator(
+                                          strokeWidth: 3, color: Colors.red),
+                                    )
+                                  : Container(
+                                      width: 52,
+                                      height: 52,
+                                      alignment: Alignment.center,
+                                      decoration: const BoxDecoration(
+                                        color: Colors.red,
+                                        shape: BoxShape.circle,
+                                      ),
+                                      child: _rot(const Text('저장',
+                                          style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 15,
+                                              fontWeight: FontWeight.w900))),
+                                    ))
+                              : _isVideoMode
                               ? AnimatedContainer(
                                   duration: const Duration(milliseconds: 200),
-                                  width: _isRecording ? 24 : 38,
-                                  height: _isRecording ? 24 : 38,
+                                  width: _isRecording ? 24 : 52,
+                                  height: _isRecording ? 24 : 52,
+                                  alignment: Alignment.center,
                                   decoration: BoxDecoration(
                                     color: Colors.red,
                                     borderRadius: BorderRadius.circular(
-                                        _isRecording ? 5 : 19),
+                                        _isRecording ? 5 : 26),
                                   ),
+                                  // 워치와 같은 표기: 녹화 전엔 REC.
+                                  child: _isRecording
+                                      ? null
+                                      : _rot(const Text('REC',
+                                          style: TextStyle(
+                                              color: Colors.white,
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w900))),
                                 )
                               : (_capturing
                                   ? const Padding(
@@ -1124,6 +1431,9 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
                                   : null),
                         ),
                       ),
+                    ),
+                        const SizedBox(width: 92),
+                      ],
                     ),
                   ],
                 ),
@@ -1182,6 +1492,7 @@ class _CameraRulerScreenState extends ConsumerState<CameraRulerScreen>
               ),
             ),
         ],
+      ),
       ),
     );
   }

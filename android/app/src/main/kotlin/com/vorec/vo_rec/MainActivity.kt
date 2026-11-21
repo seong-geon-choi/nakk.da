@@ -93,6 +93,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        VideoTools.attach(this, flutterEngine.dartExecutor.binaryMessenger)
 
         // ── 미디어 채널 (사진 저장 / 갤러리 피커) ─────────────
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, mediaChannelName)

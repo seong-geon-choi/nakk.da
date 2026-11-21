@@ -65,6 +65,7 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
   bool _camPreview = true;
   int _camKeepSec = 120;
   int _recLeave = 0;
+  int _recGesture = 1;
 
   @override
   void initState() {
@@ -92,6 +93,7 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
       _camKeepSec = (m['cam_keep_sec'] as int?) ?? 120;
       if (!_kCamKeepOptions.containsKey(_camKeepSec)) _camKeepSec = 120;
       _recLeave = (m['rec_leave'] as int?) ?? 0;
+      _recGesture = (m['rec_gesture'] as int?) ?? 1;
       _loading = false;
     });
   }
@@ -397,6 +399,42 @@ class _WatchSettingsScreenState extends State<WatchSettingsScreen> {
                         value: 1,
                         title: Text('계속 녹화'),
                         subtitle: Text('카메라 페이지로 돌아와 정지할 수 있습니다'),
+                      ),
+                    ],
+                  ),
+                ),
+                const ListTile(
+                  leading: Icon(Icons.back_hand_outlined),
+                  title: Text('손목 제스처로 녹화'),
+                  subtitle: Text('양손이 낚싯대·릴에 있을 때 — 워치 앱 화면이 켜져 있으면 '
+                      '카운터·그래프·카메라 어디서나 녹화 시작, 다시 하면 정지\n'
+                      '(동영상 모드가 블랙박스면 동작하지 않음)'),
+                ),
+                RadioGroup<int>(
+                  groupValue: _recGesture,
+                  onChanged: (v) {
+                    if (v == null) return;
+                    setState(() => _recGesture = v);
+                    _save({'rec_gesture': v});
+                  },
+                  child: const Column(
+                    children: [
+                      RadioListTile<int>(
+                        contentPadding: EdgeInsets.only(left: 32, right: 16),
+                        value: 1,
+                        title: Text('손목 두 번 비틀기'),
+                        subtitle: Text('손목을 바깥·안으로 빠르게 두 번'),
+                      ),
+                      RadioListTile<int>(
+                        contentPadding: EdgeInsets.only(left: 32, right: 16),
+                        value: 2,
+                        title: Text('손목 두 번 털기'),
+                        subtitle: Text('손을 위아래로 짧게 두 번'),
+                      ),
+                      RadioListTile<int>(
+                        contentPadding: EdgeInsets.only(left: 32, right: 16),
+                        value: 0,
+                        title: Text('사용 안 함'),
                       ),
                     ],
                   ),

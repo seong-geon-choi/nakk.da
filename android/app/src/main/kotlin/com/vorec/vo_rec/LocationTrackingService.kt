@@ -67,6 +67,15 @@ class LocationTrackingService : Service() {
         private const val CORNER_MIN_MOVE_M = 20f   // 직전 저장점 대비 최소 이동(지터 방지)
         private const val BEARING_MIN_MOVE_M = 8f   // 이 거리 이상 이동해야 방위 신뢰
 
+        // ── 위치 흔들림(노이즈) 억제 ───────────────────────────────
+        // 실내·지하 등 GPS가 약하면 와이파이·기지국 위치(오차 수십~수백 m)가 서로 다른 지점을
+        // 오가며 '이동'처럼 보인다. 두 위치의 오차 합 × 이 배수보다 덜 움직였으면 흔들림으로 본다
+        // (저장 판정·정지 판정 모두).
+        private const val NOISE_FACTOR = 1.5f
+        // 되돌아오는 점(A→B→A) 제거: 새 점이 직전 확정점 근처로 돌아오면 그 사이 점(B)을 버린다.
+        private const val BOUNCE_WINDOW_MS = 2 * 60 * 1000L // B~새 점 사이가 이 시간 안일 때만
+        private const val BOUNCE_RATIO = 0.5f              // A~새 점 거리 < B까지 거리 × 이 비율
+
         fun getQuickLaunchMode(context: Context): String =
             context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
                 .getString(PREFS_QUICK_LAUNCH_MODE_KEY, "shake") ?: "shake"
@@ -96,7 +105,10 @@ class LocationTrackingService : Service() {
 
     private var fusedClient: FusedLocationProviderClient? = null
     private var minDistanceMeters: Float = 50f   // 정지·조업 기준 거리(사용자 설정, 기본 50m)
-    private var lastSavedLocation: Location? = null
+    private var lastSavedLocation: Location? = null  // 마지막으로 받아들인 점(보류 중인 점 포함)
+    // 되돌아오는 점 제거: 받아들인 점은 다음 점을 볼 때까지 저장을 보류(held)했다가 확정한다.
+    private var heldLocation: Location? = null       // 저장 보류 중인 최신 점
+    private var committedLocation: Location? = null  // 마지막으로 저장(확정)된 점
 
     // 속도 적응형 저장: 직전 픽스(속도 폴백용) + 평활 속도 + 현재 속도 구간(히스테리시스).
     private var lastFixLocation: Location? = null
@@ -141,17 +153,15 @@ class LocationTrackingService : Service() {
             lastFixLocation = location
             val last = lastSavedLocation
             val movedFromSaved = last?.distanceTo(location) ?: Float.MAX_VALUE
-            val distanceHit = movedFromSaved >= threshold
+            // 위치 오차보다 덜 움직였으면 흔들림 — 저장 거리 기준을 넘어도 저장하지 않는다.
+            val noise = noiseMeters(last, location)
+            val distanceHit = movedFromSaved >= threshold && movedFromSaved >= noise
             // 변침 보존: 이동 구간(tier≥1)에서 방위가 크게 꺾이면 거리 미달이라도 코너로 저장.
             val cornerHit = !distanceHit && speedTier >= 1 &&
-                movedFromSaved >= CORNER_MIN_MOVE_M &&
+                movedFromSaved >= maxOf(CORNER_MIN_MOVE_M, noise) &&
                 lastTravelBearing != null && lastSavedBearing != null &&
                 bearingDiff(lastTravelBearing!!, lastSavedBearing!!) >= CORNER_ANGLE_DEG
-            if (distanceHit || cornerHit) {
-                lastSavedLocation = location
-                lastSavedBearing = lastTravelBearing ?: lastSavedBearing
-                savePoint(location.latitude, location.longitude, location.time)
-            }
+            if (distanceHit || cornerHit) acceptPoint(location, threshold)
             evaluateStillness(location)
         }
     }
@@ -186,6 +196,52 @@ class LocationTrackingService : Service() {
         }
     }
 
+    /** 두 위치의 오차를 감안한 흔들림 거리(m) — 이보다 덜 움직였으면 실제 이동으로 보지 않는다. */
+    private fun noiseMeters(a: Location?, b: Location): Float {
+        fun acc(l: Location?) = if (l != null && l.hasAccuracy()) l.accuracy else 0f
+        return NOISE_FACTOR * (acc(a) + acc(b))
+    }
+
+    /**
+     * 저장 대상이 된 점을 받아들인다. 바로 저장하지 않고 보류했다가, 다음 점이 보류점 이전
+     * 위치(직전 확정점) 근처로 금방 되돌아오면 보류점을 튄 점(A→B→A의 B)으로 보고 버린다.
+     */
+    private fun acceptPoint(c: Location, threshold: Float) {
+        val h = heldLocation
+        val p = committedLocation
+        if (h != null && p != null && isBounce(p, h, c)) {
+            heldLocation = null
+            lastSavedLocation = p
+            // 튄 점을 버린 뒤 새 점을 직전 확정점 기준으로 다시 판단(대개 제자리라 버려진다).
+            val moved = p.distanceTo(c)
+            if (moved < threshold || moved < noiseMeters(p, c)) return
+        } else if (h != null) {
+            commit(h)
+        }
+        heldLocation = c
+        lastSavedLocation = c
+        lastSavedBearing = lastTravelBearing ?: lastSavedBearing
+    }
+
+    /** p(확정)→h(보류)→c(새 점)에서 c가 h 직후 p 근처로 돌아왔으면 h는 튄 점. */
+    private fun isBounce(p: Location, h: Location, c: Location): Boolean {
+        if (c.time - h.time > BOUNCE_WINDOW_MS) return false
+        val back = p.distanceTo(c)
+        return back < BOUNCE_RATIO * minOf(p.distanceTo(h), h.distanceTo(c))
+    }
+
+    private fun commit(l: Location) {
+        savePoint(l.latitude, l.longitude, l.time)
+        committedLocation = l
+    }
+
+    /** 보류 중인 점을 확정 저장(정지 진입·기록 종료 시 — 마지막 위치를 잃지 않게). */
+    private fun flushHeld() {
+        val h = heldLocation ?: return
+        heldLocation = null
+        commit(h)
+    }
+
     /** 두 방위(도)의 최소 사잇각(0~180). bearingTo는 −180~180을 반환하므로 360 보정. */
     private fun bearingDiff(a: Float, b: Float): Float {
         val d = Math.abs(a - b) % 360f
@@ -197,11 +253,11 @@ class LocationTrackingService : Service() {
         if (isStill) {
             // 저전력 폴링 중에도 반경을 벗어나면 이동 모드로 복귀
             val anchor = anchorLocation
-            if (anchor == null || anchor.distanceTo(location) > STILL_RADIUS_M) exitStill()
+            if (anchor == null || anchor.distanceTo(location) > stillRadius(anchor, location)) exitStill()
             return
         }
         val anchor = anchorLocation
-        if (anchor == null || anchor.distanceTo(location) > STILL_RADIUS_M) {
+        if (anchor == null || anchor.distanceTo(location) > stillRadius(anchor, location)) {
             anchorLocation = location
             anchorSinceMs = SystemClock.elapsedRealtime()
             return
@@ -209,10 +265,15 @@ class LocationTrackingService : Service() {
         if (SystemClock.elapsedRealtime() - anchorSinceMs >= STILL_ENTER_MS) enterStill()
     }
 
+    /** 정지 판정 반경 — 실내처럼 위치 오차가 크면 그만큼 넓혀 흔들림을 이동으로 보지 않는다. */
+    private fun stillRadius(anchor: Location, location: Location): Float =
+        maxOf(STILL_RADIUS_M, noiseMeters(anchor, location))
+
     @SuppressLint("MissingPermission")
     private fun enterStill() {
         if (isStill) return
         isStill = true
+        flushHeld() // 머무는 곳의 마지막 점을 확정
         stillStartWallMs = System.currentTimeMillis()
         // 정지 진입 — 속도 구간을 조업(저속)으로 리셋(복귀 시 저속부터 다시 평가).
         smoothedSpeedMps = 0f
@@ -321,6 +382,7 @@ class LocationTrackingService : Service() {
 
     override fun onDestroy() {
         if (isStill) { try { finalizeStay() } catch (_: Exception) {} }
+        try { flushHeld() } catch (_: Exception) {}
         try { fusedClient?.removeLocationUpdates(locationCallback) } catch (_: Exception) {}
         try { significantMotion?.let { sensorManager?.cancelTriggerSensor(motionListener, it) } } catch (_: Exception) {}
         try { unregisterReceiver(dateChangedReceiver) } catch (_: Exception) {}

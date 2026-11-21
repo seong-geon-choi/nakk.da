@@ -33,9 +33,9 @@ android {
         // Play 타깃 API 요구치(API 35). compileSdk와 일치.
         targetSdk = 35
         // Wear 번들 versionCode는 폰(2077)보다 크고 고유해야 함(Play 규칙: 폼팩터 무관
-        // 패키지 내 versionCode 고유 + 워치 ≥ 폰). 2076→2078: 폰 2077에 맞춰 상향(스플래시 수정).
-        versionCode = 2078
-        versionName = "3.14.3"
+        // 패키지 내 versionCode 고유 + 워치 ≥ 폰). 2078→2080: 폰 2079에 맞춰 상향(글꼴 크기 수정).
+        versionCode = 2080
+        versionName = "3.14.4"
     }
 
     buildFeatures {

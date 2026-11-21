@@ -40,6 +40,7 @@ import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerDefaults
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.ExperimentalAnimationApi
@@ -104,6 +105,7 @@ import androidx.compose.ui.layout.boundsInParent
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
@@ -232,11 +234,15 @@ class WearMainActivity : ComponentActivity() {
     private var camVideo by mutableStateOf(false)
     private var camRecording by mutableStateOf(false)
     private var camBusy by mutableStateOf(false)
+    private var camBlackbox by mutableStateOf(false) // 폰 동영상 모드가 블랙박스(녹화 중 탭=저장)
     private var recStartAt by mutableStateOf(0L) // 녹화 시작(elapsedRealtime) — 경과 시간 표시용
     // 카메라 설정(폰 워치 설정): 미리보기 표시·화면 켜짐 유지(초)·녹화 중 벗어날 때(0=정지·저장, 1=계속).
     private var camPreview by mutableStateOf(true)
     private var camKeepSec = 120
     private var recLeave = 0
+    // 손목 제스처로 녹화 시작/정지(폰 설정 rec_gesture: 0=끔, 1=두 번 비틀기, 2=두 번 털기).
+    private val wristGesture by lazy { WristGesture(this) { onWristGesture() } }
+    private var curPage = 1 // 현재 페이지(제스처 녹화 정지 시 카메라 페이지인지 판단)
     // 카메라 미리보기 중 화면 켜둠 상한(조작 없으면 2분 뒤 해제 → 화면 꺼지면 미리보기도 멈춤).
     private val cameraIdleRunnable = Runnable { applyKeepOn() }
     private val messageListener = MessageClient.OnMessageReceivedListener { ev ->
@@ -250,10 +256,17 @@ class WearMainActivity : ComponentActivity() {
                 runOnUiThread {
                     val rec = f.getOrNull(1) == "1"
                     if (rec && !camRecording) recStartAt = SystemClock.elapsedRealtime()
+                    // 화면을 보지 않아도(파이팅 중) 녹화 시작·정지를 알 수 있게 진동.
+                    if (rec != camRecording) vibrateRec(rec)
                     camVideo = f.getOrNull(0) == "1"
                     camRecording = rec
                     camBusy = f.getOrNull(2) == "1"
+                    camBlackbox = f.getOrNull(3) == "1"
                 }
+            }
+            // 블랙박스 저장 완료(녹화는 계속) — 짧게 세 번.
+            PATH_CAMERA_SAVED -> runOnUiThread {
+                buzz(VibrationEffect.createWaveform(longArrayOf(0, 60, 80, 60, 80, 60), -1))
             }
             // 폰에서 카메라를 닫음(뒤로가기·카운터로 등) → 카운터(홈) 화면으로 돌아감.
             PATH_CAMERA_CLOSED -> runOnUiThread {
@@ -391,6 +404,7 @@ class WearMainActivity : ComponentActivity() {
                                 frame = previewFrame,
                                 video = camVideo,
                                 recording = camRecording,
+                                blackbox = camBlackbox,
                                 busy = camBusy,
                                 recStartAt = recStartAt,
                                 previewOn = camPreview,
@@ -409,10 +423,17 @@ class WearMainActivity : ComponentActivity() {
                                     }
                                 },
                                 onFlip = { if (!camRecording && !camBusy) sendCameraFlip() },
+                                onEnd = { if (!camBusy) sendToPhone(PATH_CAMERA_RECORD, "end".toByteArray()) },
                                 onMode = { video ->
-                                    if (!camRecording && !camBusy && video != camVideo) {
-                                        camBusy = true // 폰이 상태를 알려 오면 해제
-                                        sendToPhone(PATH_CAMERA_MODE, byteArrayOf(if (video) 1 else 0))
+                                    if (!camRecording && !camBusy) {
+                                        if (video != camVideo) {
+                                            camBusy = true // 폰이 상태를 알려 오면 해제
+                                            sendToPhone(PATH_CAMERA_MODE, byteArrayOf(if (video) 1 else 0))
+                                        } else if (video) {
+                                            // 동영상 탭을 다시 누르면 동영상 ↔ 블랙박스 전환.
+                                            camBusy = true
+                                            sendToPhone(PATH_CAMERA_MODE, byteArrayOf(2))
+                                        }
                                     }
                                 },
                             )
@@ -493,6 +514,13 @@ class WearMainActivity : ComponentActivity() {
                             previewFrame = null
                         }
                     }
+                    // 카메라 페이지가 아닌 곳(카운터 등)에서 제스처로 녹화 중이면 위쪽에 표시.
+                    if (camRecording && pagerState.currentPage != 2) {
+                        Box(
+                            Modifier.fillMaxSize().padding(top = 6.dp),
+                            contentAlignment = Alignment.TopCenter,
+                        ) { RecordingBadge(recStartAt, camBlackbox) }
+                    }
                     LaunchedEffect(pageRequest) {
                         val target = pageRequest ?: return@LaunchedEffect
                         // 키(pageRequest)를 먼저 비우면 이 효과가 취소돼 스크롤이 안 된다 → 이동 후 비움.
@@ -507,6 +535,7 @@ class WearMainActivity : ComponentActivity() {
                             // 카메라 페이지(2)에서 빠져나오면 폰 카메라 화면을 닫는다.
                             if (prev == 2 && page != 2) closePhoneCamera()
                             prev = page
+                            curPage = page
                         }
                     }
                 }
@@ -517,6 +546,7 @@ class WearMainActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         wakeBright() // 화면 밝게 + 유휴(어둡게) 타이머 시작
+        wristGesture.start()
         dataClient.addListener(dataListener)
         messageClient.addListener(messageListener)
         // 화면이 다시 켜졌고 폰 카메라가 열려 있으면 미리보기 재개.
@@ -558,6 +588,7 @@ class WearMainActivity : ComponentActivity() {
     override fun onPause() {
         super.onPause()
         flushRemoves() // 화면이 꺼지거나 앱을 벗어나면 미뤄 둔 −1을 바로 반영
+        wristGesture.stop()
         dataClient.removeListener(dataListener)
         reconcileHandler.removeCallbacks(reconcileRunnable)
         dimHandler.removeCallbacks(dimRunnable)
@@ -628,6 +659,9 @@ class WearMainActivity : ComponentActivity() {
         camPreview = prefs.getBoolean("cam_preview", true)
         camKeepSec = prefs.getInt("cam_keep_sec", 120).coerceIn(10, 3600)
         recLeave = prefs.getInt("rec_leave", 0)
+        // 블랙박스 모드에서는 손목 제스처를 쓰지 않는다(일반 녹화 전용).
+        wristGesture.mode = if (prefs.getInt("video_mode", 0) == 1) WristGesture.MODE_OFF
+            else prefs.getInt("rec_gesture", WristGesture.MODE_TWIST)
     }
 
     private fun applyKeepOn() {
@@ -639,7 +673,7 @@ class WearMainActivity : ComponentActivity() {
     private fun applySettings(map: DataMap) {
         val e = prefs.edit()
         for (k in listOf("bright_on", "dim_level", "dim_idle_sec", "start_page", "color_0", "color_1",
-                "cam_keep_sec", "rec_leave")) {
+                "cam_keep_sec", "rec_leave", "rec_gesture", "video_mode", "bb_min")) {
             if (map.containsKey(k)) e.putInt(k, map.getInt(k))
         }
         for (k in listOf("keep_on", "vibrate", "show_clock", "show_elapsed", "eco_colors", "cam_preview")) {
@@ -675,6 +709,56 @@ class WearMainActivity : ComponentActivity() {
         }
         try { v?.vibrate(effect) } catch (_: Exception) {}
     }
+
+    /** 녹화 시작(길게 한 번)·정지(짧게 두 번) 진동 — 카운트 진동 설정과 무관하게 항상. */
+    private fun vibrateRec(start: Boolean) = buzz(
+        if (start) VibrationEffect.createOneShot(300, VibrationEffect.DEFAULT_AMPLITUDE)
+        else VibrationEffect.createWaveform(longArrayOf(0, 80, 120, 80), -1))
+
+    private fun buzz(effect: VibrationEffect) {
+        val v: Vibrator? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            getSystemService(VibratorManager::class.java)?.defaultVibrator
+        } else {
+            @Suppress("DEPRECATION")
+            getSystemService(Vibrator::class.java)
+        }
+        try { v?.vibrate(effect) } catch (_: Exception) {}
+    }
+
+    /**
+     * 손목 제스처: 녹화 중이면 정지, 아니면 폰 카메라를 동영상으로 열어 바로 녹화(지금 페이지 유지).
+     * 폰 카메라가 닫혀 있으면 폰이 녹화 시작 요청을 받고 카메라를 '자동 녹화'로 연다.
+     * 카메라 페이지 밖(카운터 등)에서 정지하면 저장 후 폰 카메라도 닫는다.
+     */
+    private fun onWristGesture() {
+        wakeBright()
+        if (camBusy) return
+        if (camRecording) {
+            if (curPage == 2) {
+                sendToPhone(PATH_CAMERA_RECORD, "stop".toByteArray())
+            } else {
+                // 닫기 = 폰이 녹화 정지·저장 후 카메라 닫음. 닫힘 알림엔 진동이 없어 여기서 알림.
+                vibrateRec(false)
+                sendCameraClose()
+                cameraLaunched = false
+                resetCamState()
+            }
+            return
+        }
+        // 감지 즉시 짧게 진동(녹화가 실제로 시작되면 길게 한 번 더).
+        buzz(VibrationEffect.createOneShot(30, VibrationEffect.DEFAULT_AMPLITUDE))
+        if (!cameraLaunched) {
+            resetCamState()
+            cameraLaunched = true
+        }
+        camBusy = true // 폰이 상태를 알려 오면 해제(응답이 없으면 10초 뒤 해제)
+        dimHandler.removeCallbacks(busyTimeout)
+        dimHandler.postDelayed(busyTimeout, 10_000L)
+        sendToPhone(PATH_CAMERA_RECORD, "start,0".toByteArray())
+    }
+
+    private val busyTimeout = Runnable { if (camBusy && !camRecording) camBusy = false }
+
 
     /** 영역 색을 폰에 알려 폰 설정과 동기화. */
     private fun sendColor(side: Int) {
@@ -999,7 +1083,7 @@ class WearMainActivity : ComponentActivity() {
         }
     }
 
-    /** 카메라 페이지에서 '실행' 확인 시 폰에 카메라(셀카) 열기를 요청. */
+    /** 카메라 페이지에서 '실행' 확인 시 폰에 카메라 열기를 요청(폰이 마지막 모드·렌즈로 연다). */
     private fun sendCameraOpen() = sendToPhone(PATH_CAMERA_OPEN)
 
     /** 카메라 페이지에서 빠져나올 때 폰 카메라 화면 닫기를 요청. */
@@ -1021,6 +1105,7 @@ class WearMainActivity : ComponentActivity() {
         camVideo = false
         camRecording = false
         camBusy = false
+        camBlackbox = false
     }
 
     // 홈(물리 버튼)으로 앱을 벗어날 때 호출 — 화면 꺼짐에서는 호출되지 않는다.
@@ -1085,7 +1170,8 @@ class WearMainActivity : ComponentActivity() {
         private const val PATH_CAMERA_PREVIEW = "/nakkda/camera/preview" // payload 1=전송, 0=중지
         private const val PATH_CAMERA_FRAME = "/nakkda/camera/frame"     // 폰→워치 미리보기 JPEG
         private const val PATH_CAMERA_CLOSED = "/nakkda/camera/closed"   // 폰→워치 카메라 닫힘
-        private const val PATH_CAMERA_STATE = "/nakkda/camera/state"     // 폰→워치 "동영상,녹화,전환중"(1/0)
+        private const val PATH_CAMERA_STATE = "/nakkda/camera/state"     // 폰→워치 "동영상,녹화,전환중,블랙박스"(1/0)
+        private const val PATH_CAMERA_SAVED = "/nakkda/camera/saved"     // 폰→워치 블랙박스 저장 완료
         private const val PATH_CAMERA_MODE = "/nakkda/camera/mode"       // 워치→폰 1=동영상, 0=사진
         private const val PATH_CAMERA_RECORD = "/nakkda/camera/record"   // 워치→폰 "start,지연초" / "stop"
         private const val PATH_SETTINGS = "/nakkda/settings"
@@ -1500,6 +1586,7 @@ private fun CameraScreen(
     frame: ImageBitmap?,
     video: Boolean,
     recording: Boolean,
+    blackbox: Boolean,
     busy: Boolean,
     recStartAt: Long,
     previewOn: Boolean,
@@ -1508,6 +1595,7 @@ private fun CameraScreen(
     onShoot: (Int) -> Unit,
     onFlip: () -> Unit,
     onMode: (Boolean) -> Unit,
+    onEnd: () -> Unit,
 ) {
     if (!launched) {
         Box(
@@ -1518,7 +1606,7 @@ private fun CameraScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                Text("카메라 (셀카)", color = Color.White, fontSize = 15.sp,
+                Text("카메라", color = Color.White, fontSize = 15.sp,
                     fontWeight = FontWeight.Bold)
                 Text("폰 카메라를 실행할까요?", color = Color.White.copy(alpha = 0.8f),
                     fontSize = 12.sp, textAlign = TextAlign.Center)
@@ -1530,9 +1618,9 @@ private fun CameraScreen(
         }
     } else {
         CameraControls(
-            frame = frame, video = video, recording = recording, busy = busy,
+            frame = frame, video = video, recording = recording, blackbox = blackbox, busy = busy,
             recStartAt = recStartAt, previewOn = previewOn,
-            onShoot = onShoot, onFlip = onFlip, onMode = onMode,
+            onShoot = onShoot, onFlip = onFlip, onMode = onMode, onEnd = onEnd,
         )
     }
 }
@@ -1547,12 +1635,14 @@ private fun CameraControls(
     frame: ImageBitmap?,
     video: Boolean,
     recording: Boolean,
+    blackbox: Boolean,
     busy: Boolean,
     recStartAt: Long,
     previewOn: Boolean,
     onShoot: (Int) -> Unit,
     onFlip: () -> Unit,
     onMode: (Boolean) -> Unit,
+    onEnd: () -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     var heldSec by remember { mutableStateOf(0) }
@@ -1612,7 +1702,7 @@ private fun CameraControls(
                 verticalArrangement = Arrangement.spacedBy(3.dp),
             ) {
                 when {
-                    recording -> RecordingBadge(recStartAt)
+                    recording -> RecordingBadge(recStartAt, blackbox)
                     busy -> CamNote("전환 중…")
                     else -> Row(
                         Modifier
@@ -1623,23 +1713,57 @@ private fun CameraControls(
                     ) {
                         ModeTab("사진", selected = !video) { onMode(false) }
                         Text("·", color = Color.White.copy(alpha = 0.5f), fontSize = 13.sp)
-                        ModeTab("동영상", selected = video) { onMode(true) }
+                        ModeTab(if (video && blackbox) "블랙박스" else "동영상", selected = video) { onMode(true) }
                     }
                 }
-                Text(
-                    when {
-                        recording -> "탭=녹화 정지"
-                        video -> "탭=녹화 · 길게=타이머"
-                        else -> "탭=촬영 · 길게=타이머"
-                    } + if (recording) "" else "\n상하 스와이프=전/후면",
-                    color = Color.White.copy(alpha = 0.85f),
-                    fontSize = 10.sp,
-                    textAlign = TextAlign.Center,
-                    // 미리보기 위에서도 읽히게 반투명 배경.
-                    modifier = Modifier
-                        .background(Color(0x66000000), RoundedCornerShape(8.dp))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                )
+                // 조작 안내: 화면·모드가 바뀔 때 3초만 보이고 사라진다. '저장 중…'은 저장 동안 계속.
+                val saving = recording && blackbox && busy
+                val hint = when {
+                    saving -> "저장 중…"
+                    recording && blackbox -> "" // 블랙박스 녹화 중엔 안내 없음
+                    recording -> "탭=녹화 정지"
+                    video && blackbox -> "" // 녹화·타이머 안내는 동영상 모드에서만
+                    video -> "탭=녹화 · 길게=타이머\n"
+                    else -> "탭=촬영 · 길게=타이머\n"
+                } + if (recording) "" else "상하 스와이프=전/후면"
+                var hintShown by remember { mutableStateOf(true) }
+                LaunchedEffect(hint) {
+                    hintShown = true
+                    kotlinx.coroutines.delay(3_000)
+                    hintShown = false
+                }
+                AnimatedVisibility(
+                    visible = hint.isNotEmpty() && (saving || hintShown),
+                    enter = fadeIn(),
+                    exit = fadeOut(),
+                ) {
+                    Text(
+                        hint,
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 10.sp,
+                        textAlign = TextAlign.Center,
+                        // 미리보기 위에서도 읽히게 반투명 배경.
+                        modifier = Modifier
+                            .background(Color(0x66000000), RoundedCornerShape(8.dp))
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            // 블랙박스 녹화 중엔 폰 화면과 같은 배치: 왼쪽 ■=끝내기(저장 안 함), 가운데=저장.
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+            Box(Modifier.size(34.dp)) {
+                if (recording && blackbox) {
+                    Box(
+                        Modifier.fillMaxSize().clip(CircleShape).background(Color(0x99000000))
+                            .clickable(enabled = !busy) { onEnd() },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Box(Modifier.size(12.dp).clip(RoundedCornerShape(2.dp)).background(Color.White))
+                    }
+                }
             }
             // 셔터 버튼(아래): 사진=빨간 원 / 동영상=빨간 원+REC / 녹화 중=빨간 네모(정지).
             Box(
@@ -1676,6 +1800,13 @@ private fun CameraControls(
                 contentAlignment = Alignment.Center,
             ) {
                 when {
+                    recording && blackbox -> Box(
+                        Modifier.size(59.dp).clip(CircleShape).background(Color(0xFFD32F2F)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("저장", color = Color.White, fontSize = 15.sp,
+                            fontWeight = FontWeight.Black)
+                    }
                     recording -> Box(
                         Modifier.size(30.dp).clip(RoundedCornerShape(6.dp))
                             .background(Color(0xFFD32F2F)),
@@ -1689,6 +1820,8 @@ private fun CameraControls(
                     }
                     else -> Box(Modifier.size(59.dp).clip(CircleShape).background(Color(0xFFD32F2F)))
                 }
+            }
+            Box(Modifier.size(34.dp))
             }
         }
         // 길게 누르는 동안: 누적 초를 화면 가득 크게(애니메이션) 표시.
@@ -1735,9 +1868,9 @@ private fun ModeTab(label: String, selected: Boolean, onClick: () -> Unit) {
     )
 }
 
-/** 녹화 중 표시: 빨간 점 + 경과 시간(mm:ss). */
+/** 녹화 중 표시: 빨간 점 + 경과 시간(mm:ss). 블랙박스면 앞에 BB. */
 @Composable
-private fun RecordingBadge(startAt: Long) {
+private fun RecordingBadge(startAt: Long, blackbox: Boolean = false) {
     var now by remember { mutableStateOf(SystemClock.elapsedRealtime()) }
     LaunchedEffect(startAt) {
         while (true) {
@@ -1756,7 +1889,7 @@ private fun RecordingBadge(startAt: Long) {
     ) {
         Box(Modifier.size(9.dp).clip(CircleShape).background(Color(0xFFFF1744)))
         Text(
-            "%02d:%02d".format(sec / 60, sec % 60),
+            (if (blackbox) "BB " else "") + "%02d:%02d".format(sec / 60, sec % 60),
             color = Color.White,
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,
@@ -1917,7 +2050,8 @@ private fun ChartScreen(
             PALETTE[(colorIdx.getOrElse(it) { it * 5 }) % PALETTE.size]
         }
         Column(
-            Modifier.fillMaxSize().padding(horizontal = 14.dp, vertical = 20.dp),
+            // 둥근 화면: 그래프 아래쪽 모서리(축 라벨)가 원 밖으로 잘리지 않게 좌우를 넉넉히.
+            Modifier.fillMaxSize().padding(horizontal = 26.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text("시간대별 조과", color = Color.White.copy(alpha = 0.9f), fontSize = 12.sp)
@@ -1936,6 +2070,7 @@ private fun ChartScreen(
                             color = Color.White.copy(alpha = 0.85f),
                             fontSize = 10.sp,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
@@ -1975,14 +2110,6 @@ private fun DrawScope.drawCatchTide(
     val span = endMin - startMin
     if (span <= 0) return
 
-    val padL = 20f; val padR = 6f; val padT = 6f; val padB = 14f
-    val plotW = size.width - padL - padR
-    val plotH = size.height - padT - padB
-    if (plotW <= 0 || plotH <= 0) return
-    val base = padT + plotH
-    fun xOf(minute: Int) = padL + plotW * (minute - startMin) / span
-
-    val grid = Color.White.copy(alpha = 0.12f)
     val txt = Color.White.copy(alpha = 0.6f)
     val centerPaint = android.graphics.Paint().apply {
         color = txt.toArgb(); textSize = 9.sp.toPx(); isAntiAlias = true
@@ -1992,6 +2119,21 @@ private fun DrawScope.drawCatchTide(
         color = txt.toArgb(); textSize = 9.sp.toPx(); isAntiAlias = true
         textAlign = android.graphics.Paint.Align.RIGHT
     }
+    var maxCount = 1
+    for (arr in hours) for (v in arr) if (v > maxCount) maxCount = v
+    // 여백은 라벨 글자 크기(시스템 글꼴 크기 반영)로 계산 — 큰 글꼴에서도 라벨이 잘리지 않게.
+    val textH = centerPaint.textSize
+    val padL = rightPaint.measureText("$maxCount") + 4.dp.toPx()
+    val padR = centerPaint.measureText("24") / 2 + 2.dp.toPx()
+    val padT = textH * 0.4f
+    val padB = textH + 4.dp.toPx()
+    val plotW = size.width - padL - padR
+    val plotH = size.height - padT - padB
+    if (plotW <= 0 || plotH <= 0) return
+    val base = padT + plotH
+    fun xOf(minute: Int) = padL + plotW * (minute - startMin) / span
+
+    val grid = Color.White.copy(alpha = 0.12f)
 
     // 시간 그리드 + 3시간마다 라벨.
     var h = (startMin + 59) / 60
@@ -1999,14 +2141,12 @@ private fun DrawScope.drawCatchTide(
         val x = xOf(h * 60)
         drawLine(grid, Offset(x, padT), Offset(x, base), strokeWidth = 1f)
         if (h % 3 == 0) {
-            drawContext.canvas.nativeCanvas.drawText("$h", x, size.height - 3f, centerPaint)
+            drawContext.canvas.nativeCanvas.drawText("$h", x, size.height - 2.dp.toPx(), centerPaint)
         }
         h++
     }
 
     // 어종별 그룹 막대.
-    var maxCount = 1
-    for (arr in hours) for (v in arr) if (v > maxCount) maxCount = v
     val n = hours.size
     if (n > 0) {
         var hh = startMin / 60
@@ -2038,7 +2178,7 @@ private fun DrawScope.drawCatchTide(
     }
     // y축 0 / 최대 마리수.
     drawContext.canvas.nativeCanvas.drawText("0", padL - 3f, base, rightPaint)
-    drawContext.canvas.nativeCanvas.drawText("$maxCount", padL - 3f, padT + 8f, rightPaint)
+    drawContext.canvas.nativeCanvas.drawText("$maxCount", padL - 3f, padT + textH * 0.8f, rightPaint)
 
     // 조위 곡선 + 꼭지점 cm 라벨.
     if (tide.size >= 2) {
@@ -2084,7 +2224,7 @@ private fun DrawScope.drawCatchTide(
             val cx = xOf(p.first); val cy = yOf(p.second.toFloat())
             drawCircle(tideColor, radius = 2.5f, center = Offset(cx, cy))
             drawContext.canvas.nativeCanvas.drawText(
-                "${p.second}", cx, (cy - 5f).coerceAtLeast(8f), centerPaint)
+                "${p.second}", cx, (cy - 5f).coerceAtLeast(textH), centerPaint)
         }
     }
 }

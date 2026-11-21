@@ -59,13 +59,20 @@ class WearListenerService : WearableListenerService() {
             // 사진/동영상 모드 전환(payload 1=동영상, 0=사진).
             PATH_CAMERA_MODE -> sendBroadcast(
                 Intent(ACTION_CAMERA_MODE).setPackage(packageName)
-                    .putExtra("video", event.data.firstOrNull() == 1.toByte()))
+                    .putExtra("video", event.data.firstOrNull() == 1.toByte())
+                    .putExtra("blackbox", event.data.firstOrNull() == 2.toByte())) // 동영상↔블랙박스 전환
             // 녹화 시작("start,지연초")/정지("stop").
             PATH_CAMERA_RECORD -> {
                 val parts = String(event.data).split(",")
+                // 카메라가 닫혀 있는데 녹화 시작이 오면(워치 빠른 녹화) 동영상으로 열고 바로 녹화.
+                if (parts.getOrNull(0) == "start" && CameraLockActivity.current == null) {
+                    launchCamera(autoRecord = true)
+                    return
+                }
                 sendBroadcast(
                     Intent(ACTION_CAMERA_RECORD).setPackage(packageName)
                         .putExtra("start", parts.getOrNull(0) == "start")
+                        .putExtra("end", parts.getOrNull(0) == "end") // 블랙박스 끝내기(저장 안 함)
                         .putExtra("delay", parts.getOrNull(1)?.toIntOrNull() ?: 0))
             }
             PATH_SETTINGS_COLOR -> WatchSettings.setColorFromWatch(this, event.data)
@@ -79,10 +86,11 @@ class WearListenerService : WearableListenerService() {
      * 워치 요청으로 폰 카메라(셀카)를 포그라운드로 연다 — 흔들기 카메라와 동일 메커니즘.
      * 오버레이 권한이 있으면 바로 실행, 없으면 전면 인텐트 알림으로 폴백.
      */
-    private fun launchCamera() {
+    private fun launchCamera(autoRecord: Boolean = false) {
         val intent = Intent(this, CameraLockActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             .putExtra("selfie", true)
+            .putExtra("autoRecord", autoRecord)
         if (Settings.canDrawOverlays(this)) {
             try { startActivity(intent); return } catch (_: Exception) {}
         }
