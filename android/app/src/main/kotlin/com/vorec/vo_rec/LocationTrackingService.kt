@@ -126,10 +126,20 @@ class LocationTrackingService : Service() {
     private var isStill = false
     private var anchorLocation: Location? = null  // 정지 판정 기준점
     private var anchorSinceMs = 0L                 // 기준점에 머물기 시작한 시각(elapsedRealtime)
+    private var anchorSinceWallMs = 0L             // 같은 시각(wall clock) — 체류 시작 시각으로 기록
     private var stillStartWallMs = 0L              // 체류 시작 시각(wall clock, 체류지점 기록용)
     private var sensorManager: SensorManager? = null
     private var significantMotion: Sensor? = null
     private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
+
+    // 기준점에 STILL_ENTER_MS 동안 새 위치가 안 와도 정지로 판정한다.
+    // 이동 중 요청은 최소 이동거리(minDistanceMeters) 필터가 있어 가만히 있으면 픽스가 오지 않으므로,
+    // 픽스가 올 때만 판정하면 떠나는 순간에야 정지로 들어가 체류 시간이 0분이 된다.
+    private val stillCheck = Runnable {
+        if (!isStill && anchorLocation != null &&
+            SystemClock.elapsedRealtime() - anchorSinceMs >= STILL_ENTER_MS
+        ) enterStill()
+    }
 
     // 저전력 모드 중 유의미한 움직임이 감지되면 즉시 이동 모드로 복귀(권한 불필요).
     private val motionListener = object : TriggerEventListener() {
@@ -260,6 +270,9 @@ class LocationTrackingService : Service() {
         if (anchor == null || anchor.distanceTo(location) > stillRadius(anchor, location)) {
             anchorLocation = location
             anchorSinceMs = SystemClock.elapsedRealtime()
+            anchorSinceWallMs = System.currentTimeMillis()
+            mainHandler.removeCallbacks(stillCheck)
+            mainHandler.postDelayed(stillCheck, STILL_ENTER_MS)
             return
         }
         if (SystemClock.elapsedRealtime() - anchorSinceMs >= STILL_ENTER_MS) enterStill()
@@ -274,7 +287,9 @@ class LocationTrackingService : Service() {
         if (isStill) return
         isStill = true
         flushHeld() // 머무는 곳의 마지막 점을 확정
-        stillStartWallMs = System.currentTimeMillis()
+        mainHandler.removeCallbacks(stillCheck)
+        // 체류 시작 = 기준점에 도착한 시각(정지 판정까지 기다린 3분 포함).
+        stillStartWallMs = if (anchorSinceWallMs > 0L) anchorSinceWallMs else System.currentTimeMillis()
         // 정지 진입 — 속도 구간을 조업(저속)으로 리셋(복귀 시 저속부터 다시 평가).
         smoothedSpeedMps = 0f
         speedTier = 0
@@ -381,6 +396,7 @@ class LocationTrackingService : Service() {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(stillCheck)
         if (isStill) { try { finalizeStay() } catch (_: Exception) {} }
         try { flushHeld() } catch (_: Exception) {}
         try { fusedClient?.removeLocationUpdates(locationCallback) } catch (_: Exception) {}

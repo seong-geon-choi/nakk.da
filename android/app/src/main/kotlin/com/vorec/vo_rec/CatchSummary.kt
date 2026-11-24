@@ -31,17 +31,6 @@ import kotlin.math.cos
 object CatchSummary {
     private const val MARK = "🏁 조과 요약"
     private const val MARK_COUNTER = "🏁 워치 카운터"
-    // 워치 카운터 팔레트(워치 PALETTE·폰 워치설정 화면과 동일) — 좌/우 어종 색을 워치와 맞춘다.
-    private val WATCH_PALETTE = intArrayOf(
-        0xFF1565C0.toInt(), 0xFF1E88E5.toInt(), 0xFF00838F.toInt(), 0xFF00897B.toInt(),
-        0xFF2E7D32.toInt(), 0xFF7CB342.toInt(), 0xFFF9A825.toInt(), 0xFFEF6C00.toInt(),
-        0xFFD84315.toInt(), 0xFFC62828.toInt(), 0xFFAD1457.toInt(), 0xFF6A1B9A.toInt(),
-        0xFF4527A0.toInt(), 0xFF455A64.toInt(), 0xFF37474F.toInt(), 0xFF263238.toInt(),
-    )
-    private val SERIES_COLORS = intArrayOf(
-        0xFF1E88E5.toInt(), 0xFF43A047.toInt(), 0xFFEF6C00.toInt(),
-        0xFF8E24AA.toInt(), 0xFFC62828.toInt(), 0xFF00897B.toInt(),
-    )
 
     fun today(): String = SimpleDateFormat("yyyy-MM-dd", Locale.US).format(Date())
 
@@ -67,7 +56,8 @@ object CatchSummary {
 
         val (firstAt, lastAt) = catchTimeRange(txt) ?: return false
         val tide = CatchLogService.loadTidePoints(context, date)
-        val colors = seriesColors(context, names.size)
+        // 어종 색 = 워치 카운터 색(카운터 어종) / 공용 기본색(그 외) — 폰 지도 차트와 동일.
+        val colors = WatchSettings.speciesColors(context, names)
         val chart = renderChart(date, names, names.map { hourly[it] ?: IntArray(24) }, counts,
             tide, firstAt, lastAt, colors)
         val path = saveToGallery(context, chart, "NAKKDA_SUMMARY_${date.replace("-", "")}") ?: return false
@@ -141,16 +131,6 @@ object CatchSummary {
             }
         }
         return removed
-    }
-
-    /** 어종 i의 색 — 좌/우(0,1)는 워치 카운터 색, 그 외는 기본 색. */
-    private fun seriesColors(context: Context, n: Int): IntArray {
-        val ws = WatchSettings.get(context)
-        val idx = intArrayOf((ws["color_0"] as? Int) ?: 0, (ws["color_1"] as? Int) ?: 4)
-        return IntArray(n) { i ->
-            if (i < 2) WATCH_PALETTE[idx[i].coerceIn(0, WATCH_PALETTE.size - 1)]
-            else SERIES_COLORS[i % SERIES_COLORS.size]
-        }
     }
 
     /** 🎣 항목 헤더 시각 중 처음/마지막 (HH:mm). */

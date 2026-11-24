@@ -67,6 +67,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -146,6 +147,10 @@ private val PALETTE = listOf(
     Color(0xFF37474F), // 14 진회색
     Color(0xFF263238), // 15 먹색
 )
+
+/** 워치 색상 피커에 보이는 12색(PALETTE 인덱스). 원형 화면에 48dp 칸(WO-V2)으로 넣으려 16→12.
+ *  폰과 색 번호를 맞추려 PALETTE(16색)는 그대로 — 폰에서 고른 다른 색도 그대로 표시된다. */
+private val PICKER_IDX = listOf(0, 2, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14)
 
 /**
  * 조과 카운터 워치 — 어종별 좌/우 분할 표시 + 탭 카운트.
@@ -1146,7 +1151,11 @@ class WearMainActivity : ComponentActivity() {
     /** 베젤 회전: 피커가 열린 영역의 색 커서를 delta만큼 이동. */
     private fun moveCursor(delta: Int) {
         val side = pickerSide ?: return
-        previewColor(side, colorIdx.getOrElse(side) { 0 } + delta)
+        val cur = colorIdx.getOrElse(side) { 0 }
+        // 피커에 없는 색(폰에서 고른 색)이면 그보다 앞의 가장 가까운 칸에서 출발.
+        var pos = PICKER_IDX.indexOf(cur)
+        if (pos < 0) pos = PICKER_IDX.indexOfLast { it < cur }.coerceAtLeast(0)
+        previewColor(side, PICKER_IDX[(pos + delta).coerceIn(0, PICKER_IDX.size - 1)])
     }
 
     /** 현재 영역 색을 prefs에 저장(피커 닫을 때 확정). */
@@ -1277,10 +1286,10 @@ private fun ActionMenu(
                         MenuButton("카운터\n초기화", Color(0xFFC62828), onAskReset, width = 76.dp, height = 52.dp)
                     }
                 } else {
-                    MenuButton("그래프 캡처", Color(0xFF1E88E5), onSave, width = 120.dp, height = 40.dp)
+                    MenuButton("그래프 캡처", Color(0xFF1E88E5), onSave, width = 120.dp)
                 }
                 // 2행: 낚시 종료.
-                MenuButton("낚시 종료", Color(0xFF2E7D32), onEndFishing, width = 120.dp, height = 40.dp)
+                MenuButton("낚시 종료", Color(0xFF2E7D32), onEndFishing, width = 120.dp)
             } else {
                 Text(
                     "오늘 조과 기록을\n모두 삭제할까요?",
@@ -1307,7 +1316,7 @@ private fun MenuButton(
     color: Color,
     onClick: () -> Unit,
     width: Dp = 132.dp,
-    height: Dp = 36.dp,
+    height: Dp = 48.dp, // 최소 터치 영역 48dp(WO-V2)
     fontSize: TextUnit = 14.sp,
 ) {
     Box(
@@ -1517,7 +1526,7 @@ private fun FlipCount(count: Int, fontSizeSp: Float, animate: Boolean) {
     }
 }
 
-/** 16색 스와치 그리드 피커(4×4).
+/** 12색 스와치 그리드 피커(2·4·4·2줄, 원형 화면에 맞춤). 칸마다 터치 영역 48dp(WO-V2).
  *  - 손가락: 색칩 탭=적용+닫힘 / 바깥 탭=현재 커서색으로 확정+닫힘.
  *  - 베젤: 회전으로 커서(흰 테두리) 이동 + 배경 실시간 미리보기. */
 @Composable
@@ -1547,30 +1556,38 @@ private fun ColorPicker(
             ) { onDismiss() },
         contentAlignment = Alignment.Center,
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            for (row in 0 until 4) {
-                Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    for (col in 0 until 4) {
-                        val idx = row * 4 + col
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            var start = 0
+            for (count in listOf(2, 4, 4, 2)) {
+                Row {
+                    for (idx in PICKER_IDX.subList(start, start + count)) {
+                        // 칸(48dp) 전체가 터치 영역, 보이는 원은 38dp.
                         Box(
                             Modifier
-                                .size(32.dp)
-                                .clip(CircleShape)
-                                .background(PALETTE[idx])
-                                .then(
-                                    if (idx == current) {
-                                        Modifier.border(3.dp, Color.White, CircleShape)
-                                    } else {
-                                        Modifier
-                                    },
-                                )
+                                .size(48.dp)
                                 .clickable(
                                     interactionSource = remember { MutableInteractionSource() },
                                     indication = null,
                                 ) { onPick(idx) },
-                        )
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(
+                                Modifier
+                                    .size(38.dp)
+                                    .clip(CircleShape)
+                                    .background(PALETTE[idx])
+                                    .then(
+                                        if (idx == current) {
+                                            Modifier.border(3.dp, Color.White, CircleShape)
+                                        } else {
+                                            Modifier
+                                        },
+                                    ),
+                            )
+                        }
                     }
                 }
+                start += count
             }
         }
     }
@@ -1706,7 +1723,7 @@ private fun CameraControls(
                     busy -> CamNote("전환 중…")
                     else -> Row(
                         Modifier
-                            .clip(RoundedCornerShape(14.dp))
+                            .clip(RoundedCornerShape(24.dp))
                             .background(Color(0x88000000))
                             .padding(horizontal = 4.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -1750,18 +1767,23 @@ private fun CameraControls(
                 }
             }
             // 블랙박스 녹화 중엔 폰 화면과 같은 배치: 왼쪽 ■=끝내기(저장 안 함), 가운데=저장.
+            // 양옆 칸은 터치 영역 48dp(WO-V2) — 보이는 ■ 원은 34dp, 칸 사이 여백 대신 칸 안 여백.
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
-            Box(Modifier.size(34.dp)) {
+            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                 if (recording && blackbox) {
                     Box(
-                        Modifier.fillMaxSize().clip(CircleShape).background(Color(0x99000000))
+                        Modifier.fillMaxSize().clip(CircleShape)
                             .clickable(enabled = !busy) { onEnd() },
                         contentAlignment = Alignment.Center,
                     ) {
-                        Box(Modifier.size(12.dp).clip(RoundedCornerShape(2.dp)).background(Color.White))
+                        Box(
+                            Modifier.size(34.dp).clip(CircleShape).background(Color(0x99000000)),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Box(Modifier.size(12.dp).clip(RoundedCornerShape(2.dp)).background(Color.White))
+                        }
                     }
                 }
             }
@@ -1821,7 +1843,7 @@ private fun CameraControls(
                     else -> Box(Modifier.size(59.dp).clip(CircleShape).background(Color(0xFFD32F2F)))
                 }
             }
-            Box(Modifier.size(34.dp))
+            Box(Modifier.size(48.dp))
             }
         }
         // 길게 누르는 동안: 누적 초를 화면 가득 크게(애니메이션) 표시.
@@ -1853,19 +1875,24 @@ private fun CameraControls(
 /** 모드 탭 하나 — 선택된 쪽은 굵고 밝게. */
 @Composable
 private fun ModeTab(label: String, selected: Boolean, onClick: () -> Unit) {
-    Text(
-        label,
-        color = if (selected) Color.White else Color.White.copy(alpha = 0.5f),
-        fontSize = 13.sp,
-        fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-        modifier = Modifier
+    Box(
+        Modifier
             .clickable(
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
                 onClick = onClick,
             )
-            .padding(horizontal = 8.dp, vertical = 5.dp),
-    )
+            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp) // 최소 터치 영역(WO-V2)
+            .padding(horizontal = 8.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            label,
+            color = if (selected) Color.White else Color.White.copy(alpha = 0.5f),
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+        )
+    }
 }
 
 /** 녹화 중 표시: 빨간 점 + 경과 시간(mm:ss). 블랙박스면 앞에 BB. */
@@ -1920,7 +1947,8 @@ private fun PillButton(label: String, color: Color, onClick: () -> Unit) {
                 interactionSource = remember { MutableInteractionSource() },
                 indication = null,
             ) { onClick() }
-            .padding(horizontal = 18.dp, vertical = 9.dp),
+            .defaultMinSize(minHeight = 48.dp) // 최소 터치 영역(WO-V2)
+            .padding(horizontal = 18.dp),
         contentAlignment = Alignment.Center,
     ) {
         Text(label, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
@@ -2112,11 +2140,11 @@ private fun DrawScope.drawCatchTide(
 
     val txt = Color.White.copy(alpha = 0.6f)
     val centerPaint = android.graphics.Paint().apply {
-        color = txt.toArgb(); textSize = 9.sp.toPx(); isAntiAlias = true
+        color = txt.toArgb(); textSize = 10.sp.toPx(); isAntiAlias = true
         textAlign = android.graphics.Paint.Align.CENTER
     }
     val rightPaint = android.graphics.Paint().apply {
-        color = txt.toArgb(); textSize = 9.sp.toPx(); isAntiAlias = true
+        color = txt.toArgb(); textSize = 10.sp.toPx(); isAntiAlias = true
         textAlign = android.graphics.Paint.Align.RIGHT
     }
     var maxCount = 1
@@ -2135,12 +2163,14 @@ private fun DrawScope.drawCatchTide(
 
     val grid = Color.White.copy(alpha = 0.12f)
 
-    // 시간 그리드 + 3시간마다 라벨.
+    // 시간 그리드 + 3시간마다 라벨(라벨끼리 겹칠 만큼 좁으면 6시간마다).
+    val hourPx = plotW * 60f / span
+    val labelStep = if (centerPaint.measureText("24") + 4.dp.toPx() <= hourPx * 3) 3 else 6
     var h = (startMin + 59) / 60
     while (h * 60 <= endMin) {
         val x = xOf(h * 60)
         drawLine(grid, Offset(x, padT), Offset(x, base), strokeWidth = 1f)
-        if (h % 3 == 0) {
+        if (h % labelStep == 0) {
             drawContext.canvas.nativeCanvas.drawText("$h", x, size.height - 2.dp.toPx(), centerPaint)
         }
         h++
@@ -2178,7 +2208,7 @@ private fun DrawScope.drawCatchTide(
     }
     // y축 0 / 최대 마리수.
     drawContext.canvas.nativeCanvas.drawText("0", padL - 3f, base, rightPaint)
-    drawContext.canvas.nativeCanvas.drawText("$maxCount", padL - 3f, padT + textH * 0.8f, rightPaint)
+    drawContext.canvas.nativeCanvas.drawText("$maxCount", padL - 3f, padT + rightPaint.textSize * 0.8f, rightPaint)
 
     // 조위 곡선 + 꼭지점 cm 라벨.
     if (tide.size >= 2) {
@@ -2201,7 +2231,14 @@ private fun DrawScope.drawCatchTide(
             }
             return tide.last().second.toFloat()
         }
-        fun yOf(lv: Float) = padT + plotH * (1 - (lv - minL) / (maxL - minL))
+        // 조위 값 라벨(10sp): 만조는 점 위, 간조는 점 아래에 둔다 — 곡선과 겹치지 않게.
+        // 곡선은 위·아래로 라벨 한 줄만큼 띄운 범위에 그려 라벨 자리를 확보한다.
+        val tidePaint = android.graphics.Paint(centerPaint).apply { textSize = 10.sp.toPx() }
+        val gap = 3.dp.toPx()
+        val labelH = tidePaint.textSize
+        val curveTop = padT + labelH + gap
+        val curveH = (plotH - 2 * (labelH + gap)).coerceAtLeast(1f)
+        fun yOf(lv: Float) = curveTop + curveH * (1 - (lv - minL) / (maxL - minL))
         val tideColor = Color(0xFF4FC3F7)
         val line = Path(); val fill = Path(); var started = false
         var x = 0f
@@ -2219,12 +2256,17 @@ private fun DrawScope.drawCatchTide(
         fill.lineTo(padL + plotW, base); fill.close()
         drawPath(fill, tideColor.copy(alpha = 0.16f))
         drawPath(line, tideColor.copy(alpha = 0.8f), style = Stroke(width = 2f))
-        for (p in tide) {
+        for ((i, p) in tide.withIndex()) {
             if (p.first < startMin || p.first > endMin) continue
             val cx = xOf(p.first); val cy = yOf(p.second.toFloat())
             drawCircle(tideColor, radius = 2.5f, center = Offset(cx, cy))
-            drawContext.canvas.nativeCanvas.drawText(
-                "${p.second}", cx, (cy - 5f).coerceAtLeast(textH), centerPaint)
+            // 이웃 점보다 높으면 만조(라벨 위), 낮으면 간조(라벨 아래).
+            val nb = tide.getOrNull(i - 1) ?: tide.getOrNull(i + 1)
+            val high = nb == null || p.second >= nb.second
+            val ty = if (high) cy - gap else cy + gap + labelH * 0.8f
+            val half = tidePaint.measureText("${p.second}") / 2
+            val tx = cx.coerceIn(padL + half, (size.width - half).coerceAtLeast(padL + half))
+            drawContext.canvas.nativeCanvas.drawText("${p.second}", tx, ty, tidePaint)
         }
     }
 }

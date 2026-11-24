@@ -24,6 +24,7 @@ import '../../../core/utils/file_name_parser.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/services/tracking_service.dart';
 import '../../../core/services/catch_events_service.dart';
+import '../../../core/services/watch_settings_service.dart';
 import '../../../core/widgets/media_gallery_screen.dart';
 import '../../../core/widgets/memo_date_picker_dialog.dart';
 import '../../../core/widgets/saf_image.dart';
@@ -79,6 +80,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
   List<TideEvent> _dayTides = const []; // 그날 현황 블록의 만조/간조(조위 곡선용)
   bool _tideFetchTried = false; // 물때 자동 수집 1회 시도 플래그(날짜 바뀌면 리셋)
   Map<String, List<DateTime>> _catchBySpecies = const {}; // 어종별 기록 시각(시간당 조과 막대)
+  Map<String, Color> _counterColors = const {}; // 카운터 어종 → 워치 카운터 색
   Timer? _noGpsTimer;
   bool _dismissedNoGpsCard = false;
   DateTime _loadedDate = DateTime.now();
@@ -232,6 +234,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
       }
     }
     pts.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+    // 어종 색을 워치 카운터 색과 맞춘다(워치·폰 어디서 바꿔도 다시 불러올 때 반영).
+    WatchSettingsService.counterColors().then((c) {
+      if (mounted) setState(() => _counterColors = c);
+    });
     _noGpsTimer?.cancel();
     setState(() {
       _points = pts;
@@ -992,7 +998,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     return markers;
   }
 
-  // 조과 어종 색: 조위·조과 차트 범례와 동일(같은 팔레트·같은 어종 순서).
+  // 조과 어종 색: 조위·조과 차트 범례와 동일(카운터 어종=워치 카운터 색, 그 외=팔레트).
   // 어종 순서 = _catchBySpecies의 비어있지 않은 키 순서(차트의 allSpecies와 일치).
   Color _catchColor(String? species) {
     final ordered = _catchBySpecies.keys
@@ -1000,7 +1006,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         .toList();
     final i = species == null ? -1 : ordered.indexOf(species);
     if (i < 0) return Colors.red.shade600; // 매칭 안 되면 기본 조과색
-    return CatchTideChart.palette[i % CatchTideChart.palette.length];
+    return CatchTideChart.colorOf(species!, ordered, _counterColors);
   }
 
   // 지점 종류별 색: 조과(🎣)=어종별(차트 범례색), 메모=파랑, 현장정보(위치)=청록.
@@ -1680,20 +1686,26 @@ class _MapScreenState extends ConsumerState<MapScreen>
                           child: GestureDetector(
                             behavior: HitTestBehavior.opaque,
                             onTap: () => _showStayInfo(p),
-                            child: Container(
-                              decoration: BoxDecoration(
-                                shape: BoxShape.circle,
-                                color: const Color(0xFF00897B),
-                                border:
-                                    Border.all(color: Colors.white, width: 2),
-                                boxShadow: const [
-                                  BoxShadow(
-                                      blurRadius: 4, color: Color(0x66000000)),
-                                ],
-                              ),
-                              child: const Center(
-                                child: Icon(Icons.pause,
-                                    color: Colors.white, size: 18),
+                            // 터치 영역(34)은 유지하고 보이는 아이콘만 2/3(23), 이동경로와 같은 색.
+                            child: Center(
+                              child: Container(
+                                width: 23,
+                                height: 23,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: const Color(0xFFFF6D00),
+                                  border: Border.all(
+                                      color: Colors.white, width: 1.5),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                        blurRadius: 3,
+                                        color: Color(0x66000000)),
+                                  ],
+                                ),
+                                child: const Center(
+                                  child: Icon(Icons.pause,
+                                      color: Colors.white, size: 12),
+                                ),
                               ),
                             ),
                           ),
@@ -2521,6 +2533,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
               CatchTideChart(
                 tides: _dayTides,
                 catchesBySpecies: _catchBySpecies,
+                counterColors: _counterColors,
                 onHiddenChanged: (h) =>
                     setState(() => _hiddenCatchSpecies = h),
               ),

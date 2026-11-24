@@ -784,6 +784,8 @@ class MainActivity : FlutterActivity() {
             .setMethodCallHandler { call, result ->
                 when (call.method) {
                     "getWatchSettings" -> result.success(WatchSettings.get(this))
+                    // 카운터 어종 → 색(ARGB) — 폰 차트·지도 색을 워치와 맞춤.
+                    "getCounterColors" -> result.success(WatchSettings.counterColors(this))
                     "setWatchSettings" -> {
                         @Suppress("UNCHECKED_CAST")
                         val values = (call.arguments as? Map<String, Any?>) ?: emptyMap()

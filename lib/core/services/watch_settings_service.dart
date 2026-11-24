@@ -16,6 +16,16 @@ class WatchSettingsService {
     }
   }
 
+  /// 카운터 어종 → 카운터 색(워치와 같은 색). 실패하면 빈 맵.
+  static Future<Map<String, Color>> counterColors() async {
+    try {
+      final m = await _channel.invokeMapMethod<String, int>('getCounterColors');
+      return (m ?? {}).map((k, v) => MapEntry(k, Color(v)));
+    } catch (_) {
+      return {};
+    }
+  }
+
   /// 바뀐 값만 넘기면 저장 후 워치로 전송된다.
   static Future<void> set(Map<String, dynamic> values) async {
     try {

@@ -11,11 +11,26 @@ class CatchTideChart extends StatefulWidget {
   final Map<String, List<DateTime>> catchesBySpecies;
   final double height;
 
+  /// 카운터 어종 → 워치 카운터 색. 여기 있는 어종은 이 색, 나머지는 palette 차례로.
+  final Map<String, Color> counterColors;
+
   /// 범례에서 숨긴 어종 집합이 바뀔 때 호출(지도 마커 숨김 동기화용).
   final ValueChanged<Set<String>>? onHiddenChanged;
 
+  /// 어종 색: 카운터 어종이면 워치 카운터 색, 아니면 카운터 외 어종 순서대로 palette.
+  /// 지도 조과 마커도 같은 함수를 쓴다(ordered = 비어있지 않은 어종 순서).
+  static Color colorOf(
+      String species, List<String> ordered, Map<String, Color> counterColors) {
+    final fixed = counterColors[species];
+    if (fixed != null) return fixed;
+    final others = ordered.where((s) => !counterColors.containsKey(s)).toList();
+    final i = others.indexOf(species);
+    return palette[(i < 0 ? 0 : i) % palette.length];
+  }
+
+
   /// 어종 막대·범례 색 팔레트. 지도 조과 마커도 같은 색을 쓰도록 공개한다.
-  /// 어종 색 = palette[보이는어종순서.indexOf(어종) % palette.length].
+  /// 카운터 어종은 counterColors(워치 카운터 색)를 쓰고, 그 외 어종만 이 팔레트를 차례로 쓴다.
   /// 지도의 고정 역할색(메모=파랑, 현장정보=청록, 이동경로·현재위치=주황,
   /// 좌표찍기=보라, 조위선=테마 primary)과 겹치지 않도록 빨강·초록·핑크·앰버로 둔다.
   static const List<Color> palette = [
@@ -30,6 +45,7 @@ class CatchTideChart extends StatefulWidget {
     required this.tides,
     required this.catchesBySpecies,
     this.height = 160,
+    this.counterColors = const {},
     this.onHiddenChanged,
   });
 
@@ -39,8 +55,6 @@ class CatchTideChart extends StatefulWidget {
 
 class _CatchTideChartState extends State<CatchTideChart> {
   final Set<String> _hidden = {}; // 숨긴 어종
-
-  static const List<Color> _palette = CatchTideChart.palette;
 
   static int? _parseMin(String hhmm) {
     final p = hhmm.split(':');
@@ -86,13 +100,13 @@ class _CatchTideChartState extends State<CatchTideChart> {
     final seriesHours = <Map<int, int>>[];
     final seriesColors = <Color>[];
     for (final s in visible) {
-      final idx = allSpecies.indexOf(s);
       final m = <int, int>{};
       for (final t in widget.catchesBySpecies[s]!) {
         m[t.hour] = (m[t.hour] ?? 0) + 1;
       }
       seriesHours.add(m);
-      seriesColors.add(_palette[idx % _palette.length]);
+      seriesColors.add(
+          CatchTideChart.colorOf(s, allSpecies, widget.counterColors));
     }
 
     // 조차(최고-최저)
@@ -116,7 +130,8 @@ class _CatchTideChartState extends State<CatchTideChart> {
           crossAxisAlignment: WrapCrossAlignment.center,
           children: [
             for (var i = 0; i < allSpecies.length; i++)
-              _speciesChip(allSpecies[i], _palette[i % _palette.length], cs),
+              _speciesChip(allSpecies[i],
+                  CatchTideChart.colorOf(allSpecies[i], allSpecies, widget.counterColors), cs),
             if (tidePts.length >= 2) ...[
               _legendLine(cs.primary, '조위', cs),
               if (range != null)
