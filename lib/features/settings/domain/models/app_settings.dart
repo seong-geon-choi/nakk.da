@@ -557,6 +557,8 @@ class AppSettings {
   // 설정만=memo false·media false / 설정+메모=memo true·media false /
   // 설정+메모+사진=memo true·media true.
   final bool driveBackupMemoIncluded;
+  // 백업을 Wi-Fi에서만 할지(false면 모바일 데이터에서도). 기본 Wi-Fi만.
+  final bool driveBackupWifiOnly;
   final DateTime? lastSyncAt;
   final bool? lastSyncSuccess;
   final List<String> fishSpecies; // 어종 입력 목록 (사용자 편집 가능)
@@ -655,6 +657,7 @@ class AppSettings {
     this.driveBackupEnabled = false,
     this.driveBackupIncludeMedia = false,
     this.driveBackupMemoIncluded = true,
+    this.driveBackupWifiOnly = true,
     this.lastSyncAt,
     this.lastSyncSuccess,
     List<String>? fishSpecies,
@@ -725,6 +728,7 @@ class AppSettings {
     bool? driveBackupEnabled,
     bool? driveBackupIncludeMedia,
     bool? driveBackupMemoIncluded,
+    bool? driveBackupWifiOnly,
     DateTime? lastSyncAt,
     bool? lastSyncSuccess,
     bool clearLastSync = false,
@@ -787,6 +791,7 @@ class AppSettings {
       driveBackupEnabled: driveBackupEnabled ?? this.driveBackupEnabled,
       driveBackupIncludeMedia: driveBackupIncludeMedia ?? this.driveBackupIncludeMedia,
       driveBackupMemoIncluded: driveBackupMemoIncluded ?? this.driveBackupMemoIncluded,
+      driveBackupWifiOnly: driveBackupWifiOnly ?? this.driveBackupWifiOnly,
       lastSyncAt: clearLastSync ? null : (lastSyncAt ?? this.lastSyncAt),
       lastSyncSuccess: clearLastSync ? null : (lastSyncSuccess ?? this.lastSyncSuccess),
       fishSpecies: fishSpecies ?? this.fishSpecies,

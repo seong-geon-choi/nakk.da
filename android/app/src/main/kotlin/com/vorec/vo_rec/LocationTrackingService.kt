@@ -3,6 +3,7 @@ package com.sgchoisg.nakkda
 import android.annotation.SuppressLint
 import android.app.*
 import android.content.*
+import android.content.pm.ApplicationInfo
 import android.content.pm.ServiceInfo
 import android.hardware.Sensor
 import android.hardware.SensorManager
@@ -38,6 +39,11 @@ class LocationTrackingService : Service() {
         private const val EXTRA_INTERVAL = "intervalMeters"
         private const val UPDATE_INTERVAL_MS = 10000L  // 이동 중 위치 갱신 주기
         private const val FASTEST_INTERVAL_MS = 2000L  // 최소 갱신 간격
+        // 배터리: 속도 구간별 요청 간격(저장 간격이 넓은 순항·고속은 GPS도 덜 자주 켠다).
+        //   조업/정지·저속이동 10초, 순항(300m 저장) 20초, 고속(1000m 저장) 30초.
+        private val TIER_INTERVAL_MS = longArrayOf(10_000L, 10_000L, 20_000L, 30_000L)
+        // 배터리: 위치는 계속 잡되 최대 1분치를 모아 한 번에 전달(그동안 CPU가 잠들 수 있음).
+        private const val MAX_BATCH_DELAY_MS = 60_000L
         private const val MAX_ACCURACY_METERS = 1000f  // 이보다 부정확한 픽스는 제외
         // 정지 감지(배터리 절감): 반경 안에서 이 시간 이상 머물면 저전력 모드로 전환
         private const val STILL_ENTER_MS = 3 * 60 * 1000L   // 3분 이상 정지 시 진입
@@ -72,6 +78,15 @@ class LocationTrackingService : Service() {
         // 오가며 '이동'처럼 보인다. 두 위치의 오차 합 × 이 배수보다 덜 움직였으면 흔들림으로 본다
         // (저장 판정·정지 판정 모두).
         private const val NOISE_FACTOR = 1.5f
+        // 지하철·실내처럼 GPS 없이 와이파이·기지국으로 잡힌 '거친' 위치(오차가 이보다 큼).
+        // 거친 위치는 역에 설 때만 띄엄띄엄 들어오므로 속도 적응형 간격(300~1000m)을 적용하지 않고
+        // 흔들림 기준도 두 오차 중 큰 쪽(1배)으로 낮춰 역 하나 거리 이동이 버려지지 않게 한다.
+        // (정지 판정은 기존 기준 유지, 제자리 흔들림은 되돌아오는 점 제거가 거른다.)
+        private const val COARSE_ACCURACY_M = 60f
+        // 흔들림 기준·정지 반경의 상한. 오차 300~400m 위치가 기준이 되면 다음 역(약 700m+)까지
+        // 흔들림으로 버리거나, 열차 이동을 체류로 잘못 잡으므로 역 간격보다 충분히 작게 묶는다.
+        private const val NOISE_CAP_M = 200f
+        private const val DIAG_KEEP_DAYS = 7 // 디버그 진단 기록 보관 일수
         // 되돌아오는 점(A→B→A) 제거: 새 점이 직전 확정점 근처로 돌아오면 그 사이 점(B)을 버린다.
         private const val BOUNCE_WINDOW_MS = 2 * 60 * 1000L // B~새 점 사이가 이 시간 안일 때만
         private const val BOUNCE_RATIO = 0.5f              // A~새 점 거리 < B까지 거리 × 이 비율
@@ -99,7 +114,25 @@ class LocationTrackingService : Service() {
         }
 
         fun stop(context: Context) {
-            context.stopService(Intent(context, LocationTrackingService::class.java))
+            // 실행 중이면 모아 둔 위치를 받아 저장한 뒤 종료(마지막 최대 1분치 손실 방지).
+            val svc = instance
+            if (svc != null) svc.flushThenStop()
+            else context.stopService(Intent(context, LocationTrackingService::class.java))
+        }
+
+        @Volatile private var instance: LocationTrackingService? = null
+
+        /** 모아 둔(일괄 전달 대기) 위치를 즉시 받아 처리한다 — 지도 화면 진입 시 최신 경로·현재 위치용.
+         *  기록 중이 아니면 바로 done. done은 메인 스레드에서 호출된다. */
+        fun flush(done: () -> Unit) {
+            val svc = instance
+            val task = try { svc?.fusedClient?.flushLocations() } catch (_: Exception) { null }
+            if (svc == null || task == null) {
+                done()
+                return
+            }
+            // 플러시된 위치 콜백(메인 루퍼)이 처리된 뒤에 done.
+            task.addOnCompleteListener { svc.mainHandler.post(done) }
         }
     }
 
@@ -136,9 +169,14 @@ class LocationTrackingService : Service() {
     // 이동 중 요청은 최소 이동거리(minDistanceMeters) 필터가 있어 가만히 있으면 픽스가 오지 않으므로,
     // 픽스가 올 때만 판정하면 떠나는 순간에야 정지로 들어가 체류 시간이 0분이 된다.
     private val stillCheck = Runnable {
-        if (!isStill && anchorLocation != null &&
-            SystemClock.elapsedRealtime() - anchorSinceMs >= STILL_ENTER_MS
-        ) enterStill()
+        val enterIfStill = Runnable {
+            if (!isStill && anchorLocation != null &&
+                SystemClock.elapsedRealtime() - anchorSinceMs >= STILL_ENTER_MS
+            ) enterStill()
+        }
+        val flush = try { fusedClient?.flushLocations() } catch (_: Exception) { null }
+        if (flush == null) enterIfStill.run()
+        else flush.addOnCompleteListener { mainHandler.post(enterIfStill) }
     }
 
     // 저전력 모드 중 유의미한 움직임이 감지되면 즉시 이동 모드로 복귀(권한 불필요).
@@ -150,30 +188,48 @@ class LocationTrackingService : Service() {
 
     private val locationCallback = object : LocationCallback() {
         override fun onLocationResult(result: LocationResult) {
-            val location = result.lastLocation ?: return
-            // 지나치게 부정확한 네트워크 픽스 제외 (지하에서도 합리적인 점만 기록)
-            if (location.hasAccuracy() && location.accuracy > MAX_ACCURACY_METERS) return
-            // 속도에 따라 저장 거리 임계값을 조정(고속일수록 크게 → 점 수 감소).
-            // (lastFixLocation 갱신 '전에' 호출 — adaptiveThresholdMeters·방위 계산이 직전 픽스를 씀.)
-            val threshold = adaptiveThresholdMeters(location)
-            val lf = lastFixLocation
-            if (lf != null && lf.distanceTo(location) >= BEARING_MIN_MOVE_M) {
-                lastTravelBearing = lf.bearingTo(location)
-            }
-            lastFixLocation = location
-            val last = lastSavedLocation
-            val movedFromSaved = last?.distanceTo(location) ?: Float.MAX_VALUE
-            // 위치 오차보다 덜 움직였으면 흔들림 — 저장 거리 기준을 넘어도 저장하지 않는다.
-            val noise = noiseMeters(last, location)
-            val distanceHit = movedFromSaved >= threshold && movedFromSaved >= noise
-            // 변침 보존: 이동 구간(tier≥1)에서 방위가 크게 꺾이면 거리 미달이라도 코너로 저장.
-            val cornerHit = !distanceHit && speedTier >= 1 &&
-                movedFromSaved >= maxOf(CORNER_MIN_MOVE_M, noise) &&
-                lastTravelBearing != null && lastSavedBearing != null &&
-                bearingDiff(lastTravelBearing!!, lastSavedBearing!!) >= CORNER_ANGLE_DEG
-            if (distanceHit || cornerHit) acceptPoint(location, threshold)
-            evaluateStillness(location)
+            // 일괄 전달(MAX_BATCH_DELAY_MS)이면 여러 위치가 시간순으로 온다 — 모두 처리.
+            for (location in result.locations) onLocation(location)
+            // 속도 구간이 바뀌었으면 요청 간격도 바꾼다.
+            if (!isStill && requestedTier != speedTier) requestMoving()
         }
+    }
+
+    private fun onLocation(location: Location) {
+        // 지나치게 부정확한 네트워크 픽스 제외 (지하에서도 합리적인 점만 기록)
+        if (location.hasAccuracy() && location.accuracy > MAX_ACCURACY_METERS) {
+            diag(location, "drop_accuracy")
+            return
+        }
+        // 속도에 따라 저장 거리 임계값을 조정(고속일수록 크게 → 점 수 감소).
+        // (lastFixLocation 갱신 '전에' 호출 — adaptiveThresholdMeters·방위 계산이 직전 픽스를 씀.)
+        // 거친 위치(지하철 역 등)는 속도 구간과 무관하게 사용자 설정 간격으로 저장한다.
+        val coarse = isCoarse(location)
+        val adaptive = adaptiveThresholdMeters(location)
+        val threshold = if (coarse) minDistanceMeters else adaptive
+        val lf = lastFixLocation
+        if (lf != null && lf.distanceTo(location) >= BEARING_MIN_MOVE_M) {
+            lastTravelBearing = lf.bearingTo(location)
+        }
+        lastFixLocation = location
+        val last = lastSavedLocation
+        val movedFromSaved = last?.distanceTo(location) ?: Float.MAX_VALUE
+        // 위치 오차보다 덜 움직였으면 흔들림 — 저장 거리 기준을 넘어도 저장하지 않는다.
+        val noise = if (coarse) coarseNoiseMeters(last, location) else noiseMeters(last, location)
+        val distanceHit = movedFromSaved >= threshold && movedFromSaved >= noise
+        // 변침 보존: 이동 구간(tier≥1)에서 방위가 크게 꺾이면 거리 미달이라도 코너로 저장.
+        val cornerHit = !distanceHit && speedTier >= 1 &&
+            movedFromSaved >= maxOf(CORNER_MIN_MOVE_M, noise) &&
+            lastTravelBearing != null && lastSavedBearing != null &&
+            bearingDiff(lastTravelBearing!!, lastSavedBearing!!) >= CORNER_ANGLE_DEG
+        diag(location, when {
+            distanceHit -> "save"
+            cornerHit -> "save_corner"
+            movedFromSaved < threshold -> "skip_distance"
+            else -> "skip_noise"
+        }, threshold, noise, movedFromSaved)
+        if (distanceHit || cornerHit) acceptPoint(location, threshold)
+        evaluateStillness(location)
     }
 
     /**
@@ -183,11 +239,14 @@ class LocationTrackingService : Service() {
      * (lastFixLocation 갱신 '전에' 호출할 것 — 폴백이 직전 픽스를 쓴다.)
      */
     private fun adaptiveThresholdMeters(location: Location): Float {
-        val raw = if (location.hasSpeed()) {
+        val raw = if (isCoarse(location)) {
+            // 거친 위치(지하·실내)는 위치 점프로 속도가 부풀려지므로 속도를 갱신하지 않는다.
+            smoothedSpeedMps
+        } else if (location.hasSpeed()) {
             location.speed
         } else {
             val lf = lastFixLocation
-            if (lf != null) {
+            if (lf != null && !isCoarse(lf)) {
                 val dt = (location.time - lf.time) / 1000f
                 if (dt > 0.5f) lf.distanceTo(location) / dt else smoothedSpeedMps
             } else 0f
@@ -206,10 +265,19 @@ class LocationTrackingService : Service() {
         }
     }
 
+    /** GPS 없이 와이파이·기지국으로 잡힌 거친 위치인지(지하철 역·실내). */
+    private fun isCoarse(l: Location): Boolean = l.hasAccuracy() && l.accuracy > COARSE_ACCURACY_M
+
+    /** 거친 위치의 흔들림 거리 — 두 오차 중 큰 쪽. 역 사이 이동(약 1km)이 흔들림으로 버려지지 않게. */
+    private fun coarseNoiseMeters(a: Location?, b: Location): Float {
+        fun acc(l: Location?) = if (l != null && l.hasAccuracy()) l.accuracy else 0f
+        return minOf(maxOf(acc(a), acc(b)), NOISE_CAP_M)
+    }
+
     /** 두 위치의 오차를 감안한 흔들림 거리(m) — 이보다 덜 움직였으면 실제 이동으로 보지 않는다. */
     private fun noiseMeters(a: Location?, b: Location): Float {
         fun acc(l: Location?) = if (l != null && l.hasAccuracy()) l.accuracy else 0f
-        return NOISE_FACTOR * (acc(a) + acc(b))
+        return minOf(NOISE_FACTOR * (acc(a) + acc(b)), NOISE_CAP_M)
     }
 
     /**
@@ -220,6 +288,7 @@ class LocationTrackingService : Service() {
         val h = heldLocation
         val p = committedLocation
         if (h != null && p != null && isBounce(p, h, c)) {
+            diag(h, "drop_bounce")
             heldLocation = null
             lastSavedLocation = p
             // 튄 점을 버린 뒤 새 점을 직전 확정점 기준으로 다시 판단(대개 제자리라 버려진다).
@@ -269,13 +338,14 @@ class LocationTrackingService : Service() {
         val anchor = anchorLocation
         if (anchor == null || anchor.distanceTo(location) > stillRadius(anchor, location)) {
             anchorLocation = location
-            anchorSinceMs = SystemClock.elapsedRealtime()
-            anchorSinceWallMs = System.currentTimeMillis()
+            anchorSinceMs = location.elapsedRealtimeNanos / 1_000_000L
+            anchorSinceWallMs = location.time
             mainHandler.removeCallbacks(stillCheck)
-            mainHandler.postDelayed(stillCheck, STILL_ENTER_MS)
+            mainHandler.postDelayed(stillCheck,
+                (STILL_ENTER_MS - (SystemClock.elapsedRealtime() - anchorSinceMs)).coerceAtLeast(0L))
             return
         }
-        if (SystemClock.elapsedRealtime() - anchorSinceMs >= STILL_ENTER_MS) enterStill()
+        if (location.elapsedRealtimeNanos / 1_000_000L - anchorSinceMs >= STILL_ENTER_MS) enterStill()
     }
 
     /** 정지 판정 반경 — 실내처럼 위치 오차가 크면 그만큼 넓혀 흔들림을 이동으로 보지 않는다. */
@@ -328,16 +398,53 @@ class LocationTrackingService : Service() {
         stillStartWallMs = 0L
     }
 
-    private fun movingRequest(): LocationRequest =
-        LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, UPDATE_INTERVAL_MS)
+    private var requestedTier = -1 // 지금 요청 중인 이동 요청의 속도 구간
+
+    private fun movingRequest(): LocationRequest {
+        requestedTier = speedTier
+        val interval = TIER_INTERVAL_MS.getOrElse(speedTier) { UPDATE_INTERVAL_MS }
+        return LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, interval)
             .setMinUpdateIntervalMillis(FASTEST_INTERVAL_MS)
             .setMinUpdateDistanceMeters(minDistanceMeters)
+            .setMaxUpdateDelayMillis(MAX_BATCH_DELAY_MS)
             .setWaitForAccurateLocation(false)
             .build()
+    }
+
+    /** 현재 속도 구간에 맞는 이동 요청으로 (다시) 등록. 같은 콜백이면 기존 요청을 대체한다. */
+    @SuppressLint("MissingPermission")
+    private fun requestMoving() {
+        try {
+            fusedClient?.requestLocationUpdates(movingRequest(), locationCallback, Looper.getMainLooper())
+        } catch (_: SecurityException) {}
+    }
 
     private val dateChangedReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
+            flushThenStop()
+        }
+    }
+
+    // 종료 대기 중(모아 둔 위치 받는 중). 그 사이 다시 시작하면 false로 돌려 종료를 취소한다.
+    private var stopping = false
+    private val stopNow = Runnable { if (stopping) stopSelf() }
+
+    /** 모아 둔(일괄 전달 대기) 위치를 먼저 받아 처리한 뒤 종료. 응답이 없으면 3초 뒤 그냥 종료. */
+    private fun flushThenStop() {
+        if (stopping) return
+        stopping = true
+        mainHandler.postDelayed(stopNow, 3_000L)
+        val task = try { fusedClient?.flushLocations() } catch (_: Exception) { null }
+        if (task == null) {
+            mainHandler.removeCallbacks(stopNow)
             stopSelf()
+            return
+        }
+        task.addOnCompleteListener {
+            mainHandler.post {
+                mainHandler.removeCallbacks(stopNow)
+                if (stopping) stopSelf()
+            }
         }
     }
 
@@ -346,6 +453,7 @@ class LocationTrackingService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        instance = this
         sensorManager = getSystemService(SENSOR_SERVICE) as? SensorManager
         significantMotion = sensorManager?.getDefaultSensor(Sensor.TYPE_SIGNIFICANT_MOTION)
         createNotificationChannel()
@@ -362,6 +470,7 @@ class LocationTrackingService : Service() {
         }
         getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(PREFS_ACTIVE_KEY, true).apply()
+        pruneDiag()
 
         val filter = IntentFilter(Intent.ACTION_DATE_CHANGED)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -375,8 +484,13 @@ class LocationTrackingService : Service() {
     @SuppressLint("MissingPermission")
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            stopSelf()
+            flushThenStop()
             return START_NOT_STICKY
+        }
+        // 종료 대기 중에 다시 시작되면 종료를 취소한다.
+        if (stopping) {
+            stopping = false
+            mainHandler.removeCallbacks(stopNow)
         }
         val intervalMeters = (intent?.getIntExtra(EXTRA_INTERVAL, 100) ?: 100).toFloat()
         minDistanceMeters = intervalMeters
@@ -396,6 +510,7 @@ class LocationTrackingService : Service() {
     }
 
     override fun onDestroy() {
+        if (instance === this) instance = null
         mainHandler.removeCallbacks(stillCheck)
         if (isStill) { try { finalizeStay() } catch (_: Exception) {} }
         try { flushHeld() } catch (_: Exception) {}
@@ -414,6 +529,41 @@ class LocationTrackingService : Service() {
     override fun onBind(intent: Intent?) = null
 
     private val timeFmt = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+
+    // ── 경로 진단 기록(디버그 빌드에서 경로 저장 중에만) ──────────────────
+    // 받은 위치마다 한 줄: 시각,위도,경도,오차,속도,속도구간,거친위치,판정,임계,흔들림,이동거리.
+    // 파일: <외부 앱 폴더>/track_diag/track_diag_yyyyMMdd.csv (7일 지난 파일은 시작 시 삭제).
+    private val diagEnabled by lazy { (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0 }
+    private val diagDir by lazy { getExternalFilesDir("track_diag") }
+    private val diagDayFmt = SimpleDateFormat("yyyyMMdd", Locale.US)
+
+    private fun diag(l: Location, decision: String, threshold: Float = 0f, noise: Float = 0f, moved: Float = -1f) {
+        if (!diagEnabled) return
+        try {
+            val dir = diagDir ?: return
+            val f = java.io.File(dir, "track_diag_${diagDayFmt.format(java.util.Date())}.csv")
+            val header = !f.exists()
+            f.appendText(buildString {
+                if (header) append("time,lat,lng,acc,speed,tier,coarse,decision,threshold,noise,moved\n")
+                append(timeFmt.format(java.util.Date(l.time))).append(',')
+                append(l.latitude).append(',').append(l.longitude).append(',')
+                append(if (l.hasAccuracy()) l.accuracy.toInt() else -1).append(',')
+                append(if (l.hasSpeed()) "%.1f".format(Locale.US, l.speed) else "").append(',')
+                append(speedTier).append(',').append(isCoarse(l)).append(',').append(decision).append(',')
+                append(threshold.toInt()).append(',').append(noise.toInt()).append(',')
+                append(if (moved == Float.MAX_VALUE || moved < 0f) "" else moved.toInt().toString())
+                append('\n')
+            })
+        } catch (_: Exception) {}
+    }
+
+    private fun pruneDiag() {
+        if (!diagEnabled) return
+        try {
+            val cutoff = System.currentTimeMillis() - DIAG_KEEP_DAYS * 24 * 60 * 60 * 1000L
+            diagDir?.listFiles()?.forEach { if (it.lastModified() < cutoff) it.delete() }
+        } catch (_: Exception) {}
+    }
 
     private fun savePoint(lat: Double, lng: Double, timeMs: Long) {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)

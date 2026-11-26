@@ -32,6 +32,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
   static const _driveBackupEnabledKey = 'drive_backup_enabled';
   static const _driveBackupIncludeMediaKey = 'drive_backup_include_media';
   static const _driveBackupMemoIncludedKey = 'drive_backup_memo_included';
+  static const _driveBackupWifiOnlyKey = 'drive_backup_wifi_only';
   static const _lastSyncAtKey = 'last_sync_at';
   static const _lastSyncSuccessKey = 'last_sync_success';
   static const _fishSpeciesKey = 'fish_species';
@@ -143,6 +144,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     final driveBackupEnabled = prefs.getBool(_driveBackupEnabledKey) ?? false;
     final driveBackupIncludeMedia = prefs.getBool(_driveBackupIncludeMediaKey) ?? false;
     final driveBackupMemoIncluded = prefs.getBool(_driveBackupMemoIncludedKey) ?? true;
+    final driveBackupWifiOnly = prefs.getBool(_driveBackupWifiOnlyKey) ?? true;
     final lastSyncAtMs = prefs.getInt(_lastSyncAtKey);
     final lastSyncAt = lastSyncAtMs != null
         ? DateTime.fromMillisecondsSinceEpoch(lastSyncAtMs)
@@ -222,6 +224,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
       driveBackupEnabled: driveBackupEnabled,
       driveBackupIncludeMedia: driveBackupIncludeMedia,
       driveBackupMemoIncluded: driveBackupMemoIncluded,
+      driveBackupWifiOnly: driveBackupWifiOnly,
       lastSyncAt: lastSyncAt,
       lastSyncSuccess: lastSyncSuccessRaw,
       fishSpecies: fishSpecies, // null이면 AppSettings 기본값(kCommonFishSpecies)
@@ -292,6 +295,7 @@ class SettingsRepositoryImpl implements SettingsRepository {
     await prefs.setBool(_driveBackupEnabledKey, settings.driveBackupEnabled);
     await prefs.setBool(_driveBackupIncludeMediaKey, settings.driveBackupIncludeMedia);
     await prefs.setBool(_driveBackupMemoIncludedKey, settings.driveBackupMemoIncluded);
+    await prefs.setBool(_driveBackupWifiOnlyKey, settings.driveBackupWifiOnly);
     if (settings.lastSyncAt != null) {
       await prefs.setInt(_lastSyncAtKey, settings.lastSyncAt!.millisecondsSinceEpoch);
     } else {

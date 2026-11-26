@@ -59,6 +59,16 @@ class TrackingService {
 
   Future<void> stopTracking() => _channel.invokeMethod('stopTracking');
 
+  /// 이동경로 기록이 모아 둔(최대 1분) 위치를 즉시 받아 저장하게 한다.
+  /// 지도에서 최신 경로·현재 위치를 바로 보여주기 위해 호출. 최대 3초만 기다린다.
+  Future<void> flushTracking() async {
+    try {
+      await _channel
+          .invokeMethod('flushTracking')
+          .timeout(const Duration(seconds: 3));
+    } catch (_) {}
+  }
+
   Future<bool> isTracking() async {
     try {
       return await _channel.invokeMethod<bool>('isTracking') ?? false;

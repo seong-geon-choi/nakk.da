@@ -824,6 +824,8 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
     WidgetsBinding.instance.addObserver(this);
     _reconcileTrackingOnStart();
     _loadPosition();
+    // 날짜가 바뀐 뒤 처음 열었으면 하루 1회 자동 백업(Wi-Fi일 때만).
+    unawaited(ref.read(backupProvider.notifier).autoDailyBackup());
     // 오늘 메모 저장 등으로 갱신될 때 트래킹 카운트도 재조회
     final savePath = ref.read(settingsProvider).valueOrNull?.savePath ?? '';
     ref.listenManual(
@@ -854,6 +856,8 @@ class _TrackingFabState extends ConsumerState<_TrackingFab>
       _refreshStatus();
       // 대기 알림 스와이프로 감시가 중단됐으면 지도 아이콘을 정합화
       ref.read(settingsProvider.notifier).reconcileCommuteActive();
+      // 날짜가 바뀐 뒤 처음 돌아왔으면 하루 1회 자동 백업(Wi-Fi일 때만).
+      unawaited(ref.read(backupProvider.notifier).autoDailyBackup());
     }
   }
 

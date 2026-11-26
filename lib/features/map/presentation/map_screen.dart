@@ -22,6 +22,8 @@ import '../../../core/vworld_key.dart';
 import '../../../core/utils/date_formatter.dart';
 import '../../../core/utils/file_name_parser.dart';
 import '../../../core/services/saf_service.dart';
+import '../data/favorite_store.dart';
+import '../../backup/presentation/backup_provider.dart';
 import '../../../core/services/tracking_service.dart';
 import '../../../core/services/catch_events_service.dart';
 import '../../../core/services/watch_settings_service.dart';
@@ -63,6 +65,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _speedKnots = false; // 평균속도 단위: false=km/h, true=kt(노트). 탭으로 전환
   bool _showTrack = false;
   bool _showMemoPoints = true; // 메모 지점(파란 마커) 표시 여부. 끄면 숨김
+  List<FavoritePoint> _favorites = const []; // 즐겨찾기 포인트(저장 폴더 즐겨찾기.md)
+  bool _showFavorites = true; // 즐겨찾기 표시 여부
   bool _toolbarCollapsed = false; // 우측 버튼바 접기(지도 넓게 보기)
   // 지도 베이스맵: 0=표준(OSM) 1=위성(Esri) 2=해양·수심(Esri Ocean). prefs 저장.
   int _baseMap = 0;
@@ -126,13 +130,18 @@ class _MapScreenState extends ConsumerState<MapScreen>
         .listen((_) => _onCatchCountsChanged());
     ref.read(settingsProvider.future).then((s) {
       if (mounted) setState(() => _savePath = s.savePath);
+      _loadFavorites();
     });
   }
 
   // 화면 꺼진 동안(백그라운드) 눌린 분은 복귀(resume) 시 반영.
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) _onCatchCountsChanged();
+    if (state == AppLifecycleState.resumed) {
+      _onCatchCountsChanged();
+      // 돌아왔을 때도 모아 둔 위치를 받아 최신 경로 반영(보던 화면 위치는 유지).
+      _loadTrackPoints(fit: false);
+    }
   }
 
   // 조과 집계 변경 반영: 오늘 날짜를 보고 있을 때만 조용히 다시 읽는다
@@ -279,7 +288,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
   }
 
-  Future<void> _loadTrackPoints() async {
+  Future<void> _loadTrackPoints({bool fit = true}) async {
     final settings = await ref.read(settingsProvider.future);
     if (settings.savePath.isEmpty) return;
 
@@ -289,6 +298,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
             DateTime.now())
         : DateTime.now();
 
+    // 모아 둔(일괄 전달 대기) 위치를 먼저 받아 최신 경로까지 반영.
+    await TrackingService().flushTracking();
     // 대기 중인 트래킹 포인트를 MD 파일에 플러시
     final pending = await TrackingService().getAndClearTrackPoints();
     if (pending.isNotEmpty) {
@@ -328,7 +339,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
         _trackPoints = pts;
         _stayPoints = dayFile?.stayPoints ?? [];
       });
-      _fitAllPoints();
+      if (fit) _fitAllPoints();
     }
   }
 
@@ -546,8 +557,35 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
+  // 모든 즐겨찾기가 한 화면에 보이도록 위치·배율 조정(1개면 그 위치를 줌 15로).
+  void _fitFavorites() {
+    if (_favorites.isEmpty) return;
+    final lats = _favorites.map((f) => f.lat);
+    final lngs = _favorites.map((f) => f.lng);
+    final minLat = lats.reduce(math.min), maxLat = lats.reduce(math.max);
+    final minLng = lngs.reduce(math.min), maxLng = lngs.reduce(math.max);
+    if (!minLat.isFinite || !minLng.isFinite ||
+        !maxLat.isFinite || !maxLng.isFinite) {
+      return;
+    }
+    if (minLat == maxLat && minLng == maxLng) {
+      _mapController.move(LatLng(minLat, minLng), 15);
+      return;
+    }
+    _mapController.fitCamera(
+      CameraFit.bounds(
+        bounds: LatLngBounds(LatLng(minLat, minLng), LatLng(maxLat, maxLng)),
+        // 아래쪽은 마커 이름표만큼 더 띄운다.
+        padding: const EdgeInsets.fromLTRB(60, 60, 60, 80),
+        maxZoom: 16,
+      ),
+    );
+  }
+
   Future<void> _moveToCurrentLocation() async {
     try {
+      // 이동경로 기록이 모아 둔 위치를 먼저 받아 마지막 위치를 최신으로.
+      await TrackingService().flushTracking();
       Position? pos = await Geolocator.getLastKnownPosition();
       pos ??= await Geolocator.getCurrentPosition(
           locationSettings:
@@ -1217,13 +1255,45 @@ class _MapScreenState extends ConsumerState<MapScreen>
     setState(() => _timeFilter = RangeValues(start, end));
   }
 
-  // 지도 길게 누르기 → 출퇴근 알림 지점 추가(최대 3개)
+  // 지도 길게 누르기 → 즐겨찾기 추가. 출퇴근 알림이 켜져 있으면 둘 중 고르게 한다.
   Future<void> _onMapLongPress(LatLng latlng) async {
     final s = ref.read(settingsProvider).valueOrNull;
     if (s == null || !s.commuteAlarmEnabled) {
-      _showToastMessage('출퇴근 알림을 먼저 켜세요 (설정 > 개발자 메뉴)');
+      await _addFavorite(latlng);
       return;
     }
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.star, color: Color(0xFFFFB300)),
+              title: const Text('즐겨찾기 추가'),
+              onTap: () => Navigator.pop(ctx, 'fav'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.notifications_active_outlined),
+              title: const Text('출퇴근 알림 지점 추가'),
+              onTap: () => Navigator.pop(ctx, 'commute'),
+            ),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || choice == null) return;
+    if (choice == 'fav') {
+      await _addFavorite(latlng);
+    } else {
+      await _addCommutePin(latlng);
+    }
+  }
+
+  // 출퇴근 알림 지점 추가(최대 3개)
+  Future<void> _addCommutePin(LatLng latlng) async {
+    final s = ref.read(settingsProvider).valueOrNull;
+    if (s == null) return;
     if (!s.commuteAlarmActive) {
       _showToastMessage('지도의 알림 버튼을 켜야 지점을 추가할 수 있습니다');
       return;
@@ -1238,6 +1308,201 @@ class _MapScreenState extends ConsumerState<MapScreen>
         .read(settingsProvider.notifier)
         .addCommutePin(latlng.latitude, latlng.longitude, label: label);
     _showToastMessage('출퇴근 알림 지점 추가됨');
+  }
+
+  // ── 즐겨찾기 ─────────────────────────────────────────────
+  Future<void> _loadFavorites() async {
+    final list = await FavoriteStore().load(_savePath);
+    if (mounted) setState(() => _favorites = list);
+  }
+
+  Future<void> _saveFavorites(List<FavoritePoint> list) async {
+    if (_savePath.isEmpty) {
+      _showToastMessage('저장 폴더를 먼저 지정하세요');
+      return;
+    }
+    try {
+      await FavoriteStore().save(_savePath, list);
+    } catch (_) {
+      _showToastMessage('즐겨찾기 저장 실패');
+      return;
+    }
+    if (mounted) setState(() => _favorites = list);
+    unawaited(ref.read(backupProvider.notifier).syncFavorites(_savePath));
+  }
+
+  Future<void> _addFavorite(LatLng latlng) async {
+    final r = await _askFavorite(
+        title: '즐겨찾기 추가', okLabel: '추가',
+        name: '포인트 ${_favorites.length + 1}');
+    if (r == null) return;
+    await _saveFavorites([
+      ..._favorites,
+      FavoritePoint(
+        name: r.name,
+        memo: r.memo,
+        lat: latlng.latitude,
+        lng: latlng.longitude,
+        created: DateTime.now(),
+      ),
+    ]);
+    setState(() => _showFavorites = true);
+    _showToastMessage('즐겨찾기 추가됨');
+  }
+
+  Future<void> _editFavorite(int i) async {
+    final f = _favorites[i];
+    final r = await _askFavorite(
+        title: '즐겨찾기 수정', okLabel: '저장', name: f.name, memo: f.memo);
+    if (r == null) return;
+    final list = [..._favorites];
+    list[i] = f.copyWith(name: r.name, memo: r.memo);
+    await _saveFavorites(list);
+  }
+
+  Future<void> _deleteFavorite(int i) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('즐겨찾기 삭제'),
+        content: Text('\'${_favorites[i].name}\'을(를) 삭제할까요?'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('취소')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('삭제')),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    await _saveFavorites([..._favorites]..removeAt(i));
+    _showToastMessage('즐겨찾기 삭제됨');
+  }
+
+  /// 즐겨찾기 마커를 누르면: 이름·메모·좌표 + 수정/삭제.
+  void _showFavoriteSheet(int i) {
+    final f = _favorites[i];
+    showModalBottomSheet<void>(
+      context: context,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 14, 16, 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                const Icon(Icons.star, color: Color(0xFFFFB300)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(f.name,
+                      style: const TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 16)),
+                ),
+              ]),
+              if (f.memo.isNotEmpty) ...[
+                const SizedBox(height: 8),
+                Text(f.memo),
+              ],
+              // 저장 일시: 메모 아래·버튼 위(좌표는 표시하지 않음).
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  '저장 ${FavoriteStore.formatCreated(f.created)}',
+                  style: TextStyle(
+                      fontSize: 12,
+                      color: Theme.of(ctx).colorScheme.onSurfaceVariant),
+                ),
+              ),
+              const SizedBox(height: 8),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton.icon(
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('삭제'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _deleteFavorite(i);
+                    },
+                  ),
+                  TextButton.icon(
+                    icon: const Icon(Icons.edit_outlined),
+                    label: const Text('수정'),
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      _editFavorite(i);
+                    },
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// 즐겨찾기 이름·메모 입력. 취소 시 null. 이름을 비우면 기본 이름.
+  Future<({String name, String memo})?> _askFavorite({
+    required String title,
+    required String okLabel,
+    String name = '',
+    String memo = '',
+  }) async {
+    final nameCtrl = TextEditingController(text: name);
+    final memoCtrl = TextEditingController(text: memo);
+    final defaultName = name;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(title),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: nameCtrl,
+              autofocus: true,
+              decoration: const InputDecoration(
+                labelText: '이름',
+                hintText: '예: 삼길포 방파제 끝',
+                border: OutlineInputBorder(),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: memoCtrl,
+              maxLines: 3,
+              minLines: 1,
+              decoration: const InputDecoration(
+                labelText: '메모 (선택)',
+                hintText: '예: 갑오징어, 들물 때 좋음',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('취소')),
+          FilledButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(okLabel)),
+        ],
+      ),
+    );
+    final n = FavoriteStore.clean(nameCtrl.text);
+    final m = FavoriteStore.clean(memoCtrl.text);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      nameCtrl.dispose();
+      memoCtrl.dispose();
+    });
+    if (ok != true) return null;
+    return (name: n.isEmpty ? (defaultName.isEmpty ? '포인트' : defaultName) : n, memo: m);
   }
 
   // 지점 추가 시 이름 입력 다이얼로그. 취소 시 null, 비워두면 빈 문자열.
@@ -1671,6 +1936,67 @@ class _MapScreenState extends ConsumerState<MapScreen>
                             ),
                           ),
                         ),
+                  ],
+                ),
+              // 즐겨찾기 포인트: ⭐ 마커, 확대(줌 12 이상)하면 이름도 표시. 탭하면 정보·수정·삭제.
+              if (_showFavorites && _favorites.isNotEmpty)
+                MarkerLayer(
+                  markers: [
+                    for (var i = 0; i < _favorites.length; i++)
+                      Marker(
+                        point: LatLng(_favorites[i].lat, _favorites[i].lng),
+                        // 별(26)이 좌표 정중앙에 오도록 위 26 빈칸 + 별 + 아래 이름칸(26).
+                        width: 120,
+                        height: 78,
+                        child: GestureDetector(
+                          behavior: HitTestBehavior.deferToChild,
+                          onTap: () => _showFavoriteSheet(i),
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const SizedBox(height: 26),
+                              Container(
+                                width: 26,
+                                height: 26,
+                                decoration: BoxDecoration(
+                                  shape: BoxShape.circle,
+                                  color: const Color(0xFFFFB300),
+                                  border: Border.all(
+                                      color: Colors.white, width: 1.5),
+                                  boxShadow: const [
+                                    BoxShadow(
+                                        blurRadius: 3,
+                                        color: Color(0x66000000)),
+                                  ],
+                                ),
+                                child: const Icon(Icons.star,
+                                    color: Colors.white, size: 16),
+                              ),
+                              if (_zoom >= 12)
+                                Container(
+                                  margin: const EdgeInsets.only(top: 2),
+                                  constraints:
+                                      const BoxConstraints(maxHeight: 22),
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 4, vertical: 1),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xCCFFFFFF),
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                  child: Text(
+                                    _favorites[i].name,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        fontSize: 11,
+                                        color: Colors.black87,
+                                        fontWeight: FontWeight.w600),
+                                  ),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
                   ],
                 ),
               // 자동 감지된 체류지점: 이동경로(route) 토글과 함께 노출. 탭하면 체류 시간 표시.
@@ -2258,6 +2584,21 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     ),
                     _divider(),
                     // ── 마커 표시(종류별 켜기) ─────────────────
+                    _toolBtn(
+                      _showFavorites ? Icons.star : Icons.star_border,
+                      _favorites.isNotEmpty
+                          ? (_showFavorites ? const Color(0xFFFFB300) : null)
+                          : Theme.of(context).colorScheme.onSurface.withValues(alpha: 0.3),
+                      _favorites.isNotEmpty
+                          ? () {
+                              setState(() => _showFavorites = !_showFavorites);
+                              // 켤 때: 모든 즐겨찾기가 한 화면에 보이게.
+                              if (_showFavorites) _fitFavorites();
+                              _showToastMessage(
+                                  _showFavorites ? '즐겨찾기 표시' : '즐겨찾기 숨김');
+                            }
+                          : () => _showToastMessage('지도를 길게 눌러 즐겨찾기를 추가하세요'),
+                    ),
                     _toolBtn(
                       _showMemoPoints
                           ? Icons.sticky_note_2

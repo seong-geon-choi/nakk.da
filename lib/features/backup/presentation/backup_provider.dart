@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../data/drive_backup_service.dart';
 import '../../settings/presentation/settings_provider.dart';
 import '../../memo/data/md_serializer.dart';
+import '../../map/data/favorite_store.dart';
 import '../../../core/services/saf_service.dart';
 import '../../../core/services/tracking_service.dart';
 import '../../../core/services/bt_remote_service.dart';
@@ -88,6 +89,16 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
 
   /// 동기화 범위 설정: 설정만(memo=false,media=false) / 설정+메모(memo=true,media=false)
   /// / 설정+메모+사진(memo=true,media=true).
+  /// 지금 네트워크로 백업해도 되는지 — 'Wi-Fi에서만' 설정이면 Wi-Fi일 때만.
+  Future<bool> _networkAllowed() async {
+    final settings = await ref.read(settingsProvider.future);
+    if (!settings.driveBackupWifiOnly) return true;
+    return ref.read(driveBackupServiceProvider).isWifi();
+  }
+
+  Future<void> setWifiOnly(bool wifiOnly) =>
+      ref.read(settingsProvider.notifier).updateDriveBackup(wifiOnly: wifiOnly);
+
   Future<void> setScope({required bool memoIncluded, required bool includeMedia}) async {
     await ref.read(settingsProvider.notifier).updateDriveBackup(
           memoIncluded: memoIncluded,
@@ -108,7 +119,7 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     final settings = await ref.read(settingsProvider.future);
     if (!settings.driveBackupEnabled) return;
     final svc = ref.read(driveBackupServiceProvider);
-    if (!await svc.isWifi()) return;
+    if (!await _networkAllowed()) return;
     try {
       final json =
           jsonEncode(ref.read(settingsProvider.notifier).commuteBackupJson());
@@ -193,7 +204,7 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
       final settings = await ref.read(settingsProvider.future);
       if (!settings.driveBackupEnabled) return (ok: false, skippedNoWifi: false);
       final svc = ref.read(driveBackupServiceProvider);
-      if (!await svc.isWifi()) return (ok: false, skippedNoWifi: true);
+      if (!await _networkAllowed()) return (ok: false, skippedNoWifi: true);
       try {
         await svc.uploadCommuteSettings(
             jsonEncode(ref.read(settingsProvider.notifier).commuteBackupJson()));
@@ -220,13 +231,19 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
 
   /// 메모 저장/삭제 후 호출 — Wi-Fi 확인 후 md 파일 업로드.
   /// 동기화 범위가 "설정만"이면 메모는 자동 백업하지 않는다.
-  Future<void> syncMdFile(DateTime date, String savePath) async {
+  Future<void> syncMdFile(DateTime date, String savePath) =>
+      _syncNamedMd(_filename(date), savePath);
+
+  /// 즐겨찾기 변경 후 호출 — 즐겨찾기.md 업로드(메모 백업 범위일 때).
+  Future<void> syncFavorites(String savePath) =>
+      _syncNamedMd(FavoriteStore.fileName, savePath);
+
+  Future<void> _syncNamedMd(String filename, String savePath) async {
     final settings = await ref.read(settingsProvider.future);
     if (!settings.driveBackupEnabled || !settings.driveBackupMemoIncluded) return;
     final svc = ref.read(driveBackupServiceProvider);
-    if (!await svc.isWifi()) return;
+    if (!await _networkAllowed()) return;
     try {
-      final filename = _filename(date);
       final content = await _read(savePath, filename);
       if (content == null) return;
       await svc.syncMdFile(filename, content);
@@ -240,7 +257,7 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     final settings = await ref.read(settingsProvider.future);
     if (!settings.driveBackupEnabled || !settings.driveBackupIncludeMedia) return;
     final svc = ref.read(driveBackupServiceProvider);
-    if (!await svc.isWifi()) return;
+    if (!await _networkAllowed()) return;
     try {
       await svc.syncMediaFile(localPath);
     } catch (_) {}
@@ -250,9 +267,75 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     final settings = await ref.read(settingsProvider.future);
     if (!settings.driveBackupEnabled || !settings.driveBackupIncludeMedia) return;
     final svc = ref.read(driveBackupServiceProvider);
+    // 'Wi-Fi에서만' 설정이면 Wi-Fi가 아닐 때 대기열에 두었다가 다음 백업 때 지운다.
+    if (!await _networkAllowed()) {
+      await _queueDelete(localPath);
+      return;
+    }
     try {
       await svc.deleteMediaFile(localPath);
-    } catch (_) {}
+    } catch (_) {
+      await _queueDelete(localPath);
+    }
+  }
+
+  static const _pendingDeletesKey = 'backup_pending_media_deletes';
+
+  Future<void> _queueDelete(String localPath) async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList(_pendingDeletesKey) ?? [];
+    if (!list.contains(localPath)) {
+      await prefs.setStringList(_pendingDeletesKey, [...list, localPath]);
+    }
+  }
+
+  /// 네트워크 조건이 안 맞아 미뤄 둔 드라이브 미디어 삭제를 처리(네트워크 확인 후 호출).
+  Future<void> _flushPendingDeletes() async {
+    final prefs = await SharedPreferences.getInstance();
+    final list = prefs.getStringList(_pendingDeletesKey) ?? [];
+    if (list.isEmpty) return;
+    final svc = ref.read(driveBackupServiceProvider);
+    final failed = <String>[];
+    for (final path in list) {
+      try {
+        await svc.deleteMediaFile(path);
+      } catch (_) {
+        failed.add(path);
+      }
+    }
+    await prefs.setStringList(_pendingDeletesKey, failed);
+  }
+
+  static const _autoBackupDateKey = 'backup_auto_last_date';
+  bool _autoRunning = false;
+
+  /// 하루 1회 자동 백업 — 날짜가 바뀐 뒤 앱을 처음 열 때(또는 돌아올 때) Wi-Fi면 조용히 실행.
+  /// 백업 범위가 '설정만'이면 설정만, 아니면 전체(이미 올라간 파일은 건너뜀).
+  /// Wi-Fi가 아니면 날짜를 기록하지 않아 다음에 다시 시도한다.
+  Future<void> autoDailyBackup() async {
+    if (_autoRunning) return;
+    _autoRunning = true;
+    try {
+      final settings = await ref.read(settingsProvider.future);
+      if (!settings.driveBackupEnabled) return;
+      final prefs = await SharedPreferences.getInstance();
+      final now = DateTime.now();
+      final today = '${now.year}-${now.month}-${now.day}';
+      if (prefs.getString(_autoBackupDateKey) == today) return;
+      if (ref.read(backupProgressProvider) != null) return; // 수동 백업 진행 중
+      if (!await _networkAllowed()) return;
+      if (settings.driveBackupMemoIncluded) {
+        await backupAll(settings.savePath);
+      } else {
+        await _flushPendingDeletes();
+        await backupSettingsOnly();
+      }
+      await prefs.setString(_autoBackupDateKey, today);
+    } catch (_) {
+      // 실패하면 날짜를 남기지 않아 다음에 다시 시도.
+    } finally {
+      _autoRunning = false;
+    }
   }
 
   /// 저장 폴더의 모든 .md 파일 (+ 옵션 시 사진/동영상)을 드라이브에 업로드
@@ -262,9 +345,10 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
     try {
       final settings = await ref.read(settingsProvider.future);
       final svc = ref.read(driveBackupServiceProvider);
-      if (!await svc.isWifi()) {
+      if (!await _networkAllowed()) {
         return const BackupAllResult(total: 0, succeeded: 0, skippedNoWifi: true);
       }
+      await _flushPendingDeletes(); // Wi-Fi가 아니어서 미뤄 둔 삭제
 
       // 전체 파일 목록을 먼저 수집해서 total 확정
       final filenames = await _listMdFiles(savePath);
@@ -512,6 +596,15 @@ class BackupNotifier extends AsyncNotifier<BackupState> {
             }
             final driveContent = await svc.downloadMdFile(driveFile.id);
             if (driveContent == null) return 0;
+            // 즐겨찾기.md — 날짜 파일이 아니므로 포인트 단위로 합쳐서 복원.
+            if (driveFile.name == FavoriteStore.fileName) {
+              final merged = localContent != null
+                  ? FavoriteStore.merge(localContent, driveContent)
+                  : driveContent;
+              if (merged == localContent) return 0;
+              await _write(savePath, driveFile.name, merged, DateTime.now());
+              return 1;
+            }
             final date = _parseDateFromFilename(driveFile.name);
             if (date == null) return 0;
             final merged = localContent != null

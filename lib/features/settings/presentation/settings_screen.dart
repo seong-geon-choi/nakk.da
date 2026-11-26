@@ -2769,6 +2769,17 @@ class _BackupSubScreen extends ConsumerWidget {
                     ),
                   ),
                   const Divider(indent: 16, endIndent: 16),
+                  SwitchListTile(
+                    secondary: const Icon(Icons.wifi),
+                    title: const Text('Wi-Fi에서만 백업'),
+                    subtitle: Text((settings?.driveBackupWifiOnly ?? true)
+                        ? '모바일 데이터에서는 백업하지 않습니다'
+                        : '모바일 데이터에서도 백업합니다 (사진·동영상은 데이터 사용량이 클 수 있음)'),
+                    value: settings?.driveBackupWifiOnly ?? true,
+                    onChanged: (v) =>
+                        ref.read(backupProvider.notifier).setWifiOnly(v),
+                  ),
+                  const Divider(indent: 16, endIndent: 16),
                   ListTile(
                     leading: Icon(
                       backup.lastSyncSuccess == false

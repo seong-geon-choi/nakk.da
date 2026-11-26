@@ -559,6 +559,8 @@ class MainActivity : FlutterActivity() {
                         LocationTrackingService.stop(this)
                         result.success(null)
                     }
+                    // 모아 둔 위치를 즉시 받아 저장(지도 진입·현재 위치 확인 시).
+                    "flushTracking" -> LocationTrackingService.flush { result.success(null) }
                     "isTracking" -> {
                         val active = getSharedPreferences(
                             LocationTrackingService.PREFS_NAME, Context.MODE_PRIVATE
