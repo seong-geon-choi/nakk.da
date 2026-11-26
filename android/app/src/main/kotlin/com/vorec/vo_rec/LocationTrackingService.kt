@@ -40,7 +40,7 @@ class LocationTrackingService : Service() {
         private const val UPDATE_INTERVAL_MS = 10000L  // 이동 중 위치 갱신 주기
         private const val FASTEST_INTERVAL_MS = 2000L  // 최소 갱신 간격
         // 배터리: 속도 구간별 요청 간격(저장 간격이 넓은 순항·고속은 GPS도 덜 자주 켠다).
-        //   조업/정지·저속이동 10초, 순항(300m 저장) 20초, 고속(1000m 저장) 30초.
+        //   조업/정지·저속이동 10초, 순항(150m 저장) 20초, 고속(500m 저장) 30초.
         private val TIER_INTERVAL_MS = longArrayOf(10_000L, 10_000L, 20_000L, 30_000L)
         // 배터리: 위치는 계속 잡되 최대 1분치를 모아 한 번에 전달(그동안 CPU가 잠들 수 있음).
         private const val MAX_BATCH_DELAY_MS = 60_000L
@@ -49,20 +49,23 @@ class LocationTrackingService : Service() {
         private const val STILL_ENTER_MS = 3 * 60 * 1000L   // 3분 이상 정지 시 진입
         private const val STILL_RADIUS_M = 40f              // 정지로 간주할 반경
         private const val STILL_INTERVAL_MS = 3 * 60 * 1000L // 정지 중 위치 확인 주기(저전력)
+        // 위치 없이 시간만으로 정지 판정했을 때, 저전력 전환 전 이동 요청을 유지하는 시간.
+        // (지하철 환승 대기 후 열차가 움직여도 움직임 센서가 반응하지 않아 역을 놓치는 문제)
+        private const val STILL_CONFIRM_MS = 10 * 60 * 1000L
 
         // ── 속도 적응형 저장(4단계) ────────────────────────────────
         // 정지·조업은 사용자 설정 거리, 그 이상은 속도 구간별 고정 거리로 저장해 고속
         // 구간의 과도한 점 생성을 줄인다.
         //   조업/정지  ( < 2.0 m/s, ~7km/h)  → 사용자 설정(minDistanceMeters)
-        //   저속이동   (2.0~5.6,  ~7–20km/h) → 100m
-        //   순항       (5.6~11,  ~20–40km/h) → 300m
-        //   고속       ( ≥ 11,    ~40km/h+)  → 1000m
+        //   저속이동   (2.0~5.6,  ~7–20km/h) → 50m
+        //   순항       (5.6~11,  ~20–40km/h) → 150m
+        //   고속       ( ≥ 11,    ~40km/h+)  → 500m
         private const val SPEED_FISHING_MAX_MPS = 2.0f   // 조업↔저속이동 경계
         private const val SPEED_SLOW_MAX_MPS = 5.6f      // 저속이동↔순항 경계
         private const val SPEED_FAST_MIN_MPS = 11.0f     // 순항↔고속 경계
-        private const val THRESHOLD_SLOW_M = 100f        // 저속이동
-        private const val THRESHOLD_CRUISE_M = 300f      // 순항
-        private const val THRESHOLD_FAST_M = 1000f       // 고속
+        private const val THRESHOLD_SLOW_M = 50f        // 저속이동
+        private const val THRESHOLD_CRUISE_M = 150f      // 순항
+        private const val THRESHOLD_FAST_M = 500f       // 고속
         private const val SPEED_HYSTERESIS_MPS = 1.0f    // 구간 경계 떨림 방지 여유
         private const val SPEED_EMA_ALPHA = 0.4f         // 속도 이동평균 가중치
 
@@ -79,7 +82,7 @@ class LocationTrackingService : Service() {
         // (저장 판정·정지 판정 모두).
         private const val NOISE_FACTOR = 1.5f
         // 지하철·실내처럼 GPS 없이 와이파이·기지국으로 잡힌 '거친' 위치(오차가 이보다 큼).
-        // 거친 위치는 역에 설 때만 띄엄띄엄 들어오므로 속도 적응형 간격(300~1000m)을 적용하지 않고
+        // 거친 위치는 역에 설 때만 띄엄띄엄 들어오므로 속도 적응형 간격(150~500m)을 적용하지 않고
         // 흔들림 기준도 두 오차 중 큰 쪽(1배)으로 낮춰 역 하나 거리 이동이 버려지지 않게 한다.
         // (정지 판정은 기존 기준 유지, 제자리 흔들림은 되돌아오는 점 제거가 거른다.)
         private const val COARSE_ACCURACY_M = 60f
@@ -157,6 +160,8 @@ class LocationTrackingService : Service() {
 
     // 정지 감지 상태
     private var isStill = false
+    private var stillUnconfirmed = false // 시간만으로 정지 판정 — 아직 이동 요청 유지 중
+    private val switchToLowPower = Runnable { if (isStill) requestStillLowPower() }
     private var anchorLocation: Location? = null  // 정지 판정 기준점
     private var anchorSinceMs = 0L                 // 기준점에 머물기 시작한 시각(elapsedRealtime)
     private var anchorSinceWallMs = 0L             // 같은 시각(wall clock) — 체류 시작 시각으로 기록
@@ -172,7 +177,7 @@ class LocationTrackingService : Service() {
         val enterIfStill = Runnable {
             if (!isStill && anchorLocation != null &&
                 SystemClock.elapsedRealtime() - anchorSinceMs >= STILL_ENTER_MS
-            ) enterStill()
+            ) enterStill(confirmed = false)
         }
         val flush = try { fusedClient?.flushLocations() } catch (_: Exception) { null }
         if (flush == null) enterIfStill.run()
@@ -201,6 +206,20 @@ class LocationTrackingService : Service() {
             diag(location, "drop_accuracy")
             return
         }
+        // 체류 중 반경 안의 위치는 흔들림 — 경로에 저장하지 않는다(체류 아이콘이 그 장소를 나타냄).
+        // 반경을 벗어나면 아래 정상 처리 후 evaluateStillness에서 체류를 끝낸다.
+        if (isStill) {
+            val anchor = anchorLocation
+            if (anchor != null) {
+                val d = anchor.distanceTo(location)
+                val radius = stillRadius(anchor, location)
+                if (d <= radius) {
+                    diag(location, "skip_still", radius, radius, d)
+                    evaluateStillness(location)
+                    return
+                }
+            }
+        }
         // 속도에 따라 저장 거리 임계값을 조정(고속일수록 크게 → 점 수 감소).
         // (lastFixLocation 갱신 '전에' 호출 — adaptiveThresholdMeters·방위 계산이 직전 픽스를 씀.)
         // 거친 위치(지하철 역 등)는 속도 구간과 무관하게 사용자 설정 간격으로 저장한다.
@@ -215,7 +234,13 @@ class LocationTrackingService : Service() {
         val last = lastSavedLocation
         val movedFromSaved = last?.distanceTo(location) ?: Float.MAX_VALUE
         // 위치 오차보다 덜 움직였으면 흔들림 — 저장 거리 기준을 넘어도 저장하지 않는다.
-        val noise = if (coarse) coarseNoiseMeters(last, location) else noiseMeters(last, location)
+        // 직전 저장점이 거친 위치면 그 오차는 빼고 새(정확한) 위치의 오차만 본다 —
+        // 그래야 튄 거친 점 다음에 제자리로 돌아온 정확한 점이 버려지지 않고 튄 점 제거가 동작한다.
+        val noise = when {
+            coarse -> coarseNoiseMeters(last, location)
+            last != null && isCoarse(last) -> noiseMeters(null, location)
+            else -> noiseMeters(last, location)
+        }
         val distanceHit = movedFromSaved >= threshold && movedFromSaved >= noise
         // 변침 보존: 이동 구간(tier≥1)에서 방위가 크게 꺾이면 거리 미달이라도 코너로 저장.
         val cornerHit = !distanceHit && speedTier >= 1 &&
@@ -234,7 +259,7 @@ class LocationTrackingService : Service() {
 
     /**
      * 현재 속도로 저장 거리 임계값을 결정한다. 조업/정지(저속)는 사용자 설정 거리,
-     * 순항은 300m, 고속은 1000m. 속도는 픽스의 speed(없으면 직전 픽스와의 거리/시간)를
+     * 저속은 50m, 순항은 150m, 고속은 500m. 속도는 픽스의 speed(없으면 직전 픽스와의 거리/시간)를
      * 이동평균으로 평활하고, 구간 경계엔 히스테리시스를 둬 떨림을 막는다.
      * (lastFixLocation 갱신 '전에' 호출할 것 — 폴백이 직전 픽스를 쓴다.)
      */
@@ -259,9 +284,9 @@ class LocationTrackingService : Service() {
         while (speedTier > 0 && v < speedBounds[speedTier - 1] - h) speedTier--
         return when (speedTier) {
             0 -> minDistanceMeters   // 조업/정지: 사용자 설정
-            1 -> THRESHOLD_SLOW_M    // 저속이동: 100m
-            2 -> THRESHOLD_CRUISE_M  // 순항: 300m
-            else -> THRESHOLD_FAST_M // 고속: 1000m
+            1 -> THRESHOLD_SLOW_M    // 저속이동: 50m
+            2 -> THRESHOLD_CRUISE_M  // 순항: 150m
+            else -> THRESHOLD_FAST_M // 고속: 500m
         }
     }
 
@@ -291,6 +316,8 @@ class LocationTrackingService : Service() {
             diag(h, "drop_bounce")
             heldLocation = null
             lastSavedLocation = p
+            // 튄 점이 정지 기준점이었으면 새 점으로 옮긴다(체류가 튄 자리에 기록되지 않게).
+            if (anchorLocation === h) anchorLocation = c
             // 튄 점을 버린 뒤 새 점을 직전 확정점 기준으로 다시 판단(대개 제자리라 버려진다).
             val moved = p.distanceTo(c)
             if (moved < threshold || moved < noiseMeters(p, c)) return
@@ -333,6 +360,7 @@ class LocationTrackingService : Service() {
             // 저전력 폴링 중에도 반경을 벗어나면 이동 모드로 복귀
             val anchor = anchorLocation
             if (anchor == null || anchor.distanceTo(location) > stillRadius(anchor, location)) exitStill()
+            else if (stillUnconfirmed) requestStillLowPower() // 제자리 확인 → 저전력
             return
         }
         val anchor = anchorLocation
@@ -345,15 +373,17 @@ class LocationTrackingService : Service() {
                 (STILL_ENTER_MS - (SystemClock.elapsedRealtime() - anchorSinceMs)).coerceAtLeast(0L))
             return
         }
-        if (location.elapsedRealtimeNanos / 1_000_000L - anchorSinceMs >= STILL_ENTER_MS) enterStill()
+        if (location.elapsedRealtimeNanos / 1_000_000L - anchorSinceMs >= STILL_ENTER_MS) enterStill(confirmed = true)
     }
 
     /** 정지 판정 반경 — 실내처럼 위치 오차가 크면 그만큼 넓혀 흔들림을 이동으로 보지 않는다. */
     private fun stillRadius(anchor: Location, location: Location): Float =
         maxOf(STILL_RADIUS_M, noiseMeters(anchor, location))
 
+    /** confirmed=false: 위치 없이 시간만으로 판정 — 체류 기록은 시작하되 이동 요청을 최대
+     *  STILL_CONFIRM_MS 동안 유지한다(그 사이 제자리 위치가 오면 바로 저전력). */
     @SuppressLint("MissingPermission")
-    private fun enterStill() {
+    private fun enterStill(confirmed: Boolean) {
         if (isStill) return
         isStill = true
         flushHeld() // 머무는 곳의 마지막 점을 확정
@@ -366,7 +396,20 @@ class LocationTrackingService : Service() {
         // 방위 상태도 리셋 — 정지 후 복귀 첫 구간을 새 방위로 다시 추적.
         lastTravelBearing = null
         lastSavedBearing = null
-        // 저전력·장주기 요청으로 교체
+        if (confirmed) requestStillLowPower()
+        else {
+            stillUnconfirmed = true
+            mainHandler.postDelayed(switchToLowPower, STILL_CONFIRM_MS)
+        }
+        // 움직임 감지 센서로 즉시 복귀(일회성 트리거)
+        significantMotion?.let { sensorManager?.requestTriggerSensor(motionListener, it) }
+    }
+
+    /** 저전력·장주기 요청으로 교체. */
+    @SuppressLint("MissingPermission")
+    private fun requestStillLowPower() {
+        stillUnconfirmed = false
+        mainHandler.removeCallbacks(switchToLowPower)
         val request = LocationRequest.Builder(Priority.PRIORITY_BALANCED_POWER_ACCURACY, STILL_INTERVAL_MS)
             .setMinUpdateDistanceMeters(STILL_RADIUS_M)
             .setWaitForAccurateLocation(false)
@@ -374,8 +417,6 @@ class LocationTrackingService : Service() {
         try {
             fusedClient?.requestLocationUpdates(request, locationCallback, Looper.getMainLooper())
         } catch (_: SecurityException) {}
-        // 움직임 감지 센서로 즉시 복귀(일회성 트리거)
-        significantMotion?.let { sensorManager?.requestTriggerSensor(motionListener, it) }
     }
 
     @SuppressLint("MissingPermission")
@@ -383,6 +424,8 @@ class LocationTrackingService : Service() {
         if (!isStill) return
         finalizeStay()
         isStill = false
+        stillUnconfirmed = false
+        mainHandler.removeCallbacks(switchToLowPower)
         significantMotion?.let { sensorManager?.cancelTriggerSensor(motionListener, it) }
         anchorLocation = null
         try {
@@ -500,6 +543,8 @@ class LocationTrackingService : Service() {
         // (지하철 등 GPS 음영에서도 WiFi/기지국 기반 위치 기록 가능)
         fusedClient = LocationServices.getFusedLocationProviderClient(this)
         isStill = false
+        stillUnconfirmed = false
+        mainHandler.removeCallbacks(switchToLowPower)
         anchorLocation = null
         try {
             fusedClient?.requestLocationUpdates(movingRequest(), locationCallback, Looper.getMainLooper())
@@ -512,6 +557,7 @@ class LocationTrackingService : Service() {
     override fun onDestroy() {
         if (instance === this) instance = null
         mainHandler.removeCallbacks(stillCheck)
+        mainHandler.removeCallbacks(switchToLowPower)
         if (isStill) { try { finalizeStay() } catch (_: Exception) {} }
         try { flushHeld() } catch (_: Exception) {}
         try { fusedClient?.removeLocationUpdates(locationCallback) } catch (_: Exception) {}

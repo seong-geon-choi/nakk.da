@@ -654,7 +654,7 @@ class SettingsNotifier extends AsyncNotifier<AppSettings> {
   Future<void> updateTrackingIntervalMeters(int value) async {
     final current = state.valueOrNull;
     if (current == null) return;
-    final updated = current.copyWith(trackingIntervalMeters: value.clamp(30, 1000));
+    final updated = current.copyWith(trackingIntervalMeters: value.clamp(5, 50));
     await ref.read(settingsRepositoryProvider).save(updated);
     state = AsyncData(updated);
   }

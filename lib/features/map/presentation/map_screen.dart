@@ -23,6 +23,7 @@ import '../../../core/utils/date_formatter.dart';
 import '../../../core/utils/file_name_parser.dart';
 import '../../../core/services/saf_service.dart';
 import '../data/favorite_store.dart';
+import 'favorite_category_ui.dart';
 import '../../backup/presentation/backup_provider.dart';
 import '../../../core/services/tracking_service.dart';
 import '../../../core/services/catch_events_service.dart';
@@ -65,7 +66,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
   bool _speedKnots = false; // 평균속도 단위: false=km/h, true=kt(노트). 탭으로 전환
   bool _showTrack = false;
   bool _showMemoPoints = true; // 메모 지점(파란 마커) 표시 여부. 끄면 숨김
-  List<FavoritePoint> _favorites = const []; // 즐겨찾기 포인트(저장 폴더 즐겨찾기.md)
+  FavoriteData _favData = const FavoriteData(); // 즐겨찾기(저장 폴더 즐겨찾기.md)
+  Set<String> _hiddenFavCats = {}; // 지도에서 숨긴 즐겨찾기 카테고리
   bool _showFavorites = true; // 즐겨찾기 표시 여부
   bool _toolbarCollapsed = false; // 우측 버튼바 접기(지도 넓게 보기)
   // 지도 베이스맵: 0=표준(OSM) 1=위성(Esri) 2=해양·수심(Esri Ocean). prefs 저장.
@@ -559,9 +561,10 @@ class _MapScreenState extends ConsumerState<MapScreen>
 
   // 모든 즐겨찾기가 한 화면에 보이도록 위치·배율 조정(1개면 그 위치를 줌 15로).
   void _fitFavorites() {
-    if (_favorites.isEmpty) return;
-    final lats = _favorites.map((f) => f.lat);
-    final lngs = _favorites.map((f) => f.lng);
+    final favs = _visibleFavorites;
+    if (favs.isEmpty) return;
+    final lats = favs.map((f) => f.lat);
+    final lngs = favs.map((f) => f.lng);
     final minLat = lats.reduce(math.min), maxLat = lats.reduce(math.max);
     final minLng = lngs.reduce(math.min), maxLng = lngs.reduce(math.max);
     if (!minLat.isFinite || !minLng.isFinite ||
@@ -1311,41 +1314,92 @@ class _MapScreenState extends ConsumerState<MapScreen>
   }
 
   // ── 즐겨찾기 ─────────────────────────────────────────────
+  static const _kFavHiddenKey = 'fav_hidden_cats'; // 지도에서 숨긴 카테고리(기기 저장)
+  static const _kFavLastCatKey = 'fav_last_cat'; // 마지막으로 고른 카테고리
+
+  List<FavoritePoint> get _favorites => _favData.points;
+
+  /// 숨긴 카테고리를 뺀 즐겨찾기(⭐ 표시가 켜져 있을 때 지도에 보이는 것).
+  List<FavoritePoint> get _visibleFavorites =>
+      _favorites.where((f) => !_hiddenFavCats.contains(f.category)).toList();
+
   Future<void> _loadFavorites() async {
-    final list = await FavoriteStore().load(_savePath);
-    if (mounted) setState(() => _favorites = list);
+    final data = await FavoriteStore().load(_savePath);
+    var hidden = <String>{};
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      hidden = (prefs.getStringList(_kFavHiddenKey) ?? const []).toSet();
+    } catch (_) {}
+    if (mounted) {
+      setState(() {
+        _favData = data;
+        _hiddenFavCats = hidden;
+      });
+    }
   }
 
-  Future<void> _saveFavorites(List<FavoritePoint> list) async {
+  Future<void> _setHiddenFavCats(Set<String> hidden) async {
+    if (mounted) setState(() => _hiddenFavCats = hidden);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setStringList(_kFavHiddenKey, hidden.toList());
+    } catch (_) {}
+  }
+
+  /// 즐겨찾기 파일 저장 + 화면 반영 + 백업. 성공하면 true.
+  Future<bool> _saveFavData(FavoriteData data) async {
+    // '미지정'은 항상 맨 아래(새 카테고리를 추가해도).
+    data = data.copyWith(categories: FavoriteStore.ordered(data.categories));
     if (_savePath.isEmpty) {
       _showToastMessage('저장 폴더를 먼저 지정하세요');
-      return;
+      return false;
     }
     try {
-      await FavoriteStore().save(_savePath, list);
+      await FavoriteStore().save(_savePath, data);
     } catch (_) {
       _showToastMessage('즐겨찾기 저장 실패');
-      return;
+      return false;
     }
-    if (mounted) setState(() => _favorites = list);
+    if (mounted) setState(() => _favData = data);
     unawaited(ref.read(backupProvider.notifier).syncFavorites(_savePath));
+    return true;
   }
 
   Future<void> _addFavorite(LatLng latlng) async {
+    String? last;
+    try {
+      last = (await SharedPreferences.getInstance()).getString(_kFavLastCatKey);
+    } catch (_) {}
+    // 마지막으로 고른 카테고리, 없으면 '미지정'.
+    final cat = (last != null && _favData.category(last) != null)
+        ? last
+        : FavoriteStore.defaultCategory;
     final r = await _askFavorite(
-        title: '즐겨찾기 추가', okLabel: '추가',
-        name: '포인트 ${_favorites.length + 1}');
+        title: '즐겨찾기 추가',
+        okLabel: '추가',
+        name: '포인트 ${_favorites.length + 1}',
+        category: cat);
     if (r == null) return;
-    await _saveFavorites([
-      ..._favorites,
+    final ok = await _saveFavData(r.data.copyWith(points: [
+      ...r.data.points,
       FavoritePoint(
         name: r.name,
         memo: r.memo,
         lat: latlng.latitude,
         lng: latlng.longitude,
         created: DateTime.now(),
+        category: r.category,
       ),
-    ]);
+    ]));
+    if (!ok) return;
+    try {
+      await (await SharedPreferences.getInstance())
+          .setString(_kFavLastCatKey, r.category);
+    } catch (_) {}
+    // 추가한 카테고리가 숨겨져 있었으면 보이게.
+    if (_hiddenFavCats.contains(r.category)) {
+      await _setHiddenFavCats({..._hiddenFavCats}..remove(r.category));
+    }
     setState(() => _showFavorites = true);
     _showToastMessage('즐겨찾기 추가됨');
   }
@@ -1353,11 +1407,15 @@ class _MapScreenState extends ConsumerState<MapScreen>
   Future<void> _editFavorite(int i) async {
     final f = _favorites[i];
     final r = await _askFavorite(
-        title: '즐겨찾기 수정', okLabel: '저장', name: f.name, memo: f.memo);
+        title: '즐겨찾기 수정',
+        okLabel: '저장',
+        name: f.name,
+        memo: f.memo,
+        category: f.category);
     if (r == null) return;
-    final list = [..._favorites];
-    list[i] = f.copyWith(name: r.name, memo: r.memo);
-    await _saveFavorites(list);
+    final points = [...r.data.points];
+    points[i] = f.copyWith(name: r.name, memo: r.memo, category: r.category);
+    await _saveFavData(r.data.copyWith(points: points));
   }
 
   Future<void> _deleteFavorite(int i) async {
@@ -1377,13 +1435,53 @@ class _MapScreenState extends ConsumerState<MapScreen>
       ),
     );
     if (ok != true) return;
-    await _saveFavorites([..._favorites]..removeAt(i));
-    _showToastMessage('즐겨찾기 삭제됨');
+    if (await _saveFavData(
+        _favData.copyWith(points: [..._favorites]..removeAt(i)))) {
+      _showToastMessage('즐겨찾기 삭제됨');
+    }
   }
 
-  /// 즐겨찾기 마커를 누르면: 이름·메모·좌표 + 수정/삭제.
+  /// ⭐ 길게 누르기: 즐겨찾기 시트(카테고리별 표시·목록·편집).
+  /// 즐겨찾기를 고르면 그 위치로, 그냥 닫으면 보이는 즐겨찾기가 한 화면에 들어오게.
+  Future<void> _openFavCategorySheet() async {
+    int? goTo;
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => FavoriteBrowserSheet(
+        data: () => _favData,
+        hidden: _hiddenFavCats,
+        onHiddenChanged: _setHiddenFavCats,
+        onDataChanged: _saveFavData,
+        onDeleteFavorite: _deleteFavorite,
+        onGoTo: (i) {
+          goTo = i;
+          Navigator.pop(ctx);
+        },
+      ),
+    );
+    if (!mounted) return;
+    final i = goTo;
+    if (i != null && i < _favorites.length) {
+      final f = _favorites[i];
+      if (_hiddenFavCats.contains(f.category)) {
+        await _setHiddenFavCats({..._hiddenFavCats}..remove(f.category));
+      }
+      setState(() => _showFavorites = true);
+      _mapController.move(LatLng(f.lat, f.lng), 16);
+      _showFavoriteSheet(i);
+      return;
+    }
+    if (_visibleFavorites.isNotEmpty) {
+      setState(() => _showFavorites = true);
+      _fitFavorites();
+    }
+  }
+
+  /// 즐겨찾기 마커를 누르면: 이름·카테고리·메모·저장 일시 + 수정/삭제.
   void _showFavoriteSheet(int i) {
     final f = _favorites[i];
+    final color = Color(_favData.colorOf(f.category));
     showModalBottomSheet<void>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -1394,12 +1492,22 @@ class _MapScreenState extends ConsumerState<MapScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Row(children: [
-                const Icon(Icons.star, color: Color(0xFFFFB300)),
+                Icon(Icons.star, color: color),
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(f.name,
                       style: const TextStyle(
                           fontWeight: FontWeight.bold, fontSize: 16)),
+                ),
+                Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: 0.15),
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  child: Text(f.category,
+                      style: TextStyle(fontSize: 12, color: color)),
                 ),
               ]),
               if (f.memo.isNotEmpty) ...[
@@ -1446,53 +1554,117 @@ class _MapScreenState extends ConsumerState<MapScreen>
     );
   }
 
-  /// 즐겨찾기 이름·메모 입력. 취소 시 null. 이름을 비우면 기본 이름.
-  Future<({String name, String memo})?> _askFavorite({
+  /// 즐겨찾기 이름·메모·카테고리 입력. 취소 시 null. 이름을 비우면 기본 이름.
+  /// 창에서 새로 만든 카테고리는 반환 data에 들어 있다(저장은 호출 쪽에서).
+  Future<({String name, String memo, String category, FavoriteData data})?>
+      _askFavorite({
     required String title,
     required String okLabel,
+    required String category,
     String name = '',
     String memo = '',
   }) async {
+    const newCat = '\u0000new';
     final nameCtrl = TextEditingController(text: name);
     final memoCtrl = TextEditingController(text: memo);
     final defaultName = name;
+    var data = _favData;
+    if (data.category(category) == null) {
+      data = data.copyWith(categories: [
+        ...data.categories,
+        FavoriteCategory(category, data.nextColor()),
+      ]);
+    }
+    var selected = category;
+    var resetTick = 0; // 새 카테고리 취소 시 선택칸을 원래 값으로 다시 그리기용
     final ok = await showDialog<bool>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(title),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextField(
-              controller: nameCtrl,
-              autofocus: true,
-              decoration: const InputDecoration(
-                labelText: '이름',
-                hintText: '예: 삼길포 방파제 끝',
-                border: OutlineInputBorder(),
-              ),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setLocal) => AlertDialog(
+          title: Text(title),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  autofocus: true,
+                  decoration: const InputDecoration(
+                    labelText: '이름',
+                    hintText: '예: 삼길포 방파제 끝',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                DropdownButtonFormField<String>(
+                  initialValue: selected,
+                  decoration: const InputDecoration(
+                    labelText: '카테고리',
+                    border: OutlineInputBorder(),
+                  ),
+                  items: [
+                    for (final c in FavoriteStore.ordered(data.categories))
+                      DropdownMenuItem(
+                        value: c.name,
+                        child: Row(children: [
+                          CircleAvatar(
+                              radius: 7, backgroundColor: Color(c.color)),
+                          const SizedBox(width: 8),
+                          Text(c.name),
+                        ]),
+                      ),
+                    const DropdownMenuItem(
+                      value: newCat,
+                      child: Text('+ 새 카테고리'),
+                    ),
+                  ],
+                  onChanged: (v) async {
+                    if (v == null) return;
+                    if (v != newCat) {
+                      setLocal(() => selected = v);
+                      return;
+                    }
+                    final n = await askCategoryName(ctx,
+                        existing: data.categories);
+                    if (n == null) {
+                      setLocal(() => resetTick++); // 선택을 원래대로 되돌려 그림
+                      return;
+                    }
+                    setLocal(() {
+                      data = data.copyWith(categories: [
+                        ...data.categories,
+                        FavoriteCategory(n, data.nextColor()),
+                      ]);
+                      selected = n;
+                    });
+                  },
+                  // 새 카테고리를 만들면 다시 그려 선택값을 반영.
+                  key: ValueKey(
+                      '${data.categories.length}-$selected-$resetTick'),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: memoCtrl,
+                  maxLines: 3,
+                  minLines: 1,
+                  decoration: const InputDecoration(
+                    labelText: '메모 (선택)',
+                    hintText: '예: 갑오징어, 들물 때 좋음',
+                    border: OutlineInputBorder(),
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 12),
-            TextField(
-              controller: memoCtrl,
-              maxLines: 3,
-              minLines: 1,
-              decoration: const InputDecoration(
-                labelText: '메모 (선택)',
-                hintText: '예: 갑오징어, 들물 때 좋음',
-                border: OutlineInputBorder(),
-              ),
-            ),
+          ),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('취소')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: Text(okLabel)),
           ],
         ),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: const Text('취소')),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(okLabel)),
-        ],
       ),
     );
     final n = FavoriteStore.clean(nameCtrl.text);
@@ -1502,7 +1674,12 @@ class _MapScreenState extends ConsumerState<MapScreen>
       memoCtrl.dispose();
     });
     if (ok != true) return null;
-    return (name: n.isEmpty ? (defaultName.isEmpty ? '포인트' : defaultName) : n, memo: m);
+    return (
+      name: n.isEmpty ? (defaultName.isEmpty ? '포인트' : defaultName) : n,
+      memo: m,
+      category: selected,
+      data: data,
+    );
   }
 
   // 지점 추가 시 이름 입력 다이얼로그. 취소 시 null, 비워두면 빈 문자열.
@@ -1741,12 +1918,17 @@ class _MapScreenState extends ConsumerState<MapScreen>
           _loadedDate.year, _loadedDate.month, _loadedDate.day,
           p.point.timestamp.hour, p.point.timestamp.minute);
     // 연결선: 현재 '보이는' 모든 마커(메모·조과·현황 + 이동경로)를 시간순 단일 선으로.
-    // 이동경로 점은 route 토글(_showTrack) ON일 때만 노드로 포함(찍은 좌표는 항상 포함).
+    // 이동경로 점·체류지점은 route 토글(_showTrack) ON일 때만 노드로 포함(찍은 좌표는 항상 포함).
     final lineNodes = <MapEntry<DateTime, LatLng>>[
       for (final p in placedSorted)
         MapEntry(memoFullTs(p), LatLng(p.point.lat, p.point.lng)),
       for (final p in fTrack)
         if (_showTrack || p.marked) MapEntry(p.timestamp, LatLng(p.lat, p.lng)),
+      // 체류지점도 도착 시각 기준으로 연결(기준점이 경로 점과 다를 수 있음). 표시 조건은 마커와 동일.
+      if (_showTrack)
+        for (final p in _stayPoints)
+          if (_timeFilter == null || _passMinute(p.start))
+            MapEntry(p.start, LatLng(p.lat, p.lng)),
     ]..sort((a, b) => a.key.compareTo(b.key));
     final linePoints = lineNodes.map((e) => e.value).toList();
     final lineNodeCount = lineNodes.length; // 연결 가능한 보이는 노드 수
@@ -1943,6 +2125,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                 MarkerLayer(
                   markers: [
                     for (var i = 0; i < _favorites.length; i++)
+                      if (!_hiddenFavCats.contains(_favorites[i].category))
                       Marker(
                         point: LatLng(_favorites[i].lat, _favorites[i].lng),
                         // 별(26)이 좌표 정중앙에 오도록 위 26 빈칸 + 별 + 아래 이름칸(26).
@@ -1960,7 +2143,8 @@ class _MapScreenState extends ConsumerState<MapScreen>
                                 height: 26,
                                 decoration: BoxDecoration(
                                   shape: BoxShape.circle,
-                                  color: const Color(0xFFFFB300),
+                                  color: Color(_favData
+                                      .colorOf(_favorites[i].category)),
                                   border: Border.all(
                                       color: Colors.white, width: 1.5),
                                   boxShadow: const [
@@ -2585,6 +2769,7 @@ class _MapScreenState extends ConsumerState<MapScreen>
                     _divider(),
                     // ── 마커 표시(종류별 켜기) ─────────────────
                     _toolBtn(
+                      onLongPress: _openFavCategorySheet,
                       _showFavorites ? Icons.star : Icons.star_border,
                       _favorites.isNotEmpty
                           ? (_showFavorites ? const Color(0xFFFFB300) : null)
@@ -2801,8 +2986,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
     }
   }
 
-  Widget _toolBtn(IconData icon, Color? color, VoidCallback? onPressed) {
-    return SizedBox(
+  Widget _toolBtn(IconData icon, Color? color, VoidCallback? onPressed,
+      {VoidCallback? onLongPress}) {
+    final btn = SizedBox(
       width: 40,
       height: 36, // 버튼 세로 간격 10% 축소(40→36)
       child: IconButton(
@@ -2812,6 +2998,9 @@ class _MapScreenState extends ConsumerState<MapScreen>
         onPressed: onPressed,
       ),
     );
+    return onLongPress == null
+        ? btn
+        : GestureDetector(onLongPress: onLongPress, child: btn);
   }
 
   Widget _divider() =>

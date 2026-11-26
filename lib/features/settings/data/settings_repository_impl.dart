@@ -129,7 +129,9 @@ class SettingsRepositoryImpl implements SettingsRepository {
             .clamp(0, 2);
     final showTrackingButton = prefs.getBool(_showTrackingButtonKey) ?? true;
     final locationTrackingEnabled = prefs.getBool(_locationTrackingEnabledKey) ?? false;
-    final trackingIntervalMeters = prefs.getInt(_trackingIntervalMetersKey) ?? 50;
+    // 범위 5~50m — 이전 범위(최대 1000m)로 저장된 값은 50m로.
+    final trackingIntervalMeters =
+        (prefs.getInt(_trackingIntervalMetersKey) ?? 50).clamp(5, 50);
     final quickLaunchModeStr = prefs.getString(_quickLaunchModeKey) ?? 'shake';
     final quickLaunchMode = QuickLaunchMode.values.firstWhere(
       (e) => e.name == quickLaunchModeStr,

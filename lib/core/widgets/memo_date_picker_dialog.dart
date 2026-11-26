@@ -47,9 +47,20 @@ class _MemoDatePickerDialogState extends State<MemoDatePickerDialog> {
     final canForward = !nextMonth
         .isAfter(DateTime(widget.lastDate.year, widget.lastDate.month));
 
+    // 가로 화면: 세로 공간이 좁아 날짜 칸을 납작하게(가로로 긴 비율) 하고,
+    // 그래도 넘치면 스크롤되게 한다(세로 고정 레이아웃이라 넘치면 화면이 깨졌음).
+    final landscape =
+        MediaQuery.of(context).orientation == Orientation.landscape;
+
     return Dialog(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
+      insetPadding: landscape
+          ? const EdgeInsets.symmetric(horizontal: 40, vertical: 8)
+          : const EdgeInsets.symmetric(horizontal: 40, vertical: 24),
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: landscape ? 480 : 360),
+        child: SingleChildScrollView(
+        child: Padding(
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -131,7 +142,7 @@ class _MemoDatePickerDialogState extends State<MemoDatePickerDialog> {
               crossAxisCount: 7,
               shrinkWrap: true,
               physics: const NeverScrollableScrollPhysics(),
-              childAspectRatio: 0.85,
+              childAspectRatio: landscape ? 1.6 : 0.85,
               children: [
                 ...List.generate(leadingBlanks, (_) => const SizedBox()),
                 ...List.generate(daysInMonth, (i) {
@@ -214,6 +225,8 @@ class _MemoDatePickerDialogState extends State<MemoDatePickerDialog> {
               ],
             ),
           ],
+        ),
+        ),
         ),
       ),
     );

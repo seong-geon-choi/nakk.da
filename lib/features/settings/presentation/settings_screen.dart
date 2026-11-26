@@ -762,9 +762,9 @@ class _TrackingIntervalSubScreenState
                 const SizedBox(height: 16),
                 Slider(
                   value: current,
-                  min: 30,
-                  max: 1000,
-                  divisions: 97,
+                  min: 5,
+                  max: 50,
+                  divisions: 9,
                   label: '${current.round()}m',
                   onChanged: (v) => setState(() => _sliderValue = v),
                   onChangeEnd: (v) => ref
@@ -776,9 +776,9 @@ class _TrackingIntervalSubScreenState
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Text('30m',
+                      Text('5m',
                           style: Theme.of(context).textTheme.bodySmall),
-                      Text('1000m',
+                      Text('50m',
                           style: Theme.of(context).textTheme.bodySmall),
                     ],
                   ),
@@ -787,7 +787,7 @@ class _TrackingIntervalSubScreenState
                 Text(
                   '정지·조업 중일 때의 최소 이동 거리를 설정합니다.\n'
                   '거리가 짧을수록 더 상세한 경로가 기록됩니다.\n\n'
-                  '이동 속도가 빠르면 간격이 자동으로 넓어집니다 — 저속 이동 100m · 순항 300m · 고속 1000m.\n'
+                  '이동 속도가 빠르면 간격이 자동으로 넓어집니다 — 저속 이동 50m · 순항 150m · 고속 500m.\n'
                   '방향이 크게 꺾이는 코너는 간격과 상관없이 저장해 경로 모양을 보존합니다.\n\n'
                   '메모 작성 화면에서 이동 경로 기록 버튼을 활성화한 경우에만 이동 경로가 기록됩니다.\n\n'
                   '이동 경로 기록은 자정(0시)이 되면 자동으로 중단됩니다.',
